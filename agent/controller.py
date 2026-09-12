@@ -1,4 +1,22 @@
-"""LangGraph 四 Agent 控制器：对外保持 answer() 与事件契约。"""
+"""LangGraph 四 Agent 控制器：对外保持 answer() 与事件契约。
+
+本文件是 agent 子系统的公开边界（agent/__init__.py 只导出 AgentController）：
+向内的编排在 graph.py 的 AgentState 状态机里，向外的 HTTP/NDJSON 协议在
+web/routes/agent_api.py；这里只做「终态 state → 三份投影」的翻译与落库。
+
+全部代码按职责分为七层：
+
+    L0 装配层   依赖注入 + 会话状态槽                __init__ / _emit
+    L1 生命周期 answer() 一次问答的七步主流程
+    L2 审计层   落库 qa_rounds/qa_evidence + 决策计量
+    L3 合成层   按事实分派，产出 conclusion/answerText（本文件最大的一块）
+    L4 投影层   working_scope → 结构化事实（tracks/matches/registry/dedup/count）
+    L5 组装层   拼装对外的 result dict
+    L6 展示层   生成前端证据分组（缺帧时会现场调工具补齐）
+    L7 聚合层   证据 ID 摊平 + 落库用瘦身摘要
+
+阅读提示：物理顺序与调用顺序不一致——L3 的 _synthesize 调用了写在它之后的 L4。
+"""
 from __future__ import annotations
 
 import uuid
@@ -21,6 +39,11 @@ def _nonnegative_int(value: Any, default: int = 0) -> int:
         return default
 
 
+# ============================================================================
+# L0 装配层：依赖注入与会话状态槽
+# 5 个依赖全部可注入（便于测试替换）；下面的会话级状态槽是「图的终态在本类中
+# 的投影缓存」，answer() 每次入口先清空它们，_finish 与 _display_* 再填充。
+# ============================================================================
 class AgentController:
     """前端入口：内部运行 LangGraph（Intent→Plan→Observe→Reflect）。"""
 
@@ -66,6 +89,12 @@ class AgentController:
         except Exception:
             pass
 
+    # ------------------------------------------------------------------------
+    # L1 生命周期层：answer() —— 一次问答的七步主流程
+    # ① 重置会话状态与参数   ② 调用 run_sea_agent（唯一一次图调用）
+    # ③ 异常兜底降级         ④ 把终态回填到实例属性
+    # ⑤ 落库 qa_*            ⑥ 计算决策计量    ⑦ 合成结论并结束会话
+    # ------------------------------------------------------------------------
     def answer(self, question: str, top_k: int | None = None) -> dict[str, Any]:
         self.session_id = f"session-{uuid.uuid4().hex[:12]}"
         self.question = str(question or "").strip()
@@ -141,6 +170,12 @@ class AgentController:
             pass
         return result
 
+    # ------------------------------------------------------------------------
+    # L2 审计层：落库与计量
+    # _persist_qa_memory 把图内轮次写成 qa_rounds / qa_evidence（只写不读，
+    # 不参与跨请求多轮）；_build_decision_metrics 统计「模型决策 vs 确定性
+    # 守卫」的占比。两者失败都不打断主流程，只记录 self.memory_persist_error。
+    # ------------------------------------------------------------------------
     def _persist_qa_memory(self, state: dict[str, Any]) -> None:
         """① 把 LangGraph 的轮次与工具证据落库到 qa_rounds / qa_evidence。
 
@@ -266,6 +301,21 @@ class AgentController:
             "finalState": str(state.get("final_state") or "unknown"),
         }
 
+    # ------------------------------------------------------------------------
+    # L3 合成层：按事实分派，产出 conclusion / answerText
+    # 全文最大的一块，且不是文本生成器，而是一张按「已采集事实」落座的决策表。
+    # 分支树：
+    #   A 计数       count_value 非空 → 分「高低阈值一致 / 存在待确认合并组」
+    #   B 零候选     in|out 列表且全量轨迹为 0 → 提前给否定结论
+    #   C 伪描述     描述含「哪些/在库/先验库」等词 → 命中不可信
+    #   D 有匹配     registry / in 列表 / out 列表 / 通用 / 全 mismatch 五种
+    #   E out 无匹配 库为空 或 图像匹配不可用
+    #   F 纯库结果   有库项、无轨迹（含描述查询的明确否定）
+    #   G 有轨迹     存在判断 + 舷号防误判
+    #   H 兜底       0 轨迹/0 匹配 → conflict / 明确否定 / 未找到可靠证据
+    # 注意：本方法会重算终态（各分支传给 _finish 的 state 参数），并不完全沿用
+    #       graph.reflect_node 给出的 final_state。
+    # ------------------------------------------------------------------------
     def _synthesize(self, state: str, reason: str) -> dict[str, Any]:
         tracks = self._collect_tracks()
         matches = self._collect_matches()
@@ -279,6 +329,9 @@ class AgentController:
         description = str(self.meta.get("description") or "").strip()
         hull = str(self.meta.get("hullNumber") or "").strip()
 
+        # ---- 分支 A：计数类问题 --------------------------------------------
+        # 有 dedupSummary 时分两种措辞：高低阈值一致→「N 艘」；
+        # 存在待确认合并组→「至少 N 艘」并附 _build_count_evidence 审计台账。
         if count_value is not None:
             if dedup_summary:
                 minimum_count = int(dedup_summary.get("minimumShipCount", count_value))
@@ -396,6 +449,9 @@ class AgentController:
 
         # 在库/未在库列表的首要事实是视频侧候选数。全量轨迹明确为 0 时直接给否定结论，
         # 禁止把整份先验库展示成“未在库船”，也禁止被空 gallery 的 matchImage 伪失败改成无法确认。
+        # ---- 分支 B：视频侧零候选，提前否定 --------------------------------
+        # 全量轨迹为 0 是首要事实，必须直接给否定结论；不得把整份先验库当成
+        # 「未在库船」展示，也不得被空 gallery 的 matchImage 伪失败改成无法确认。
         if (
             (is_registry_in_list or is_registry_out_list)
             and track_query_completed
@@ -428,11 +484,16 @@ class AgentController:
             )
 
         # 伪描述：用户整句当 matchText 时，命中不可信
+        # ---- 分支 C：伪描述检测 --------------------------------------------
+        # 用户把整句问句当 matchText 传给工具时，库侧命中不可信，后续需降级。
         bogus_description = bool(
             description
             and any(token in description for token in ("哪些", "有哪些", "在库", "未在库", "先验库", "库船"))
         )
 
+        # ---- 分支 D：存在匹配结果 ------------------------------------------
+        # D1 out 列表(448) / D2 纯库匹配(558) / D3 in 列表(606) / D4 通用命中(639)
+        # / D5 全 mismatch 仍展示 top 候选(696，禁止证据区空白)
         if matches:
             # mismatch 丢弃；uncertain 仅作灰区候选，match 才算确认命中
             ranked = sorted(
@@ -771,6 +832,8 @@ class AgentController:
                     "includeRegistry": bool(registry_items),
                 },
             )
+        # ---- 分支 E：未在库查询但无匹配结果 --------------------------------
+        # 先验库为空（全部轨迹皆为候选）或图像匹配输入不可用（降级为 uncertain）。
         if is_registry_out_list:
             if registry_listed and not registry_items:
                 return self._finish(
@@ -807,6 +870,9 @@ class AgentController:
                     display={"tracks": tracks, "includeClips": bool(tracks), "includeRegistry": False},
                 )
 
+        # ---- 分支 F：纯库结果（有库项、无轨迹）-----------------------------
+        # 含描述查询已执行 matchText 但返回空匹配的明确否定，以及舷号在库、
+        # 但视频侧未命中的情形。
         if registry_items and not tracks:
             if not self.meta.get("targetScope"):
                 self.meta["targetScope"] = "registry"
@@ -871,6 +937,7 @@ class AgentController:
                 },
                 display={"tracks": [], "includeClips": False, "includeRegistry": True},
             )
+        # ---- 分支 G：有轨迹 ------------------------------------------------
         if tracks:
             # 存在判断 + 舷号：全量扫轨得到的轨迹 ≠ 该舷号已确认出现
             # 仅当有非 mismatch 的视觉/文本匹配，或轨迹自身带该舷号时，才「确认出现」
@@ -914,6 +981,7 @@ class AgentController:
                 extra={"planMode": "langgraph"},
                 display={"tracks": tracks, "includeClips": True},
             )
+        # ---- 分支 H：兜底（0 轨迹 / 0 匹配）--------------------------------
         # 0 轨迹/0 匹配：存在判断应给明确否定，而不是「未找到可靠证据」+ 误导标签
         if state == "conflict":
             return self._finish("证据存在冲突", [], answer_hint, state, extra={"planMode": "langgraph"})
@@ -934,6 +1002,12 @@ class AgentController:
             )
         return self._finish("未找到可靠证据", [], answer_hint, state, extra={"planMode": "langgraph"})
 
+    # ------------------------------------------------------------------------
+    # L4 投影层：working_scope → 结构化事实
+    # working_scope 的值是十几种业务工具各自的返回形态，这里没有 schema，全靠
+    # isinstance/get 兜底，提取出 tracks / matches / registry / dedup / count，
+    # 是 L3 合成与 L6 展示共同的输入源。注意物理位置在 _synthesize 之后。
+    # ------------------------------------------------------------------------
     def _collect_tracks(self) -> list[dict[str, Any]]:
         collected: dict[str, dict[str, Any]] = {}
         for value in self.working_scope.values():
@@ -1342,6 +1416,10 @@ class AgentController:
             tracks.append(item)
         return tracks
 
+    # ------------------------------------------------------------------------
+    # L5 组装层：_finish —— 把 conclusion 与证据拼成对外的 result dict
+    # 顺序：按 evidenceMode 截断 → 委托 L6 生成展示 → 组装约 30 个字段返回。
+    # ------------------------------------------------------------------------
     def _finish(
         self,
         conclusion: str,
@@ -1404,6 +1482,13 @@ class AgentController:
         self._emit("synthesis", "生成最终回答", reason, conclusion=conclusion, state=state, trackCount=len(limited_tracks))
         return result
 
+    # ------------------------------------------------------------------------
+    # L6 展示层：生成前端的证据分组（displayGroups）
+    # 两种互斥模式：计数场景走 _display_dedup_groups（按合并组展示，避免罗列
+    # 原始轨迹），其余走 _display_tracks（按轨迹展示画廊）。
+    # 注意本层有副作用：缺关键帧/片段时会现场调用 tools.getFrames / getClip；
+    # 且 display_record 一旦写入即不再重算（先到先得）。
+    # ------------------------------------------------------------------------
     def _display_dedup_groups(self, summary: dict[str, Any], tracks: list[dict[str, Any]]) -> None:
         """按确认合并/待确认合并分组生成关键帧证据，避免继续罗列原始轨迹。"""
         if self.display_record is not None:
@@ -1698,6 +1783,11 @@ class AgentController:
             "groups": self.display_groups,
         }
 
+    # ------------------------------------------------------------------------
+    # L7 聚合层：证据摊平与审计摘要
+    # _collect_evidence 汇出前端拉取证据所需的 ID 索引；_session_audit_result
+    # 产出落库用的瘦身结果（不含展示明细）。
+    # ------------------------------------------------------------------------
     def _collect_evidence(self) -> dict[str, list[str]]:
         if self.display_groups:
             return {
