@@ -1,6 +1,5 @@
 """先验库图片、CSV 与向量索引的一致性管理。"""
 from __future__ import annotations
-import json
 import shutil
 import tempfile
 import uuid
@@ -86,29 +85,6 @@ class ShipService:
         self._transaction(mutate)
         return True
 
-    def rebuild_registry_index(self) -> dict[str, Any]:
-        reference_rows = self.repository.registry_images.rows()
-        index_path = Path(self.config["paths"]["registry_index"])
-        manifest_path = index_path.with_suffix(index_path.suffix + ".json")
-        with tempfile.TemporaryDirectory() as temp:
-            backup = Path(temp)
-            for source, name in ((index_path, "index.faiss"), (manifest_path, "index.json")):
-                if source.exists():
-                    shutil.copy2(source, backup / name)
-            try:
-                return self._rebuild_registry_index()
-            except Exception:
-                self.repository.registry_images.replace_all(reference_rows)
-                for target, name in ((index_path, "index.faiss"), (manifest_path, "index.json")):
-                    saved = backup / name
-                    if saved.exists():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(saved, target)
-                    else:
-                        target.unlink(missing_ok=True)
-                self.vectors.registry.reset_cache()
-                raise
-
     def _rebuild_registry_index(self) -> dict[str, Any]:
         references = self.repository.registry_references()
         if not references:
@@ -158,16 +134,6 @@ class ShipService:
             return True
         except FileExistsError:
             return False
-
-    def update_ship(self, hull_number: str, description: str) -> bool:
-        try:
-            self.update_registry(hull_number, description)
-            return True
-        except KeyError:
-            return False
-
-    def delete_ship(self, hull_number: str) -> bool:
-        return self.delete_registry(hull_number)
 
     def bulk_create(self, ships: dict[str, str]) -> dict[str, int]:
         added = skipped = 0

@@ -94,13 +94,6 @@ class AgentLLMService:
         content = re.sub(r"<(?:think|thinking)>.*$", "", content, flags=re.IGNORECASE | re.DOTALL)
         return content.strip()
 
-    def _prompt(self, key: str) -> str:
-        prompts = self.config.get("prompts", self.prompts) if isinstance(self.config, dict) else self.prompts
-        value = (prompts or {}).get(key) or (self.prompts or {}).get(key) or ""
-        if not value:
-            raise LLMServiceError(f"缺少提示词：{key}")
-        return value
-
     def complete_json(self, prompt: str, images: Iterable[str | Path | np.ndarray] = (), retries: int = 1) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         content.extend({"type": "image_url", "image_url": {"url": _data_url(image)}} for image in images)
@@ -118,56 +111,6 @@ class AgentLLMService:
             except Exception as error:
                 last_error = error
         raise LLMServiceError(f"生成模型调用失败：{last_error}")
-
-    def complete_text(self, prompt: str) -> str:
-        payload = self._base_payload([{"role": "user", "content": prompt}])
-        url = f"{self.settings['base_url'].rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.settings.get('api_key', '')}", "Content-Type": "application/json"}
-        try:
-            response = httpx.post(url, headers=headers, json=payload, timeout=float(self.settings.get("timeout_seconds", 60)))
-            response.raise_for_status()
-            message = response.json()["choices"][0]["message"]
-            raw = message.get("content") or ""
-            return self._strip_thinking(str(raw))
-        except Exception as error:
-            raise LLMServiceError(f"生成模型调用失败：{error}") from error
-
-    def complete_text_stream(self, prompt: str, on_delta: Callable[[str], None]) -> str:
-        payload = self._base_payload([{"role": "user", "content": prompt}], stream=True)
-        url = f"{self.settings['base_url'].rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.settings.get('api_key', '')}", "Content-Type": "application/json"}
-        chunks: list[str] = []
-        # 流式时屏蔽 thinking/reasoning 增量，只展示最终 content
-        try:
-            with httpx.stream("POST", url, headers=headers, json=payload, timeout=float(self.settings.get("timeout_seconds", 60))) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    event = json.loads(data)
-                    choices = event.get("choices") or []
-                    if not choices:
-                        continue
-                    delta_obj = choices[0].get("delta", {}) or {}
-                    # 忽略 reasoning/thinking 字段，避免前端刷长链思考
-                    if delta_obj.get("reasoning_content") or delta_obj.get("reasoning") or delta_obj.get("thinking"):
-                        continue
-                    delta = delta_obj.get("content") or ""
-                    if not delta:
-                        continue
-                    # 若 content 内仍夹带 think 标签，整段丢弃到闭合前
-                    if "<think>" in delta.lower() or "<thinking>" in delta.lower():
-                        continue
-                    if "</think>" in delta.lower() or "</thinking>" in delta.lower():
-                        continue
-                    chunks.append(delta)
-                    on_delta(delta)
-        except Exception as error:
-            raise LLMServiceError(f"生成模型流式调用失败：{error}") from error
-        return self._strip_thinking("".join(chunks))
 
     def recognize(self, image: str | Path | np.ndarray) -> dict[str, Any]:
         result = self.complete_json(self.prompts["single_frame_recognition"], [image])
@@ -189,8 +132,3 @@ class AgentLLMService:
             decision = "uncertain"
         facts = result.get("facts", [])
         return {"decision": decision, "facts": facts if isinstance(facts, list) else [str(facts)]}
-
-    def role(self, role: str, payload: dict[str, Any], on_delta: Callable[[str], None] | None = None) -> dict[str, Any]:
-        prompt = self._prompt(role) + "\n请使用简洁自然语言写可朗读的执行摘要。不要输出 JSON 或代码块，不要输出逐步推理或思考过程，总长度不超过 80 字。\n输入：" + json.dumps(payload, ensure_ascii=False)
-        content = self.complete_text_stream(prompt, on_delta) if on_delta else self.complete_text(prompt)
-        return {"summary": self._strip_thinking(content)}

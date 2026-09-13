@@ -1,15 +1,5 @@
 yolo:
   model: yolov8n.pt
-  # 可由监控页和系统设置页选择；首次使用未缓存模型时由检测框架自动获取
-  model_options:
-    - yolov8n.pt
-    - yolov8s.pt
-    - yolov8m.pt
-    - yolov8l.pt
-    - yolov8x.pt
-    - yolo11n.pt
-    - yolo11s.pt
-    - yolo11m.pt
   device: ""
   # 检测器与跟踪器共同使用的最低检测置信度
   confidence: 0.5

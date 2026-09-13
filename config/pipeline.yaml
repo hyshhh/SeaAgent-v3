@@ -51,9 +51,5 @@ pipeline:
     clip_crf: 31
     poster_quality: 75
   agent:
-    # guided=固定工具链；autonomous=PlanAgent规划、ObserveAgent执行、ReflectAgent判断
-    plan_mode: guided
     max_rounds: 5
-    acceptance_recovery_rounds: 2
     display_limit: 3
-    retrieval_page_size: 60

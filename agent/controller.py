@@ -393,8 +393,6 @@ class AgentController:
                 extra={"count": count_value, "planMode": "langgraph"},
                 display={"tracks": tracks, "includeClips": True},
             )
-        registry_relation = str(self.meta.get("registryRelation") or "")
-        question_type = str(self.meta.get("questionType") or "")
         # 在库/未在库列表判定收敛到 task_profiles 单一事实源（与 graph 同源）
         membership_mode = registry_membership_list_mode(self.meta)
         is_registry_in_list = membership_mode == "in"
@@ -503,7 +501,6 @@ class AgentController:
             )
             confirmed = [m for m in ranked if str(m.get("scoreBand") or "") == "match"]
             uncertain = [m for m in ranked if str(m.get("scoreBand") or "") == "uncertain"]
-            mismatch = [m for m in ranked if str(m.get("scoreBand") or "") == "mismatch"]
             supported = confirmed + uncertain  # 同时保留确认与灰区，分栏展示
 
             if is_registry_out_list:
@@ -1379,7 +1376,7 @@ class AgentController:
             units.append({key: value for key, value in unit.items() if value not in (None, [])})
 
         # 防止工具返回的分组遗漏已检出的轨迹；遗漏项必须单列，不能静默从计数证据中消失。
-        for track_id, track in by_id.items():
+        for track_id in by_id:
             if track_id in covered_ids:
                 continue
             units.append({
@@ -1401,20 +1398,6 @@ class AgentController:
             "rawTracks": [_member(track_id) for track_id in by_id],
         }
 
-    @staticmethod
-    def _tracks_from_matches(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        tracks = []
-        for match in matches:
-            track_id = match.get("matchedTrackId") or match.get("trackId")
-            if track_id is None:
-                continue
-            item = {"trackId": track_id}
-            if match.get("embeddingScore") is not None:
-                item["embeddingScore"] = match.get("embeddingScore")
-            if match.get("scoreBand"):
-                item["scoreBand"] = match.get("scoreBand")
-            tracks.append(item)
-        return tracks
 
     # ------------------------------------------------------------------------
     # L5 组装层：_finish —— 把 conclusion 与证据拼成对外的 result dict

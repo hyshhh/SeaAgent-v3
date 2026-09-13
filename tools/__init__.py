@@ -14,7 +14,6 @@ from .target_parser import (
 from .time_normalizer import (
     has_time_expression,
     normalize_time_range,
-    parse_model_time_range,
     parse_time,
 )
 
@@ -27,6 +26,5 @@ __all__ = [
     "parse_targets",
     "has_time_expression",
     "normalize_time_range",
-    "parse_model_time_range",
     "parse_time",
 ]

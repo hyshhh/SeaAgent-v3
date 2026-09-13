@@ -154,30 +154,6 @@ def has_time_expression(question: str) -> bool:
     return False
 
 
-def parse_model_time_range(value: Any, now: datetime | None = None) -> tuple[float, float] | None:
-    """校验并转换模型返回的规范时间范围，只接受明确的端点。"""
-    cfg = _cfg()
-    if isinstance(value, dict):
-        start_value = None
-        end_value = None
-        for key in cfg["model_start_keys"]:
-            if value.get(key) is not None:
-                start_value = value.get(key)
-                break
-        for key in cfg["model_end_keys"]:
-            if value.get(key) is not None:
-                end_value = value.get(key)
-                break
-    elif isinstance(value, (list, tuple)) and len(value) == 2:
-        start_value, end_value = value
-    else:
-        return None
-    start = _parse_time_endpoint(start_value, now)
-    end = _parse_time_endpoint(end_value, now)
-    if start is None or end is None or end <= start:
-        return None
-    return start, end
-
 
 def parse_time(
     expression: str,

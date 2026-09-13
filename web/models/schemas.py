@@ -44,9 +44,3 @@ class StatsResponse(BaseModel):
 class SearchResponse(BaseModel):
     total: int
     results: list[ShipItem]
-
-class RecognizeData(BaseModel):
-    hull_number: str
-    description: str
-    already_exists: bool = False
-    existing_description: str | None = None

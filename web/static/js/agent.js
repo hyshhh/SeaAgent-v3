@@ -976,19 +976,6 @@ function missingEvidence(trackId, category) {
   return {type: 'missing', trackId, label: labels[category], reason: reasons[category]};
 }
 
-function synchronizeEvidenceColumns(container) {
-  const columns = [...container.querySelectorAll('.evidence-column-media')];
-  let syncing = false;
-  columns.forEach((source) => source.addEventListener('scroll', () => {
-    if (syncing) return;
-    syncing = true;
-    columns.forEach((target) => {
-      if (target !== source) target.scrollTop = source.scrollTop;
-    });
-    requestAnimationFrame(() => { syncing = false; });
-  }, {passive: true}));
-}
-
 function dedupEvidenceGroup(group, index) {
   const pending = group?.groupType === 'pending';
   const trackIds = (group?.mergedTrackIds || []).map((item) => String(item));
@@ -1245,30 +1232,6 @@ function compactAgentValue(value, maxLength = 160) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
-function appendStreamDelta(previous, incoming, maxLength) {
-  const base = String(previous || '');
-  const delta = String(incoming || '');
-  if (!delta) return base;
-  let piece = delta;
-  if (base && delta.startsWith(base)) {
-    piece = delta.slice(base.length);
-  } else if (base && (base.includes(delta) || base.endsWith(delta))) {
-    piece = '';
-  } else if (base && delta.includes(base)) {
-    piece = delta.slice(delta.lastIndexOf(base) + base.length);
-  } else if (base) {
-    const limit = Math.min(base.length, delta.length);
-    for (let size = limit; size > 0; size -= 1) {
-      if (base.endsWith(delta.slice(0, size))) {
-        piece = delta.slice(size);
-        break;
-      }
-    }
-  }
-  if (!piece) return base;
-  return `${base}${piece}`.slice(-maxLength);
-}
-
 // 技能读取记录。注意 enabledSkills 表示「该 Agent 挂载了哪些技能」，不是
 // 「已读了哪些」—— 所以这里只认 skillReads：模型没调 load_<技能> 时就不显示
 // 已读标记，避免一进节点就虚报读了一堆技能。
@@ -1277,32 +1240,11 @@ function normalizedSkillReads(event) {
   return reads.filter((item) => item && item.skillId);
 }
 
-function compactSkillReads(event) {
-  const reads = normalizedSkillReads(event);
-  if (!reads.length) return '';
-  const failed = reads.filter((item) => item.ok === false).length;
-  return `Read ${reads.length} skills${failed ? ` · ${failed} failed` : ''}`;
-}
-
 function skillReadTags(event) {
   const reads = normalizedSkillReads(event);
   if (!reads.length) return '';
   const failed = reads.filter((item) => item.ok === false).length;
   return `<span class="skill-read${failed ? ' failed' : ''}">Skills ${reads.length}${failed ? ` · ${failed} failed` : ''}</span>`;
-}
-
-function compactToolCall(call) {
-  const tool = call.tool || call.id || 'tool';
-  const status = call.skipped ? 'skipped' : call.ok === false ? 'failed' : 'completed';
-  const details = [];
-  if (Number.isFinite(Number(call.trackCount))) details.push(`${call.trackCount} tracks`);
-  if (Number.isFinite(Number(call.keyframeCount))) details.push(`${call.keyframeCount} keyframes`);
-  if (Number.isFinite(Number(call.matchCount))) details.push(`${call.matchCount} matches`);
-  if (Number.isFinite(Number(call.registryCount))) details.push(`${call.registryCount} registry items`);
-  if (call.decision) details.push(String(call.decision));
-  if (call.hasMore) details.push('more pages');
-  if (call.error) details.push(compactAgentValue(call.error, 70));
-  return `${tool} · ${status}${details.length ? ` · ${details.join(' · ')}` : ''}`;
 }
 
 function compactAgentText(event) {
@@ -1869,18 +1811,6 @@ function formatToolCall(round, call = {}) {
   return `${roundNumber} · ${tool}(${formatToolArguments(toolArgumentsForCall(call))}) · ${toolResultText(call)}`;
 }
 
-function setLiveSkillActivity() {
-  // Skill progress remains inside the owning agent's expandable thought record.
-}
-
-function setLiveToolActivity() {
-  // Tool progress remains inside the owning agent's expandable thought record.
-}
-
-function agentActivityOpen(card, kind) {
-  return Boolean(card?._activityOpen?.[kind]);
-}
-
 function isSkillReadingActive(card) {
   const until = Number(card?.dataset?.skillsRunningUntil || 0);
   return Boolean(card?._skillsRunning) || (until > Date.now());
@@ -2058,7 +1988,6 @@ function updateAgentToolEvent(event) {
         : 'Running tools and collecting evidence…';
   const streamText = card.dataset.streamText || fallbackText;
   setAgentProcessStream(card, streamText, {cursor: running});
-  setLiveToolActivity(card, {...event, tool: toolName, arguments: argumentsValue, phase}, logs, runningIndex);
   scrollThoughtStreamToCard(card);
   if (role === 'observer') updatePlanProgressFromTool(event);
 }
@@ -2145,17 +2074,7 @@ function appendThoughtEvent(event) {
     card.dataset.streamText = rolePendingText(event.role);
     setAgentProcessStream(card, card.dataset.streamText, {cursor: true});
     updateResultTimeline(event.role, {round: event.round, state: 'running', text: card.dataset.streamText, activity: [renderSkillActivity(card), renderToolActivity(card)].filter(Boolean).join('')});
-    if (card._skillsRunning) {
-      setLiveSkillActivity(card, {
-        ...card._skillReads[0],
-        phase: 'running',
-        skillId: card._skillReads[0].skillId,
-        currentSkillId: card._skillReads[0].skillId,
-        currentSkillTitle: card._skillReads[0].title,
-        skillIndex: 1,
-        skillTotal: card._skillReads.length,
-      });
-    } else {
+    if (!card._skillsRunning) {
       setAgentLiveActivity({
         kind: 'phase',
         label: roleRunningLabel(event.role),
@@ -2231,13 +2150,6 @@ function appendThoughtEvent(event) {
     const streamText = card.dataset.streamText || rolePendingText(event.role);
     setAgentProcessStream(card, streamText, {cursor: card.classList.contains('active')});
     updateResultTimeline(event.role, {round: event.round, state: 'running', text: streamText, activity: [renderSkillActivity(card), renderToolActivity(card)].filter(Boolean).join('')});
-    setLiveSkillActivity(card, {
-      ...event,
-      skillId: record.skillId,
-      currentSkillId: record.skillId,
-      currentSkillTitle: record.title,
-      description: record.description,
-    });
     scrollThoughtStreamToCard(card);
   } else if (event.type === 'agent_delta') {
     // 模型原始增量可能混入内部推理；界面只展示结构化计划、技能、工具和结论。
