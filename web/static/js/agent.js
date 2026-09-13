@@ -1869,25 +1869,6 @@ function formatToolCall(round, call = {}) {
   return `${roundNumber} · ${tool}(${formatToolArguments(toolArgumentsForCall(call))}) · ${toolResultText(call)}`;
 }
 
-function liveSkillSnapshot(card, event = {}) {
-  const reads = Array.isArray(card?._skillReads) ? card._skillReads : [];
-  const eventIndex = Number(event.skillIndex || 0);
-  const eventTotal = Number(event.skillTotal || 0);
-  const eventId = event.skillId || event.currentSkillId;
-  const record = (eventId && reads.find((item) => item.skillId === eventId))
-    || (eventIndex > 0 && reads[eventIndex - 1])
-    || card?._currentSkill
-    || reads.find((item) => item.phase === 'running')
-    || reads[0]
-    || {};
-  const index = eventIndex > 0
-    ? eventIndex
-    : Math.max(1, Number(card?._currentSkill?.index || reads.indexOf(record) + 1));
-  const total = Math.max(index, eventTotal || Number(card?._currentSkill?.total || reads.length || 1));
-  const name = event.currentSkillTitle || event.skillTitle || eventId || record.title || record.skillId || 'skill';
-  return {index, total, name: String(name), description: event.description || record.description || ''};
-}
-
 function setLiveSkillActivity() {
   // Skill progress remains inside the owning agent's expandable thought record.
 }
@@ -1943,34 +1924,6 @@ function markSkillReading(card, durationMs = 1400) {
   scheduleSkillReadingClear(card);
 }
 
-function currentSkillSnapshot(card, reads) {
-  const current = card?._currentSkill || {};
-  const fallbackTotal = Math.max(1, reads.length);
-  let index = Number(current.index || current.skillIndex || 0);
-  let total = Number(current.total || current.skillTotal || fallbackTotal);
-  let record = null;
-  const currentId = current.skillId || current.currentSkillId;
-  if (currentId) record = reads.find((item) => item.skillId === currentId) || null;
-  if (!record && Number.isFinite(index) && index > 0) record = reads[index - 1] || null;
-  if (!record) {
-    const runningIndex = reads.findIndex((item) => item.phase === 'running');
-    if (runningIndex >= 0) {
-      record = reads[runningIndex];
-      index = runningIndex + 1;
-    }
-  }
-  if (!record) {
-    record = reads[0] || {};
-    index = Number.isFinite(index) && index > 0 ? index : 1;
-  }
-  if (!Number.isFinite(index) || index <= 0) index = Math.max(1, reads.indexOf(record) + 1);
-  if (!Number.isFinite(total) || total <= 0) total = fallbackTotal;
-  total = Math.max(total, index);
-  const name = current.title || current.currentSkillTitle || record.title || current.skillId || current.currentSkillId || record.skillId || 'skill';
-  const title = current.title || current.currentSkillTitle || record.title || current.skillId || record.skillId || name;
-  return {index, total, name, title};
-}
-
 function activityVerbForTool(tool) {
   const name = String(tool || '').toLowerCase();
   if (/(match|search|query|find|retrieve)/.test(name)) return 'Search';
@@ -2011,7 +1964,7 @@ function renderSkillActivity(card) {
   const reading = isSkillReadingActive(card);
   const activeSkill = card?._currentSkill || {};
   const activeIndex = Math.max(0, Number(activeSkill.index || 1) - 1);
-  const current = reads.find((item) => item.skillId === activeSkill.skillId && item.source === activeSkill.source) || reads[activeIndex] || reads[0] || null;
+  const current = reads.find((item) => item.skillId === activeSkill.skillId) || reads[activeIndex] || reads[0] || null;
   const rows = history.map((item) => {
     const target = item.title || item.skillId || 'skill';
     return renderActivityRow({kind: 'skill-child', verb: 'Read', target, failed: item.ok === false, title: target + (item.description ? ' · ' + item.description : '')});

@@ -631,7 +631,10 @@ def build_sea_agent_graph(
         prompt = role_system_prompt(agent_key, title, responsibility)
         # 技能不再由代码预选：enabledSkills 表示「该 agent 挂载了哪些技能」，
         # skillReads 从空开始，模型调用 load_<id> 时才追加记录。
-        skill_ids = [meta.id for meta in list_skill_catalog(agent_key)]
+        # 技能工具名 → skill_id。按 catalog 精确匹配而不是认 "load_" 前缀：否则将来
+        # 任何一个以 load_ 开头的业务工具都会被静默排除在 tool_chain / plan_calls 之外。
+        skill_tool_ids = {f"load_{meta.id}": meta.id for meta in list_skill_catalog(agent_key)}
+        skill_ids = list(skill_tool_ids.values())
         skill_reads: list[dict[str, Any]] = []
         event_round = 0 if role == "intent" else max(1, round_number or 1)
         if emit_status:
@@ -714,7 +717,7 @@ def build_sea_agent_graph(
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     call_id = str(call.get("id") or f"{tname}-{len(pending_calls) + 1}")
                     pending_calls[call_id] = {"name": tname, "arguments": args}
-                    if tname.startswith("handoff") or tname.startswith("load_") or call_id in emitted_react_calls:
+                    if tname.startswith("handoff") or tname in skill_tool_ids or call_id in emitted_react_calls:
                         continue
                     emitted_react_calls.add(call_id)
                     _emit(event_handler, {
@@ -740,9 +743,9 @@ def build_sea_agent_graph(
                 tname = str(getattr(message, "name", "") or pending.get("name") or "")
                 if payload.get("handoff") or not tname or tname.startswith("handoff"):
                     return
-                if tname.startswith("load_"):
-                    # 技能工具 load_<skill_id>：调用即取回全文，转成 agent_skill 事件
-                    skill_id = tname[len("load_"):]
+                if tname in skill_tool_ids:
+                    # 技能工具：调用即取回全文，转成 agent_skill 事件
+                    skill_id = skill_tool_ids[tname]
                     if skill_id and skill_id not in emitted_skill_ids:
                         emitted_skill_ids.add(skill_id)
                         meta = get_skill_meta(agent_key, skill_id)
@@ -917,7 +920,7 @@ def build_sea_agent_graph(
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     call_id = str(call.get("id") or f"{tname}-{len(pending_calls)+1}")
                     pending_calls[call_id] = {"name": tname, "arguments": args}
-                    if tname and not tname.startswith("handoff") and not tname.startswith("load_"):
+                    if tname and not tname.startswith("handoff") and tname not in skill_tool_ids:
                         tool_chain.append(tname)
                         if role == "planner":
                             plan_calls.append({"id": call_id, "tool": tname, "arguments": args})
@@ -930,11 +933,11 @@ def build_sea_agent_graph(
                 if payload.get("handoff"):
                     handoff = payload
                     continue
-                if not tname or tname.startswith("handoff") or tname.startswith("load_"):
-                    if tname.startswith("load_") and role:
+                if not tname or tname.startswith("handoff") or tname in skill_tool_ids:
+                    if tname in skill_tool_ids and role:
                         # 动态技能读取事件已在 ReAct 流式过程中实时发出（_emit_react_tool_progress），
                         # 此处只更新汇总列表，避免重复 emit。
-                        skill_id = tname[len("load_"):]
+                        skill_id = skill_tool_ids[tname]
                         if skill_id:
                             dynamic_records = _skill_read_records(agent_key, [skill_id], source="dynamic")
                             if dynamic_records:
@@ -1345,6 +1348,9 @@ def build_sea_agent_graph(
                 "reason": "工具契约异常后的确定性安全回退" if contract_replan else "验收缺口的确定性补全",
             }
             target = "observe"
+            # 这条路径不调模型也读不到技能，但事件字段要与正常路径保持一致，
+            # 否则前端在这条分支上拿不到 enabledSkills。
+            plan_skill_ids = [meta.id for meta in list_skill_catalog("plan_agent")]
             _emit(
                 event_handler,
                 {
@@ -1353,6 +1359,8 @@ def build_sea_agent_graph(
                     "message": "工具契约异常，生成安全回退计划" if contract_replan else "依据验收缺口生成补全计划",
                     "role": "planner",
                     "round": round_number,
+                    "enabledSkills": plan_skill_ids,
+                    "skillReads": [],
                 },
             )
             out["handoff"] = handoff
@@ -1363,6 +1371,8 @@ def build_sea_agent_graph(
                 "role": "planner",
                 "round": round_number,
                 "message": plan_hint,
+                "enabledSkills": plan_skill_ids,
+                "skillReads": [],
                 "modelSummary": {
                     "summary": plan_hint,
                     "goal": replan_hint,
@@ -1970,10 +1980,6 @@ def build_sea_agent_graph(
         hull = str(intent.get("hullNumber") or "").strip()
         target_scope = str(intent.get("targetScope") or "track_memory")
         registry_relation = str(intent.get("registryRelation") or "any")
-        focus_blob = " ".join(
-            str(intent.get(k) or "")
-            for k in ("nextAgentFocus", "expectedOutcome", "successCriteria")
-        )
         op = str(intent.get("operation") or "")
         # 1) 未查库 → 先查库（舷号存在/列表类，视频 0 轨迹）
         should_replan_registry = (
