@@ -1,6 +1,6 @@
 [project]
 name = "seaagent"
-version = "3.0.0"
+version = "3.1.0"
 description = "面向海域船舶监控的轨迹记忆闭环多智能体系统"
 requires-python = ">=3.10"
 dependencies = [

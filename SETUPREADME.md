@@ -57,7 +57,7 @@ yolo:
   model: yolov8n.pt
   device: ""
   confidence: 0.5
-  tracking_candidate_confidence: 0.2
+  detect_every_n_frames: 0.2
   iou: 0.5
   classes: [8]
   tracker: bytetrack
@@ -75,7 +75,7 @@ yolo:
     model: auto
 ```
 
-自训练船舶模型时改 `model` / `classes`。检测只出船舶区域，不评舷号质量。`tracking_candidate_confidence` 决定送入跟踪器的最低候选分数，`confidence` 决定正式输出并写入轨迹记忆的最低分数。0.2～0.5 的低分检测仅参与第二阶段关联，不会写入轨迹记忆。开启 `appearance_tracking.enabled` 后会切换到支持外观重识别的跟踪器，以提高遮挡和交叉场景下的轨迹身份稳定性。
+自训练船舶模型时改 `model` / `classes`。检测只出船舶区域，不评舷号质量。`tracker_params.track_high_thresh` 是进入主要关联的分数下限，`tracker_params.track_low_thresh` 是第二阶段补充关联的下限，`confidence` 决定正式输出并写入轨迹记忆的最低分数。低于 `confidence` 的检测仅参与关联，不会写入轨迹记忆。开启 `appearance_tracking.enabled` 后会切换到支持外观重识别的跟踪器，以提高遮挡和交叉场景下的轨迹身份稳定性。
 
 ## 存储
 

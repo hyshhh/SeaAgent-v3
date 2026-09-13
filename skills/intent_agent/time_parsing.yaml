@@ -1,4 +1,4 @@
-# 时间归一化规则（替代 agent/time_normalizer.py 内硬编码词表/模式）
+# 时间归一化规则（替代 tools/time_normalizer.py 内硬编码词表/模式）
 # 算法流程仍在 Python；词表、别名、区间、检测模式从此文件加载。
 
 cn_digits:

@@ -1284,10 +1284,10 @@ def build_sea_agent_graph(
                 "queryScope": intent.get("timeRange") or intent.get("queryScope"),
                 "intentSource": intent.get("intentSource"),
                 **{k: intent.get(k) for k in (
-                    "questionType", "strategy", "operation", "targetScope", "targetKind",
+                    "questionType", "operation", "targetScope", "targetKind",
                     "registryRelation", "description", "hullNumber", "targetItems",
                     "timeExpression", "timeRange", "expectedOutcome", "successCriteria", "nextAgentFocus",
-                    "timeParseError", "timeSource", "intentConfidence", "selectedRules",
+                    "timeParseError", "timeSource", "intentConfidence",
                     "evidenceMode", "modelEvidenceMode",
                 )},
             },

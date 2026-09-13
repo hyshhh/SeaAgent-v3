@@ -1,4 +1,4 @@
-# 多目标解析规则（替代 agent/target_parser.py 内硬编码）
+# 多目标解析规则（替代 tools/target_parser.py 内硬编码）
 
 query_words:
   - 查

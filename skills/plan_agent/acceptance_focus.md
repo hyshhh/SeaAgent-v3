@@ -1,7 +1,7 @@
 # PlanAgent · 验收驱动规划
 
 ## 输入
-- `acceptanceProgress.pendingRequirements` / `pendingRequirementLabels`
+- `acceptanceProgress.pendingRequirements`
 - intent 的 `successCriteria`、`expectedOutcome`、`nextAgentFocus`
 
 ## 规则

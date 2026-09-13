@@ -1,7 +1,7 @@
 # 依赖解析与必填参数（Observe）
 
 ## 必填参数
-见 `skills/shared/tool_catalog.yaml` 的 `required_arguments`。
+见 `agent/plan_executor.py` 的 `_REQUIRED_ARGUMENTS`（工具必填参数的唯一事实源）。
 
 ## showEvidence
 `keyframeIds` / `shipSegmentIds` / `registryReferenceIds` 至少一个非空。
