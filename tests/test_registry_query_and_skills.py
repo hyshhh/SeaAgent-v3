@@ -148,7 +148,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
                 }
                 payload = {"ok": True, "handoff": "plan", "intent": wrong_intent, "note": ""}
                 yield "values", {"messages": _tool_messages(
-                    "handoff_to_plan", {"intent": wrong_intent, "note": ""}, payload, "intent-handoff"
+                    "submit_intent", {"intent": wrong_intent, "note": ""}, payload, "intent-handoff"
                 )}
                 return
             if self.name == "plan":
@@ -167,7 +167,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
                     "reason": "测试范围守卫",
                 }
                 messages += _tool_messages(
-                    "handoff_to_observe",
+                    "submit_plan",
                     {"goal": handoff["goal"], "calls": handoff["calls"], "planHint": handoff["planHint"], "reason": handoff["reason"]},
                     handoff,
                     "plan-handoff",
@@ -188,7 +188,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
                     "proposedState": "sufficient",
                 }
                 messages += _tool_messages(
-                    "handoff_to_reflect",
+                    "submit_observation",
                     {"summary": handoff["summary"], "evidenceGap": "", "proposedState": "sufficient"},
                     handoff,
                     "observe-handoff",
@@ -209,7 +209,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
                     "answerHint": "数据库中有确认匹配",
                 }
                 messages += _tool_messages(
-                    "handoff_finish",
+                    "submit_verdict",
                     {"state": "sufficient", "reason": handoff["reason"], "answerHint": handoff["answerHint"]},
                     handoff,
                     "reflect-handoff",

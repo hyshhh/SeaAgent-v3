@@ -11,4 +11,4 @@
 3. 有帧无匹配：补 `matchText`/`matchImage`/`matchHull`。
 4. 计数缺去重：补 `dedupTracks`。
 5. 不要重复与上轮完全相同且已空结果的调用；换参数或换数据源。
-6. 仍无法形成可执行计划：`handoff_to_reflect`，写清 `evidenceGap`。
+6. 仍无法形成可执行计划：`submit_observation`，写清 `evidenceGap`。

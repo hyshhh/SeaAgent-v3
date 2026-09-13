@@ -10,8 +10,8 @@
 4. 是否结束由 ReflectAgent 决定。
 5. 优先落实 `nextAgentFocus` 与 Reflect `nextAction`。
 6. 可用工具名仅限任务包 `availableTools`。
-7. **只能调用 handoff**；禁止在规划阶段执行 getTrack/listRegistry 等。
-8. **第一动作**就调用 `handoff_to_observe(calls=...)`，calls 至少 1 步；禁止空转与长文。
+7. **只能调用提交工具**；禁止在规划阶段执行 getTrack/listRegistry 等。
+8. **第一动作**就调用 `submit_plan(calls=...)`，calls 至少 1 步；禁止空转与长文。
 
 ## calls 与 $ref
 ```json
@@ -27,11 +27,11 @@
 
 ## 强制结束动作
 必须调用工具（不要只输出 JSON 正文）：
-- 有可执行步骤 → `handoff_to_observe(goal, calls, planHint, reason)`
-- 无法继续 → `handoff_to_reflect(summary, evidenceGap, proposedState)`
+- 有可执行步骤 → `submit_plan(goal, calls, planHint, reason)`
+- 无法继续 → `submit_observation(summary, evidenceGap, proposedState)`
 
 ## 禁止
-- 禁止不调用 handoff 就结束
+- 禁止不调用提交工具就结束
 - 禁止编造轨迹/关键帧 ID
 - 禁止舷号查询硬塞无关的 matchText
 - 禁止让 Observe 自由 ReAct；顺序以 `calls` 为准

@@ -38,7 +38,7 @@ def test_reflect_stream_guard_counts_tool_arguments_without_visible_text():
     chunk = AIMessageChunk(
         content="",
         tool_call_chunks=[{
-            "name": "handoff_finish",
+            "name": "submit_verdict",
             "args": "{\"state\":\"sufficient\",\"reason\":\"证据充分\"}",
             "id": "reflect-call",
             "index": 0,
@@ -46,7 +46,7 @@ def test_reflect_stream_guard_counts_tool_arguments_without_visible_text():
         }],
     )
 
-    assert _stream_tool_chunk_chars(chunk) >= len("handoff_finish")
+    assert _stream_tool_chunk_chars(chunk) >= len("submit_verdict")
     assert _stream_tool_chunk_chars(chunk) > len(chunk.content)
 
 def _out_fields():
@@ -439,7 +439,7 @@ def test_reflect_stages_registry_out_query_without_repeating_completed_calls():
                     AIMessage(
                         content="",
                         tool_calls=[{
-                            "name": "handoff_to_plan",
+                            "name": "submit_intent",
                             "args": {"intent": fields, "note": ""},
                             "id": "intent-handoff",
                             "type": "tool_call",
@@ -448,7 +448,7 @@ def test_reflect_stages_registry_out_query_without_repeating_completed_calls():
                     ToolMessage(
                         content=json.dumps(payload, ensure_ascii=False),
                         tool_call_id="intent-handoff",
-                        name="handoff_to_plan",
+                        name="submit_intent",
                     ),
                 ]
                 yield "values", {"messages": messages}
@@ -557,7 +557,7 @@ def test_reflect_finishes_registry_out_query_in_first_round_when_video_has_no_tr
                         AIMessage(
                             content="",
                             tool_calls=[{
-                                "name": "handoff_to_plan",
+                                "name": "submit_intent",
                                 "args": {"intent": fields, "note": ""},
                                 "id": "intent-zero",
                                 "type": "tool_call",
@@ -566,7 +566,7 @@ def test_reflect_finishes_registry_out_query_in_first_round_when_video_has_no_tr
                         ToolMessage(
                             content=json.dumps(payload, ensure_ascii=False),
                             tool_call_id="intent-zero",
-                            name="handoff_to_plan",
+                            name="submit_intent",
                         ),
                     ]
                 }
@@ -645,7 +645,7 @@ def test_hull_existence_acceptance_guard_uses_three_non_repeating_rounds():
             if self.name == "intent":
                 payload = {"ok": True, "handoff": "plan", "intent": fields, "note": ""}
                 yield "values", {"messages": _handoff_messages(
-                    "handoff_to_plan", {"intent": fields, "note": ""}, payload, "intent-hull"
+                    "submit_intent", {"intent": fields, "note": ""}, payload, "intent-hull"
                 )}
                 return
             if self.name == "plan":
@@ -663,7 +663,7 @@ def test_hull_existence_acceptance_guard_uses_three_non_repeating_rounds():
                     "reason": "分阶段核验",
                 }
                 yield "values", {"messages": _handoff_messages(
-                    "handoff_to_observe",
+                    "submit_plan",
                     {
                         "goal": payload["goal"],
                         "calls": calls,

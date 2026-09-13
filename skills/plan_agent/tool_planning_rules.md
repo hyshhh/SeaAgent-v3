@@ -42,4 +42,4 @@
 - `matchHull`: `hullNumberArray`
 
 ## 输出
-必须通过 `handoff_to_observe` 提交 calls；禁止只输出正文。
+必须通过 `submit_plan` 提交 calls；禁止只输出正文。

@@ -33,7 +33,7 @@ class _FakeTools:
 
 
 class _FakeAgent:
-    """intent 节点模拟 ReAct：先调 parseTime，再 handoff_to_plan。"""
+    """intent 节点模拟 ReAct：先调 parseTime，再 submit_intent。"""
 
     def __init__(self, name):
         self.name = name
@@ -52,7 +52,7 @@ class _FakeAgent:
                             "type": "tool_call",
                         },
                         {
-                            "name": "handoff_to_plan",
+                            "name": "submit_intent",
                             "args": {"intent": fields, "note": ""},
                             "id": "intent-handoff",
                             "type": "tool_call",
@@ -70,7 +70,7 @@ class _FakeAgent:
                 ToolMessage(
                     content=json.dumps({"ok": True, "handoff": "plan", "intent": fields, "note": ""}, ensure_ascii=False),
                     tool_call_id="intent-handoff",
-                    name="handoff_to_plan",
+                    name="submit_intent",
                 ),
             ]
             yield "values", {"messages": messages}
@@ -110,4 +110,4 @@ def test_react_tool_roundtrip_events_are_emitted():
     assert ("running", True) in phases, phases
     assert ("completed", True) in phases, phases
     # handoff 移交不展示为工具事件
-    assert not any(event.get("tool") == "handoff_to_plan" for event in tool_events)
+    assert not any(event.get("tool") == "submit_intent" for event in tool_events)

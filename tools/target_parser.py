@@ -228,7 +228,7 @@ def _is_registry_list_question(text: str) -> bool:
 
 
 def infer_intent_fields(question: str) -> dict[str, Any]:
-    """规则推断意图字段，供 Intent 未 handoff 或字段残缺时补全。"""
+    """规则推断意图字段，供 Intent 未提交或字段残缺时补全。"""
     text = str(question or "").strip()
     hull = extract_hull_number(text)
     description = None if hull and re.search(r"[舷弦]号", text) else extract_description(text)

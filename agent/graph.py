@@ -1,24 +1,24 @@
-"""LangGraph 四 Agent 编排：角色工具集 → handoff → Graph。
+"""LangGraph 四 Agent 编排：角色工具集 → 提交工具 → Graph。
 
 流程：
-  IntentAgent ⇄ tools → handoff_to_plan
-  PlanAgent ⇄ tools → handoff_to_observe(calls+$ref) | handoff_to_reflect
+  IntentAgent ⇄ tools → submit_intent
+  PlanAgent ⇄ tools → submit_plan(calls+$ref) | submit_observation
   ObserveAgent = 确定性执行 calls（完整结果进 working_scope，模型只看摘要）→ reflect
-  ReflectAgent ⇄ tools → handoff_to_plan_replan | handoff_finish
+  ReflectAgent ⇄ tools → request_replan | submit_verdict
 
 设计要点：
   - 节点之间的协同关系由图边表达：无条件跳转用静态边，分支用条件边读取节点写回的
     路由键（plan 读 active_agent，reflect 读 reflection["state"]）。节点只写状态，
     不再返回 Command 决定去向。
-  - 「模型提议、代码定夺」：模型只产出 handoff JSON 与计划草稿；是否采纳、如何修正、
+  - 「模型提议、代码定夺」：模型只产出提交载荷与计划草稿；是否采纳、如何修正、
     往哪跳，全部由本文件的确定性守卫决定。
   - 终态只有 sufficient / conflict / uncertain。replan 只是路由动作而非终态，且
-    conflict 只能由模型的 handoff_finish 显式给出，确定性层不主动产生。
+    conflict 只能由模型的 submit_verdict 显式给出，确定性层不主动产生。
   - 图内不落库：持久化由 controller 在图结束后统一完成。
 
 文件分区（以 S 编号为锚点检索）：
     S1  状态与合并语义        AgentState + reducer
-    S2  交接契约              五个 handoff 的 args_schema
+    S2  交接契约              五个提交工具的 args_schema
     S3  事件与流式工具        内容解析 / 前端事件 / 收流护栏
     S4  工具结果摘要          统一压缩各工具返回
     S5  时间守卫              无显式时间时清空时间字段
@@ -111,7 +111,7 @@ class AgentState(TypedDict, total=False):
     intent: dict[str, Any]       # IntentAgent 产出的结构化意图，下游三个节点都依赖
     # 按工具 call id 存完整工具结果：plan 用 $ref 回读上一轮，reflect 扫它统计证据
     working_scope: Annotated[dict[str, Any], _merge_dict]
-    # reflect 的判定（handoff/nextAction/evidenceGap/decisionSource），plan 重规划时读。
+    # reflect 的判定（提交载荷/nextAction/evidenceGap/decisionSource），plan 重规划时读。
     # 其中 reflection["state"] 同时是 reflect 条件边的路由键：
     # "replan" → 回 plan；其余（sufficient/conflict/uncertain）→ END。
     reflection: dict[str, Any]
@@ -140,17 +140,17 @@ class AgentState(TypedDict, total=False):
 
 
 # ============================================================================
-# S2 交接契约
-# 五个 handoff 工具的 args_schema。它们只把模型的意图编码成 JSON，作为节点判定的
+# S2 提交契约
+# 五个提交工具的 args_schema。它们只把模型的结论编码成 JSON，作为节点判定的
 # 输入；节点据此写回路由键，再由条件边决定去向（见 S9/S11）。
-# HandoffFinishArgs.state 的 Literal 是 conflict 终态的唯一入口。
+# SubmitVerdictArgs.state 的 Literal 是 conflict 终态的唯一入口。
 # ============================================================================
-class HandoffToPlanArgs(BaseModel):
+class SubmitIntentArgs(BaseModel):
     intent: dict[str, Any] = Field(default_factory=dict, description="结构化意图规格")
     note: str = Field(default="", description="给 PlanAgent 的备注")
 
 
-class HandoffToObserveArgs(BaseModel):
+class SubmitPlanArgs(BaseModel):
     goal: str = Field(description="本轮观察目标")
     calls: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -160,19 +160,19 @@ class HandoffToObserveArgs(BaseModel):
     reason: str = Field(default="")
 
 
-class HandoffToReflectArgs(BaseModel):
+class SubmitObservationArgs(BaseModel):
     summary: str = Field(description="观察/规划摘要")
     evidenceGap: str = Field(default="")
     proposedState: str = Field(default="replan")
 
 
-class HandoffFinishArgs(BaseModel):
+class SubmitVerdictArgs(BaseModel):
     state: Literal["sufficient", "conflict", "uncertain"] = Field(description="最终状态")
     reason: str = Field(description="结束依据")
     answerHint: str = Field(default="")
 
 
-class HandoffReplanArgs(BaseModel):
+class RequestReplanArgs(BaseModel):
     reason: str = Field(description="为何 replan")
     nextAction: str = Field(default="", description="供界面展示的下一步摘要")
     nextActionSpec: dict[str, Any] = Field(
@@ -188,6 +188,18 @@ def _safe_json(text: str) -> dict[str, Any]:
         return value if isinstance(value, dict) else {"value": value}
     except Exception:
         return {"raw": text}
+
+
+# 五个「提交工具」：Agent 用它们结束本轮 ReAct 并交出结论。它们不走 agent_tool
+# 事件（前端只展示业务工具与技能读取），识别时按名字精确匹配 —— 不能用前缀，
+# 否则将来任何同前缀的业务工具都会被误吞。
+_SUBMIT_TOOL_NAMES = frozenset({
+    "submit_intent",
+    "submit_plan",
+    "submit_observation",
+    "submit_verdict",
+    "request_replan",
+})
 
 
 # ============================================================================
@@ -512,13 +524,13 @@ def build_sea_agent_graph(
     default_broad_match_top_k = _normalize_broad_match_top_k(broad_match_top_k)
 
     # ---- 交接工具：只把模型意图编码成 JSON，路由由节点解析后决定 ----------
-    @tool("handoff_to_plan", args_schema=HandoffToPlanArgs, return_direct=True)
-    def handoff_to_plan(intent: dict[str, Any] | None = None, note: str = "") -> str:
+    @tool("submit_intent", args_schema=SubmitIntentArgs, return_direct=True)
+    def submit_intent(intent: dict[str, Any] | None = None, note: str = "") -> str:
         """意图完成后移交给 PlanAgent。"""
         return json.dumps({"ok": True, "handoff": "plan", "intent": intent or {}, "note": note}, ensure_ascii=False)
 
-    @tool("handoff_to_observe", args_schema=HandoffToObserveArgs, return_direct=True)
-    def handoff_to_observe(
+    @tool("submit_plan", args_schema=SubmitPlanArgs, return_direct=True)
+    def submit_plan(
         goal: str,
         calls: list[dict[str, Any]] | None = None,
         planHint: str = "",
@@ -537,8 +549,8 @@ def build_sea_agent_graph(
             ensure_ascii=False,
         )
 
-    @tool("handoff_to_reflect", args_schema=HandoffToReflectArgs, return_direct=True)
-    def handoff_to_reflect(summary: str, evidenceGap: str = "", proposedState: str = "replan") -> str:
+    @tool("submit_observation", args_schema=SubmitObservationArgs, return_direct=True)
+    def submit_observation(summary: str, evidenceGap: str = "", proposedState: str = "replan") -> str:
         """观察或规划后移交给 ReflectAgent。"""
         return json.dumps(
             {
@@ -551,16 +563,16 @@ def build_sea_agent_graph(
             ensure_ascii=False,
         )
 
-    @tool("handoff_finish", args_schema=HandoffFinishArgs, return_direct=True)
-    def handoff_finish(state: str, reason: str, answerHint: str = "") -> str:
+    @tool("submit_verdict", args_schema=SubmitVerdictArgs, return_direct=True)
+    def submit_verdict(state: str, reason: str, answerHint: str = "") -> str:
         """证据充分或应结束时退出循环。"""
         return json.dumps(
             {"ok": True, "handoff": "finish", "state": state, "reason": reason, "answerHint": answerHint},
             ensure_ascii=False,
         )
 
-    @tool("handoff_to_plan_replan", args_schema=HandoffReplanArgs, return_direct=True)
-    def handoff_to_plan_replan(
+    @tool("request_replan", args_schema=RequestReplanArgs, return_direct=True)
+    def request_replan(
         reason: str,
         nextAction: str = "",
         nextActionSpec: dict[str, Any] | None = None,
@@ -584,26 +596,26 @@ def build_sea_agent_graph(
     # description 即技能简介 —— 模型看到工具列表就知道有哪些规则可用。
     intent_tools = build_intent_tools(reference_time) + [
         *build_skill_tools("intent_agent"),
-        handoff_to_plan,
+        submit_intent,
     ]
     plan_tools = [
         *build_skill_tools("plan_agent"),
-        handoff_to_observe,
-        handoff_to_reflect,
+        submit_plan,
+        submit_observation,
     ]
     observe_review_tools = [
         *build_skill_tools("observe_agent"),
-        handoff_to_reflect,
+        submit_observation,
     ]
     reflect_tools = [
         *build_skill_tools("reflect_agent"),
-        handoff_to_plan_replan,
-        handoff_finish,
+        request_replan,
+        submit_verdict,
     ]
 
     # ------------------------------------------------------------------------
     # S10 通用 ReAct 执行器：_run_agent —— 四节点共用的单次 agent 调用
-    # 拼系统提示词 → 流式收流 → 解析 handoff 与工具调用 → 派发前端事件。
+    # 拼系统提示词 → 流式收流 → 解析提交载荷与工具调用 → 派发前端事件。
     # 异常在此收束为 invoke_error，由各节点走确定性兜底，因此模型故障不会冒泡
     # 出图；流式超时/超限只 break，不重试。
     # ------------------------------------------------------------------------
@@ -704,8 +716,8 @@ def build_sea_agent_graph(
         def _emit_react_tool_progress(message: Any) -> None:
             """ReAct 微循环实时事件：角色节点内的工具往返对前端可见。
 
-            只发非 handoff / 非 load_<技能> 的辅助工具（parseTime / parseTargets /
-            extractHull 等）；handoff 触发节点切换不展示，load_<技能> 走 agent_skill 事件。
+            只发非提交工具 / 非 load_<技能> 的辅助工具（parseTime / parseTargets /
+            extractHull 等）；提交工具触发节点切换不展示，load_<技能> 走 agent_skill 事件。
             """
             if not role:
                 return
@@ -717,7 +729,7 @@ def build_sea_agent_graph(
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     call_id = str(call.get("id") or f"{tname}-{len(pending_calls) + 1}")
                     pending_calls[call_id] = {"name": tname, "arguments": args}
-                    if tname.startswith("handoff") or tname in skill_tool_ids or call_id in emitted_react_calls:
+                    if tname in _SUBMIT_TOOL_NAMES or tname in skill_tool_ids or call_id in emitted_react_calls:
                         continue
                     emitted_react_calls.add(call_id)
                     _emit(event_handler, {
@@ -741,7 +753,7 @@ def build_sea_agent_graph(
                 tool_call_id = str(getattr(message, "tool_call_id", "") or "")
                 pending = pending_calls.get(tool_call_id) or {}
                 tname = str(getattr(message, "name", "") or pending.get("name") or "")
-                if payload.get("handoff") or not tname or tname.startswith("handoff"):
+                if payload.get("handoff") or not tname or tname in _SUBMIT_TOOL_NAMES:
                     return
                 if tname in skill_tool_ids:
                     # 技能工具：调用即取回全文，转成 agent_skill 事件
@@ -829,7 +841,7 @@ def build_sea_agent_graph(
                     message = data[0] if isinstance(data, tuple) and data else data
                     if not isinstance(message, (AIMessageChunk, AIMessage, ToolMessage, HumanMessage)):
                         continue
-                    # 完整消息（非 chunk）直接入列，保证 handoff ToolMessage 可解析
+                    # 完整消息（非 chunk）直接入列，保证提交工具的 ToolMessage 可解析
                     if isinstance(message, (AIMessage, ToolMessage, HumanMessage)) and not isinstance(message, AIMessageChunk):
                         messages.append(message)
                         _emit_react_tool_progress(message)
@@ -877,7 +889,7 @@ def build_sea_agent_graph(
                 )
                 messages = result.get("messages") or []
             # values 模式会用完整 messages 覆盖流中攒的消息；统一补齐 ReAct 工具事件
-            # （running/结果均按 call id 去重，技能工具/handoff 不重复发出）
+            # （running/结果均按 call id 去重，技能工具/提交工具不重复发出）
             if not stream_guard_triggered:
                 for message in messages:
                     _emit_react_tool_progress(message)
@@ -920,7 +932,7 @@ def build_sea_agent_graph(
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     call_id = str(call.get("id") or f"{tname}-{len(pending_calls)+1}")
                     pending_calls[call_id] = {"name": tname, "arguments": args}
-                    if tname and not tname.startswith("handoff") and tname not in skill_tool_ids:
+                    if tname and tname not in _SUBMIT_TOOL_NAMES and tname not in skill_tool_ids:
                         tool_chain.append(tname)
                         if role == "planner":
                             plan_calls.append({"id": call_id, "tool": tname, "arguments": args})
@@ -933,7 +945,7 @@ def build_sea_agent_graph(
                 if payload.get("handoff"):
                     handoff = payload
                     continue
-                if not tname or tname.startswith("handoff") or tname in skill_tool_ids:
+                if not tname or tname in _SUBMIT_TOOL_NAMES or tname in skill_tool_ids:
                     if tname in skill_tool_ids and role:
                         # 动态技能读取事件已在 ReAct 流式过程中实时发出（_emit_react_tool_progress），
                         # 此处只更新汇总列表，避免重复 emit。
@@ -1018,7 +1030,7 @@ def build_sea_agent_graph(
                     for i, call in enumerate(end_event.get("calls") or [])
                 ]
                 if (invoke_error or not handoff_calls) and not handoff:
-                    end_event["fallback"] = "规划未完成 handoff，将使用默认检索计划"
+                    end_event["fallback"] = "规划未提交，将使用默认检索计划"
                 elif invoke_error and handoff:
                     end_event["fallback"] = ""
                 # Plan 的 agent_end 一律延后到 plan_node，确保含最终 calls
@@ -1066,7 +1078,7 @@ def build_sea_agent_graph(
         question = state.get("question") or ""
         user = json.dumps(
             {
-                "task": "识别意图并必须调用 handoff_to_plan",
+                "task": "识别意图并必须调用 submit_intent",
                 "question": question,
                 "referenceTime": reference_time.isoformat(timespec="seconds"),
                 "timeConstraintRule": "仅当用户原问题明确包含时间表达时才设置 timeRange/timeExpression 或调用 parseTime；未提供时间时两者必须为 null，禁止依据 referenceTime 生成最近一分钟、当前一分钟或任意默认范围。",
@@ -1135,7 +1147,7 @@ def build_sea_agent_graph(
                 intent["hullNumber"] = result.get("hullNumber")
                 intent["targetKind"] = "hull"
 
-        # 模型 handoff 残缺时，用规则补全 description / operation 等
+        # 模型提交的结构化结果残缺时，用规则补全 description / operation 等
         # 规则舷号更完整时覆盖（避免 extractHull 旧结果只剩数字）
         inferred_hull = str(inferred.get("hullNumber") or "").strip()
         current_hull = str(intent.get("hullNumber") or "").strip()
@@ -1267,7 +1279,7 @@ def build_sea_agent_graph(
             intent["intentConfidence"] = max(float(intent.get("intentConfidence") or 0), 0.72)
 
         intent.setdefault("question", question)
-        # 最终确定性守卫：无论 handoff 或 parseTime 返回什么，时间必须可追溯到用户原问题。
+        # 最终确定性守卫：无论提交载荷或 parseTime 返回什么，时间必须可追溯到用户原问题。
         intent = _ground_intent_time(intent, question, reference_time=reference_time)
         if intent.get("timeRange") and not intent.get("queryScope"):
             intent["queryScope"] = intent.get("timeRange")
@@ -1393,7 +1405,7 @@ def build_sea_agent_graph(
             }
             user = json.dumps(
                 {
-                    "task": "独立审阅意图、验收缺口与既有证据；规则不足时最多读取一个相关技能，随后必须调用 handoff_to_observe(goal, calls, planHint)。禁止只输出正文，禁止执行业务工具。",
+                    "task": "独立审阅意图、验收缺口与既有证据；规则不足时最多读取一个相关技能，随后必须调用 submit_plan(goal, calls, planHint)。禁止只输出正文，禁止执行业务工具。",
                     "question": state.get("question"),
                     "intent": compact_intent,
                     "loop": loop_count,
@@ -1434,7 +1446,7 @@ def build_sea_agent_graph(
                         "有 replanDirective 时必须满足 requiredCapabilities，并结合 acceptanceProgress 与 completedCalls 自主选择最小工具链",
                         "复用 working_scope；不得重复 completedCalls 中参数等价且已成功的调用",
                         "仅规则确有缺口时才调用 load_<技能名> 工具，禁止重复读取同一技能或无目的空转",
-                        "无法规划时才 handoff_to_reflect",
+                        "无法规划时才 submit_observation",
                     ],
                 },
                 ensure_ascii=False,
@@ -1704,7 +1716,7 @@ def build_sea_agent_graph(
         # 业务工具仍由确定性执行器负责；ObserveAgent 在节点内部审阅压缩结果、按需读技能并移交 Reflect。
         observe_user = json.dumps(
             {
-                "task": "审阅本轮确定性执行结果；规则不足时最多读取一个相关技能；随后必须调用 handoff_to_reflect。禁止重新执行业务工具。",
+                "task": "审阅本轮确定性执行结果；规则不足时最多读取一个相关技能；随后必须调用 submit_observation。禁止重新执行业务工具。",
                 "question": state.get("question"),
                 "intent": state.get("intent"),
                 "plan": plan_calls,
@@ -1805,7 +1817,7 @@ def build_sea_agent_graph(
 
     def reflect_node(state: AgentState) -> dict[str, Any]:
         # 本节点是编排的判定中枢，共七个阶段（下文以「阶段 n/7」标注）：
-        #   1 证据扫描 → 2 验收计算 → 3 pre_handoff 短路 → 4 模型判定
+        #   1 证据扫描 → 2 验收计算 → 3 预判定短路 → 4 模型判定
         #   → 5 确定性覆盖链 → 6 归一化与 directive 合并 → 7 路由与写回
         # 注意：进入本节点即 loop_count + 1，因此轮次上限在这里生效。
         loop_count = int(state.get("loop_count") or 0) + 1
@@ -2090,7 +2102,7 @@ def build_sea_agent_graph(
             tool_records=state.get("tool_records") or [],
         )
         # --------------------------------------------------------------------
-        # 阶段 3/7：pre_handoff 短路 —— 命中则完全跳过模型调用
+        # 阶段 3/7：预判定短路 —— 命中则完全跳过模型调用
         # --------------------------------------------------------------------
         pre_handoff: dict[str, Any] | None = None
         # 仅工具契约损坏和无候选终态提前短路；普通证据缺口交给 ReflectAgent 判定。
@@ -2126,7 +2138,7 @@ def build_sea_agent_graph(
             }
         user = json.dumps(
             {
-                "task": "判定是否退出。replan→handoff_to_plan_replan；否则必须 handoff_finish",
+                "task": "判定是否退出。replan→request_replan；否则必须 submit_verdict",
                 "question": question,
                 "expectedOutcome": intent.get("expectedOutcome"),
                 "successCriteria": intent.get("successCriteria"),
@@ -2169,7 +2181,7 @@ def build_sea_agent_graph(
                 "maxRounds": limit,
                 "notes": [
                     "hasToolEvidence=true 表示已有工具成功结果，勿说「没有任何成功工具结果」",
-                    "存在待补全能力时调用 handoff_to_plan_replan，并在 nextActionSpec 中原样保留 replanDirective.requiredCapabilities",
+                    "存在待补全能力时调用 request_replan，并在 nextActionSpec 中原样保留 replanDirective.requiredCapabilities",
                     "nextAction 仅作简短摘要，不要在文本里硬写固定工具链；由 PlanAgent 根据能力目标选工具",
                     "isRegistryInList/isRegistryOutList=true：先检查全量视频轨迹；trackCount=0 时直接验收为没有候选船舶，禁止继续查整库或调用 matchImage",
                     "trackCount>0 时才必须做完整视频轨迹与完整先验库对照，禁止用 matchText(用户问句) 当证据",
@@ -2255,7 +2267,7 @@ def build_sea_agent_graph(
                 round_number=loop_count,
                 # 技能改为「一技能一工具」后 reflect 挂载 5 个技能工具，一轮
                 # 「模型→工具」往返耗 2 步；原来的 6 步在读完两个技能后就来不及
-                # 调 handoff_finish，故与其他节点对齐到 12。
+                # 调 submit_verdict，故与其他节点对齐到 12。
                 recursion_limit=12,
                 emit_live_deltas=False,
                 stream_char_limit=900,
@@ -2266,7 +2278,7 @@ def build_sea_agent_graph(
         handoff = out.get("handoff") or {}
         # --------------------------------------------------------------------
         # 阶段 5/7：确定性覆盖链 —— 下面的 if/elif 顺序即优先级，逐层覆盖或
-        # 纠偏模型判定。本段结束后 handoff 即「权威决策」。
+        # 纠偏模型判定。本段结束后提交载荷即「权威决策」。
         # --------------------------------------------------------------------
         # 工具参数契约错误必须切换为确定性计划，禁止让模型重复同一错误调用。
         if tool_contract_failures and loop_count < limit:

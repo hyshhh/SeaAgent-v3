@@ -1,7 +1,7 @@
 """SeaAgent 四子智能体：LangChain 工具 + LangGraph 编排。
 
 - IntentAgent / PlanAgent / ObserveAgent / ReflectAgent
-- handoff 工具在 Agent 间移交
+- 提交工具（submit_*）结束本轮并交出结论
 - AgentController.answer() 保持前端契约
 
 包内文件分工：
