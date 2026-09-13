@@ -73,8 +73,8 @@ class SkillMeta:
 
 # ============================================================================
 # K2 目录与正文读取
-# 全部带 lru_cache：技能文件在进程生命周期内视为不可变，改动后需调用
-# clear_skill_cache()（K6）主动失效。
+# 全部带 lru_cache：技能文件在进程生命周期内视为不可变，改动技能后需重启
+# 进程才会重新读取。
 # ============================================================================
 @lru_cache(maxsize=64)
 def load_skill_file(agent_key: str, filename: str) -> str:
@@ -321,9 +321,9 @@ def _dig(ctx: dict[str, Any], dotted: str) -> Any:
 
 
 # ============================================================================
-# K6 YAML 通道与缓存
+# K6 YAML 通道
 # .yaml 与 .md 走两条路：YAML 只给代码读（如 tools/target_parser.py），
-# 不注入对话。clear_skill_cache 是四个缓存的手动失效入口。
+# 不注入对话。
 # ============================================================================
 @lru_cache(maxsize=32)
 def load_skill_yaml(agent_key: str, filename: str) -> dict[str, Any]:
@@ -339,10 +339,3 @@ def load_skill_yaml(agent_key: str, filename: str) -> dict[str, Any]:
             return {}
         return data if isinstance(data, dict) else {}
     return {}
-
-
-def clear_skill_cache() -> None:
-    load_skill_file.cache_clear()
-    list_skill_catalog.cache_clear()
-    load_skill_body.cache_clear()
-    load_skill_yaml.cache_clear()

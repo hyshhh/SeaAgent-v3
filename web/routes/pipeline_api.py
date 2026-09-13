@@ -451,14 +451,6 @@ def _probe_video_size(video_path: str) -> tuple[int, int] | None:
     return None
 
 
-def _is_browser_compatible(video_path: str) -> bool:
-    """检测视频是否被浏览器原生兼容。"""
-    codec = _probe_codec(video_path)
-    if codec is None:
-        return True  # 检测失败时假设兼容，避免不必要的转码
-    return codec in _BROWSER_COMPATIBLE_CODECS
-
-
 def _ensure_h264(video_path: Path) -> Path:
     """
     确保视频为浏览器兼容的 H264 编码。
