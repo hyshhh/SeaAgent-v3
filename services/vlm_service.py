@@ -4,7 +4,7 @@ import base64
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 import cv2
 import httpx
 import numpy as np
