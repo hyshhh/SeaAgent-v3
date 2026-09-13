@@ -1,18 +1,19 @@
 """将现有 ToolService / 解析函数封装为 LangChain tools。
 
 定位：这是**模型直调**路径的工具封装，与 plan_executor.py 的**确定性执行**
-路径并存。当前 graph 只用到本文件的 intent 解析工具与 loadSkill ——
+路径并存。当前 graph 只用到本文件的 intent 解析工具与技能工具 ——
 observe 的业务检索工具一律走 PlanExecutor.execute，不经过模型，故本文件不再
 保留业务工具的封装（原 build_observe_tools 及其专属 Args 已删除）。
 
 文件分区（以 L 编号为锚点检索）：
-    L1  序列化辅助与参数 schema   _jsonable / _dump / intent 与 loadSkill 的 *Args
+    L1  序列化辅助与参数 schema   _jsonable / _dump / intent 工具的 *Args
     L2  intent 工具                parseTime / parseTargets / extractHull
-    L3  技能加载工具                loadSkill
+    L3  技能工具                   一技能一工具：load_<skill_id>
 """
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, Callable
 
@@ -21,6 +22,10 @@ from pydantic import BaseModel, Field
 
 from tools.target_parser import extract_hull_number, extract_target_items
 from tools.time_normalizer import normalize_time_range
+
+from .skill_loader import list_skill_catalog, load_skill_body
+
+logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
@@ -52,10 +57,6 @@ class ParseTargetsArgs(BaseModel):
 
 class ExtractHullArgs(BaseModel):
     question: str = Field(description="用户原问题，用于抽取舷号")
-
-
-class LoadSkillArgs(BaseModel):
-    skillId: str = Field(description="catalog 中的 skill id")
 
 
 # ===========================================================================
@@ -108,17 +109,43 @@ def build_intent_tools(reference_time: datetime | None = None) -> list[Structure
 
 
 # ===========================================================================
-# L3 技能加载工具
-# 模型在 ReAct 过程中按需拉取「只给了目录、未注入正文」的技能全文，
-# 与 skill_loader 的两级披露配套。load_fn 由 graph 注入（_skill_loader）。
+# L3 技能工具
+# 每个 skill 包装成一个独立工具：工具名 load_<skill_id>，description 取
+# catalog.yaml 的简介 —— **模型看到的工具列表本身就是技能目录**，调用才拿到
+# 正文，这就是两级披露的第二级。用哪个技能由模型看描述自行判断，代码不做预选。
 # ===========================================================================
-def build_load_skill_tool(agent_key: str, load_fn: Callable[[str], dict[str, Any]]) -> StructuredTool:
-    def _run(skillId: str) -> str:
-        return _dump(load_fn(skillId))
+def build_skill_tools(agent_key: str) -> list[StructuredTool]:
+    """把 skills/{agent_key}/ 下的每个技能包装成一个无参工具。
 
-    return StructuredTool.from_function(
-        name="loadSkill",
-        description="按需加载可选 skill 全文",
-        func=_run,
-        args_schema=LoadSkillArgs,
-    )
+    正文读不出来的技能直接跳过挂载（免得模型去调一个必然失败的工具），但要记
+    warning —— catalog 解析失败或目录为空会让整条技能通道无声消失，不能静默。
+    """
+    catalog = list_skill_catalog(agent_key)
+    if not catalog:
+        logger.warning("skills/%s 未登记任何技能，该 Agent 将没有技能工具", agent_key)
+
+    def _make(skill_id: str) -> Callable[[], str]:
+        def _load() -> str:
+            body = load_skill_body(agent_key, skill_id)
+            if not body:
+                return _dump({"ok": False, "error": f"skill_unavailable:{skill_id}"})
+            return _dump({"ok": True, "skillId": skill_id, "content": body})
+
+        return _load
+
+    tools: list[StructuredTool] = []
+    for meta in catalog:
+        if not load_skill_body(agent_key, meta.id):
+            logger.warning(
+                "技能 %s/%s 正文为空（file=%s），已跳过挂载", agent_key, meta.id, meta.file
+            )
+            continue
+        description = f"{meta.title}：{meta.description}" if meta.description else meta.title
+        tools.append(
+            StructuredTool.from_function(
+                name=f"load_{meta.id}",
+                description=description,
+                func=_make(meta.id),
+            )
+        )
+    return tools

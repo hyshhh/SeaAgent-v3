@@ -1,55 +1,23 @@
-# ObserveAgent 可选技能目录（执行侧提示，非多轮 ReAct）
+# ObserveAgent 技能目录。
+# 每个技能由 lc_tools.build_skill_tools 挂成 load_<id> 工具，description 即
+# 模型看到的工具说明 —— 它是模型判断「要不要读这篇」的唯一依据，所以写具体些。
 skills:
   - id: core_observe
     title: 执行观察核心
     description: 严格按计划执行、不擅自决策退出
     file: core_observe.md
-    always: true
-    tags: [core]
 
   - id: execution_rules
     title: 执行与依赖
-    description: condition、$ref、必填参数与跳过规则
+    description: condition 条件、$ref 引用、必填参数与跳过规则；本轮存在工具调用或依赖引用时读
     file: execution_rules.md
-    always: false
-    when: 存在工具调用或依赖引用
-    match_any:
-      - "$ref"
-      - "condition"
-      - "getTrack"
-      - "getFrames"
-      - "依赖"
-      - "跳过"
-    match_fields:
-      - calls
-      - plan
-    tags: [execution]
 
   - id: argument_rules
     title: 参数校验
-    description: 各工具必填参数与常见错误
+    description: 各工具的必填参数清单与常见参数错误
     file: argument_rules.md
-    always: false
-    when: 需要核对工具参数
-    match_any:
-      - "参数"
-      - "arguments"
-      - "必填"
-      - "missing"
-    tags: [arguments]
+
   - id: registry_observation
     title: 数据库结果观察
-    description: 核对数据库匹配来源、分数带与空库否定证据
+    description: 核对数据库匹配来源、分数带与空库否定证据；计划含 listRegistry / getRegistry 或数据库侧 matchText 时读
     file: registry_observation.md
-    always: false
-    when: 本轮计划包含 listRegistry/getRegistry 或数据库侧 matchText
-    match_any:
-      - "数据库"
-      - "listRegistry"
-      - "getRegistry"
-      - "targetScope:registry"
-      - "registry.registryReferences"
-    match_fields:
-      - calls
-      - plan
-    tags: [registry, observation]

@@ -10,10 +10,10 @@
 4. 多艘船、多个舷号、多个描述用顿号/逗号/“和”分隔时，必须填 `targetItems` 数组，**禁止合并成一个字符串**。
 5. 拿不准时调用工具：`parseTime` / `parseTargets` / `extractHull`，把结果写入 handoff 的 intent。
 6. 无法可靠解析时间时设 `timeParseError`，`timeRange` 为 null。
-7. `loadSkill` 最多 1 次；禁止空转。
+7. 需要更多规则时调用对应的 `load_<技能名>` 工具，同一技能最多读 1 次；禁止空转。
 
 ## 工具
-- `parseTime` / `parseTargets` / `extractHull` / `loadSkill`
+- `parseTime` / `parseTargets` / `extractHull`，以及 `load_<技能名>` 系列（按需读取规则全文）
 - **结束必须调用** `handoff_to_plan(intent, note)`，把完整意图放在 `intent` 参数里
 
 ## intent 字段

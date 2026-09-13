@@ -1,96 +1,33 @@
-# IntentAgent 可选技能目录：always 始终注入全文，其余按上下文匹配或 loadSkill 补载
+# IntentAgent 技能目录。
+# 每个技能由 lc_tools.build_skill_tools 挂成 load_<id> 工具，description 即
+# 模型看到的工具说明 —— 它是模型判断「要不要读这篇」的唯一依据，所以写具体些。
 skills:
   - id: core_intent
     title: 自主意图核心
     description: 角色、强制原则、工具列表与输出字段总纲
     file: core_intent.md
-    always: true
-    tags: [core]
 
   - id: time_parsing
     title: 时间解析细则
-    description: 相对/绝对时间、timeRange 与 timeParseError 写法
+    description: 相对/绝对时间的归一化、timeRange 与 timeParseError 写法；问题含日期、时段、昨天/上周/上下午等表达时读
     file: time_parsing_rules.md
-    always: false
-    when: 问题含日期、时段、昨天/上周/上下午等时间表达
-    match_any:
-      - "昨天"
-      - "今天"
-      - "明天"
-      - "上周"
-      - "本周"
-      - "下周"
-      - "上午"
-      - "下午"
-      - "晚上"
-      - "凌晨"
-      - "中午"
-      - "点"
-      - "时"
-      - "分钟"
-      - "小时"
-      - "最近"
-      - "过去"
-      - "月"
-      - "年"
-      - "星期"
-      - "白天"
-      - "傍晚"
-      - "时间"
-      - "何时"
-      - "什么时候"
-    match_fields:
-      - timeExpression
-      - timeRange
-      - timeParseError
-    tags: [time]
 
   - id: multi_target
     title: 多目标拆分
-    description: 多舷号/多描述并列时如何填 targetItems
+    description: 多个舷号或描述并列（顿号、逗号、和/与/及）时如何填 targetItems
     file: multi_target.md
-    always: false
-    when: 多个目标用顿号逗号“和/与/及”并列
-    match_any:
-      - "、"
-      - "，"
-      - ","
-      - "和"
-      - "与"
-      - "及"
-      - "以及"
-      - "还有"
-      - "分别"
-      - "几个"
-      - "多艘"
-      - "多船"
-    tags: [target, multi]
 
   - id: target_identity
     title: 目标与操作类型
-    description: targetScope/Kind/operation/registryRelation 判定
+    description: targetScope / targetKind / operation / registryRelation 的判定
     file: target_identification_rules.md
-    always: true
-    tags: [target, operation, core]
 
   - id: acceptance_fields
     title: 验收字段填写
-    description: expectedOutcome / successCriteria / nextAgentFocus（含分阶段存在判断）
+    description: expectedOutcome / successCriteria / nextAgentFocus 怎么写，含分阶段存在判断
     file: acceptance_fields.md
-    always: true
-    tags: [acceptance, core]
+
   - id: registry_scope
     title: 数据库范围识别
-    description: 识别数据库限定词，阻止纯数据库问题越界到视频检索
+    description: 识别数据库、先验库、名录等限定词，阻止纯数据库问题越界到视频检索
     file: registry_scope.md
-    always: false
-    when: 问题明确提到数据库、先验库、库中或名录
-    match_any:
-      - "数据库"
-      - "数据仓库"
-      - "先验库"
-      - "库中"
-      - "库里"
-      - "名录"
-      - "targetScope:registry"
-    tags: [registry, scope]

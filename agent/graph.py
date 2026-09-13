@@ -48,7 +48,7 @@ from services import AgentLLMService
 from tools import ToolService, has_time_expression
 from tools.target_parser import infer_intent_fields, normalize_target_items
 
-from .lc_tools import build_intent_tools, build_load_skill_tool
+from .lc_tools import build_intent_tools, build_skill_tools
 from .llm_adapter import build_chat_model
 from .plan_executor import PlanExecutor
 from .roles import (
@@ -58,7 +58,7 @@ from .roles import (
     REFLECT_RESPONSIBILITY,
     role_system_prompt,
 )
-from .skill_loader import get_skill_meta, load_skill_body
+from .skill_loader import get_skill_meta, list_skill_catalog, load_skill_body
 from .task_profiles import (
     is_membership_question_type,
     registry_membership_list_mode,
@@ -198,7 +198,7 @@ def _safe_json(text: str) -> dict[str, Any]:
 #   ③ 流式收流   _bounded_model / _stream_tool_chunk_chars / _stream_delta_piece
 # ============================================================================
 def _skill_read_records(agent_key: str, skill_ids: list[str], *, source: str) -> list[dict[str, Any]]:
-    """把注入或按需读取的技能转换为前端可展示的结构化记录。"""
+    """把模型读过的技能转换为前端可展示的结构化记录。"""
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw_id in skill_ids:
@@ -452,7 +452,7 @@ def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 # ============================================================================
 # S9 图装配
-# 建共享 model 与受限 reflect_model，注册四节点，然后把交接工具与技能加载器
+# 建共享 model 与受限 reflect_model，注册四节点，然后把交接工具与技能工具
 # 注入各节点。节点之间的协同关系全部由显式边表达：
 #   START   → intent              静态边
 #   intent  → plan                静态边（无条件）
@@ -580,38 +580,30 @@ def build_sea_agent_graph(
             ensure_ascii=False,
         )
 
-    def _skill_loader(agent_key: str):
-        def _load(skill_id: str) -> dict[str, Any]:
-            body = load_skill_body(agent_key, skill_id)
-            if not body:
-                return {"ok": False, "error": f"unknown_skill:{skill_id}"}
-            return {"ok": True, "skillId": skill_id, "content": body}
-
-        return _load
-
+    # 技能以「一技能一工具」挂载：build_skill_tools 为每个 skill 生成 load_<id>，
+    # description 即技能简介 —— 模型看到工具列表就知道有哪些规则可用。
     intent_tools = build_intent_tools(reference_time) + [
-        build_load_skill_tool("intent_agent", _skill_loader("intent_agent")),
+        *build_skill_tools("intent_agent"),
         handoff_to_plan,
     ]
-    # 三个协作节点均可在本节点内按需读取一项技能，再完成移交。
     plan_tools = [
-        build_load_skill_tool("plan_agent", _skill_loader("plan_agent")),
+        *build_skill_tools("plan_agent"),
         handoff_to_observe,
         handoff_to_reflect,
     ]
     observe_review_tools = [
-        build_load_skill_tool("observe_agent", _skill_loader("observe_agent")),
+        *build_skill_tools("observe_agent"),
         handoff_to_reflect,
     ]
     reflect_tools = [
-        build_load_skill_tool("reflect_agent", _skill_loader("reflect_agent")),
+        *build_skill_tools("reflect_agent"),
         handoff_to_plan_replan,
         handoff_finish,
     ]
 
     # ------------------------------------------------------------------------
     # S10 通用 ReAct 执行器：_run_agent —— 四节点共用的单次 agent 调用
-    # 拼系统提示词与技能 → 流式收流 → 解析 handoff 与工具调用 → 派发前端事件。
+    # 拼系统提示词 → 流式收流 → 解析 handoff 与工具调用 → 派发前端事件。
     # 异常在此收束为 invoke_error，由各节点走确定性兜底，因此模型故障不会冒泡
     # 出图；流式超时/超限只 break，不重试。
     # ------------------------------------------------------------------------
@@ -627,37 +619,20 @@ def build_sea_agent_graph(
         role: str | None = None,
         round_number: int = 0,
         recursion_limit: int = 12,
-        skill_context: dict[str, Any] | None = None,
         emit_status: bool = True,
         emit_start: bool = True,
         emit_end: bool = True,
-        emit_initial_skill_events: bool = True,
         emit_live_deltas: bool = True,
         stream_char_limit: int | None = None,
         stream_time_limit_seconds: float | None = None,
         retry_non_stream: bool = True,
         agent_model: Any | None = None,
     ) -> dict[str, Any]:
-        prompt_context = {
-            "question": state.get("question"),
-            "intent": state.get("intent"),
-            "plan_hint": state.get("plan_hint"),
-            "observation_summary": state.get("observation_summary"),
-            "evidenceGap": (state.get("reflection") or {}).get("evidenceGap"),
-            "nextAction": (state.get("reflection") or {}).get("nextAction"),
-            "replanDirective": (state.get("reflection") or {}).get("nextActionSpec"),
-            "acceptanceProgress": (state.get("reflection") or {}).get("acceptanceProgress"),
-            "calls": state.get("plan_calls") or [],
-        }
-        if skill_context:
-            prompt_context.update(skill_context)
-        prompt, skill_ids = role_system_prompt(
-            agent_key,
-            title,
-            responsibility,
-            context=prompt_context,
-        )
-        skill_reads = _skill_read_records(agent_key, skill_ids, source="auto")
+        prompt = role_system_prompt(agent_key, title, responsibility)
+        # 技能不再由代码预选：enabledSkills 表示「该 agent 挂载了哪些技能」，
+        # skillReads 从空开始，模型调用 load_<id> 时才追加记录。
+        skill_ids = [meta.id for meta in list_skill_catalog(agent_key)]
+        skill_reads: list[dict[str, Any]] = []
         event_round = 0 if role == "intent" else max(1, round_number or 1)
         if emit_status:
             _emit(
@@ -665,9 +640,9 @@ def build_sea_agent_graph(
                 {
                     "type": "status",
                     "title": title,
-                    "message": f"{title} 开始，正在读取相关技能",
+                    "message": f"{title} 开始",
                     "enabledSkills": skill_ids,
-                    "skillReads": skill_reads,
+                    "skillReads": [],
                     "role": role,
                     "round": event_round,
                 },
@@ -682,16 +657,8 @@ def build_sea_agent_graph(
                     "role": role,
                     "round": event_round,
                     "enabledSkills": skill_ids,
-                    "skillReads": skill_reads,
+                    "skillReads": [],
                 },
-            )
-        if role and emit_initial_skill_events:
-            _emit_skill_read_events(
-                event_handler,
-                title=title,
-                role=role,
-                event_round=event_round,
-                records=skill_reads,
             )
 
         agent = create_agent(
@@ -734,8 +701,8 @@ def build_sea_agent_graph(
         def _emit_react_tool_progress(message: Any) -> None:
             """ReAct 微循环实时事件：角色节点内的工具往返对前端可见。
 
-            只发非 handoff / 非 loadSkill 的辅助工具（parseTime / parseTargets /
-            extractHull 等）；handoff 触发节点切换不展示，loadSkill 走 agent_skill 事件。
+            只发非 handoff / 非 load_<技能> 的辅助工具（parseTime / parseTargets /
+            extractHull 等）；handoff 触发节点切换不展示，load_<技能> 走 agent_skill 事件。
             """
             if not role:
                 return
@@ -747,7 +714,7 @@ def build_sea_agent_graph(
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     call_id = str(call.get("id") or f"{tname}-{len(pending_calls) + 1}")
                     pending_calls[call_id] = {"name": tname, "arguments": args}
-                    if tname.startswith("handoff") or tname == "loadSkill" or call_id in emitted_react_calls:
+                    if tname.startswith("handoff") or tname.startswith("load_") or call_id in emitted_react_calls:
                         continue
                     emitted_react_calls.add(call_id)
                     _emit(event_handler, {
@@ -773,8 +740,9 @@ def build_sea_agent_graph(
                 tname = str(getattr(message, "name", "") or pending.get("name") or "")
                 if payload.get("handoff") or not tname or tname.startswith("handoff"):
                     return
-                if tname == "loadSkill":
-                    skill_id = str((pending.get("arguments") or {}).get("skillId") or payload.get("skillId") or "").strip()
+                if tname.startswith("load_"):
+                    # 技能工具 load_<skill_id>：调用即取回全文，转成 agent_skill 事件
+                    skill_id = tname[len("load_"):]
                     if skill_id and skill_id not in emitted_skill_ids:
                         emitted_skill_ids.add(skill_id)
                         meta = get_skill_meta(agent_key, skill_id)
@@ -906,7 +874,7 @@ def build_sea_agent_graph(
                 )
                 messages = result.get("messages") or []
             # values 模式会用完整 messages 覆盖流中攒的消息；统一补齐 ReAct 工具事件
-            # （running/结果均按 call id 去重，loadSkill/handoff 不重复发出）
+            # （running/结果均按 call id 去重，技能工具/handoff 不重复发出）
             if not stream_guard_triggered:
                 for message in messages:
                     _emit_react_tool_progress(message)
@@ -949,7 +917,7 @@ def build_sea_agent_graph(
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     call_id = str(call.get("id") or f"{tname}-{len(pending_calls)+1}")
                     pending_calls[call_id] = {"name": tname, "arguments": args}
-                    if tname and not tname.startswith("handoff") and tname != "loadSkill":
+                    if tname and not tname.startswith("handoff") and not tname.startswith("load_"):
                         tool_chain.append(tname)
                         if role == "planner":
                             plan_calls.append({"id": call_id, "tool": tname, "arguments": args})
@@ -962,11 +930,11 @@ def build_sea_agent_graph(
                 if payload.get("handoff"):
                     handoff = payload
                     continue
-                if not tname or tname.startswith("handoff") or tname == "loadSkill":
-                    if tname == "loadSkill" and role:
+                if not tname or tname.startswith("handoff") or tname.startswith("load_"):
+                    if tname.startswith("load_") and role:
                         # 动态技能读取事件已在 ReAct 流式过程中实时发出（_emit_react_tool_progress），
                         # 此处只更新汇总列表，避免重复 emit。
-                        skill_id = str(arguments.get("skillId") or payload.get("skillId") or "").strip()
+                        skill_id = tname[len("load_"):]
                         if skill_id:
                             dynamic_records = _skill_read_records(agent_key, [skill_id], source="dynamic")
                             if dynamic_records:
@@ -1007,7 +975,7 @@ def build_sea_agent_graph(
                 "role": role,
                 "round": event_round,
                 "thinking": thinking[:2000] if thinking_enabled and thinking else "",
-                "enabledSkills": [item.get("skillId") for item in skill_reads if item.get("ok")],
+                "enabledSkills": skill_ids,
                 "skillReads": skill_reads,
                 "modelSummary": {
                     "summary": text[:500] if text else "",
@@ -1296,7 +1264,6 @@ def build_sea_agent_graph(
             intent["intentConfidence"] = max(float(intent.get("intentConfidence") or 0), 0.72)
 
         intent.setdefault("question", question)
-        intent["selectedSkills"] = out.get("skill_ids") or []
         # 最终确定性守卫：无论 handoff 或 parseTime 返回什么，时间必须可追溯到用户原问题。
         intent = _ground_intent_time(intent, question, reference_time=reference_time)
         if intent.get("timeRange") and not intent.get("queryScope"):
@@ -1456,7 +1423,7 @@ def build_sea_agent_graph(
                         "数量统计：getTrack(limit=0) → getFrames → dedupTracks(tracks=$ref tracks.tracks, keyframesByTrack=$ref frames.keyframesByTrack)，不要把 frames 整体当 keyframesByTrack",
                         "有 replanDirective 时必须满足 requiredCapabilities，并结合 acceptanceProgress 与 completedCalls 自主选择最小工具链",
                         "复用 working_scope；不得重复 completedCalls 中参数等价且已成功的调用",
-                        "仅规则确有缺口时调用一次 loadSkill，禁止重复读取同一技能或无目的空转",
+                        "仅规则确有缺口时才调用 load_<技能名> 工具，禁止重复读取同一技能或无目的空转",
                         "无法规划时才 handoff_to_reflect",
                     ],
                 },
@@ -1473,13 +1440,6 @@ def build_sea_agent_graph(
                 role="planner",
                 round_number=round_number,
                 recursion_limit=12,
-                skill_context={
-                    "acceptanceProgress": reflection.get("acceptanceProgress"),
-                    "evidenceGap": reflection.get("evidenceGap"),
-                    "nextAction": reflection.get("nextAction"),
-                    "replanDirective": replan_directive,
-                    "completedCalls": (state.get("tool_records") or [])[-16:],
-                },
             )
             handoff = out.get("handoff") or {}
             target = str(handoff.get("handoff") or "observe")
@@ -1661,22 +1621,7 @@ def build_sea_agent_graph(
                 working_scope=state.get("working_scope") or {},
             )
 
-        observe_skill_context = {
-            "question": state.get("question"),
-            "intent": state.get("intent"),
-            "calls": plan_calls,
-            "plan": plan_calls,
-            "plan_hint": state.get("plan_hint"),
-        }
-        _, observe_skill_ids = role_system_prompt(
-            "observe_agent",
-            "观察执行智能体（ObserveAgent）",
-            OBSERVE_RESPONSIBILITY,
-            context=observe_skill_context,
-        )
-        initial_observe_skill_reads = _skill_read_records(
-            "observe_agent", observe_skill_ids, source="auto"
-        )
+        observe_skill_ids = [meta.id for meta in list_skill_catalog("observe_agent")]
         _emit(
             event_handler,
             {
@@ -1686,15 +1631,8 @@ def build_sea_agent_graph(
                 "role": "observer",
                 "round": round_number,
                 "enabledSkills": observe_skill_ids,
-                "skillReads": initial_observe_skill_reads,
+                "skillReads": [],
             },
-        )
-        _emit_skill_read_events(
-            event_handler,
-            title="观察执行智能体（ObserveAgent）",
-            role="observer",
-            event_round=round_number,
-            records=initial_observe_skill_reads,
         )
 
         def on_tool_event(event: dict[str, Any]) -> None:
@@ -1785,15 +1723,9 @@ def build_sea_agent_graph(
             role="observer",
             round_number=round_number,
             recursion_limit=12,
-            skill_context={
-                **observe_skill_context,
-                "observation_summary": observation_summary,
-                "executionSummary": observation_summary,
-            },
             emit_status=False,
             emit_start=False,
             emit_end=False,
-            emit_initial_skill_events=False,
         )
         observe_handoff = observe_out.get("handoff") or {}
         review_summary = str(observe_handoff.get("summary") or "").strip()
@@ -1802,8 +1734,7 @@ def build_sea_agent_graph(
             observation_summary = f"{observation_summary}\n审阅：{review_summary}"
         if evidence_gap:
             observation_summary = f"{observation_summary}\n证据缺口：{evidence_gap}"
-        observe_skill_reads = observe_out.get("skill_reads") or initial_observe_skill_reads
-        observe_enabled_skills = observe_out.get("skill_ids") or observe_skill_ids
+        observe_skill_reads = observe_out.get("skill_reads") or []
 
         _emit(
             event_handler,
@@ -1814,7 +1745,7 @@ def build_sea_agent_graph(
                 "role": "observer",
                 "round": round_number,
                 "thinking": str(observe_out.get("thinking") or "")[:2000],
-                "enabledSkills": observe_enabled_skills,
+                "enabledSkills": observe_skill_ids,
                 "skillReads": observe_skill_reads,
                 "modelSummary": {
                     "summary": observation_summary[:500],
@@ -2255,33 +2186,15 @@ def build_sea_agent_graph(
             },
             ensure_ascii=False,
         )
-        reflect_skill_context = {
-            "acceptanceProgress": acceptance_progress,
-            "acceptance": acceptance_progress,
-            "evidenceGap": "；".join(pending_requirements),
-            "replanDirective": replan_directive,
-            "round": loop_count,
-            "maxRounds": limit,
-        }
         if pre_handoff:
-            _, reflect_skill_ids = role_system_prompt(
-                "reflect_agent",
-                "反思判定智能体（ReflectAgent）",
-                REFLECT_RESPONSIBILITY,
-                context={
-                    "question": state.get("question"),
-                    "intent": state.get("intent"),
-                    "observation_summary": state.get("observation_summary"),
-                    **reflect_skill_context,
-                },
-            )
-            reflect_skill_reads = _skill_read_records("reflect_agent", reflect_skill_ids, source="auto")
+            # 短路路径不调模型，因此本轮不会有技能读取
+            reflect_skill_ids = [meta.id for meta in list_skill_catalog("reflect_agent")]
             _emit(event_handler, {
                 "type": "status",
                 "title": "反思判定智能体（ReflectAgent）",
                 "message": "验收规则正在核对证据并决定是否进入下一轮",
                 "enabledSkills": reflect_skill_ids,
-                "skillReads": reflect_skill_reads,
+                "skillReads": [],
                 "role": "reflector",
                 "round": loop_count,
             })
@@ -2292,15 +2205,8 @@ def build_sea_agent_graph(
                 "role": "reflector",
                 "round": loop_count,
                 "enabledSkills": reflect_skill_ids,
-                "skillReads": reflect_skill_reads,
+                "skillReads": [],
             })
-            _emit_skill_read_events(
-                event_handler,
-                title="反思判定智能体（ReflectAgent）",
-                role="reflector",
-                event_round=loop_count,
-                records=reflect_skill_reads,
-            )
             reflect_reason = str(pre_handoff.get("reason") or "验收规则已完成判定")
             out = {
                 "handoff": pre_handoff,
@@ -2308,8 +2214,8 @@ def build_sea_agent_graph(
                 "tool_chain": [],
                 "tool_records": [],
                 "scope_updates": {},
-                "skill_ids": [item.get("skillId") for item in reflect_skill_reads if item.get("ok")],
-                "skill_reads": reflect_skill_reads,
+                "skill_ids": [],
+                "skill_reads": [],
                 "plan_calls": [],
                 "invoke_error": "",
                 "thinking": "",
@@ -2320,8 +2226,8 @@ def build_sea_agent_graph(
                     "role": "reflector",
                     "round": loop_count,
                     "thinking": "",
-                    "enabledSkills": [item.get("skillId") for item in reflect_skill_reads if item.get("ok")],
-                    "skillReads": reflect_skill_reads,
+                    "enabledSkills": reflect_skill_ids,
+                    "skillReads": [],
                     "modelSummary": {"summary": reflect_reason[:500], "reason": reflect_reason[:300]},
                     "calls": [],
                 },
@@ -2341,8 +2247,10 @@ def build_sea_agent_graph(
                 user,
                 role="reflector",
                 round_number=loop_count,
-                recursion_limit=6,
-                skill_context=reflect_skill_context,
+                # 技能改为「一技能一工具」后 reflect 挂载 5 个技能工具，一轮
+                # 「模型→工具」往返耗 2 步；原来的 6 步在读完两个技能后就来不及
+                # 调 handoff_finish，故与其他节点对齐到 12。
+                recursion_limit=12,
                 emit_live_deltas=False,
                 stream_char_limit=900,
                 stream_time_limit_seconds=reflect_timeout_seconds,

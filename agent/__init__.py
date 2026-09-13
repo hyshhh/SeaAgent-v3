@@ -8,9 +8,9 @@
     controller.py      对外边界：answer() 契约、终态投影、落库
     graph.py           编排主体：AgentState 状态机与四个节点
     plan_executor.py   observe 的确定性执行内核
-    lc_tools.py        业务工具 → LangChain 工具封装
+    lc_tools.py        业务工具与技能工具 → LangChain 工具封装
     roles.py           四角色系统提示词拼装
-    skill_loader.py    skills/ 的登记、选择、按需补载
+    skill_loader.py    skills/ 的读取（目录 + 正文 + YAML）
     task_profiles.py   任务画像单一事实源（membership / 证据量级）
     llm_adapter.py     ChatOpenAI 构造
 """

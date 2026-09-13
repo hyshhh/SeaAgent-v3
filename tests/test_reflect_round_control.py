@@ -510,7 +510,7 @@ def test_reflect_stages_registry_out_query_without_repeating_completed_calls():
         assert handoff_tools
         assert all(getattr(tool, "return_direct", False) for tool in handoff_tools)
         if name in {"plan", "observe", "reflect"}:
-            assert "loadSkill" in {str(getattr(tool, "name", "")) for tool in tools}
+            assert any(str(getattr(tool, "name", "")).startswith("load_") for tool in tools)
         return _FakeAgent(name)
 
     with patch("agent.graph.build_chat_model", return_value=object()), patch(

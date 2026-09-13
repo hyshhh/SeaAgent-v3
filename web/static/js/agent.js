@@ -1269,12 +1269,12 @@ function appendStreamDelta(previous, incoming, maxLength) {
   return `${base}${piece}`.slice(-maxLength);
 }
 
+// 技能读取记录。注意 enabledSkills 表示「该 Agent 挂载了哪些技能」，不是
+// 「已读了哪些」—— 所以这里只认 skillReads：模型没调 load_<技能> 时就不显示
+// 已读标记，避免一进节点就虚报读了一堆技能。
 function normalizedSkillReads(event) {
   const reads = Array.isArray(event?.skillReads) ? event.skillReads : [];
-  if (reads.length) return reads.filter((item) => item && item.skillId);
-  return (Array.isArray(event?.enabledSkills) ? event.enabledSkills : [])
-    .filter(Boolean)
-    .map((skillId) => ({skillId, title: skillId, source: 'auto', ok: true}));
+  return reads.filter((item) => item && item.skillId);
 }
 
 function compactSkillReads(event) {
@@ -2235,8 +2235,9 @@ function appendThoughtEvent(event) {
     const card = ensureAgentCard(event.round, event.role);
     if (!card) return;
     const reads = card._skillReads || [];
-    const key = `${event.skillId || ''}:${event.source || 'auto'}`;
-    const index = reads.findIndex((item) => `${item.skillId || ''}:${item.source || 'auto'}` === key);
+    // 按 skillId 去重（不带 source）：同一技能先被标记后又被真实读取时只更新那一条
+    const key = `${event.skillId || ''}`;
+    const index = reads.findIndex((item) => `${item.skillId || ''}` === key);
     const eventIndex = Number(event.skillIndex || 0);
     const eventTotal = Number(event.skillTotal || reads.length || 1);
     const record = {
@@ -2252,7 +2253,7 @@ function appendThoughtEvent(event) {
     if (index >= 0) reads[index] = record; else reads.push(record);
     const resolvedIndex = Number.isFinite(eventIndex) && eventIndex > 0
       ? eventIndex
-      : Math.max(1, reads.findIndex((item) => item.skillId === record.skillId && item.source === record.source) + 1);
+      : Math.max(1, reads.findIndex((item) => item.skillId === record.skillId) + 1);
     card._skillReads = reads;
     card._currentSkill = {
       skillId: record.skillId,

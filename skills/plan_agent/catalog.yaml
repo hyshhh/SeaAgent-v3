@@ -1,74 +1,28 @@
-# PlanAgent 可选技能目录
+# PlanAgent 技能目录。
+# 每个技能由 lc_tools.build_skill_tools 挂成 load_<id> 工具，description 即
+# 模型看到的工具说明 —— 它是模型判断「要不要读这篇」的唯一依据，所以写具体些。
 skills:
   - id: core_planning
     title: 自主规划核心
     description: 角色、最小可执行计划原则与输出格式
     file: core_planning.md
-    always: true
-    tags: [core]
 
   - id: tool_chains
     title: 工具链路与参数
-    description: 允许工具、典型链路、参数与 $ref 要点
+    description: 允许的工具、典型链路、参数与 $ref 要点
     file: tool_planning_rules.md
-    always: true
-    tags: [tools, core]
 
   - id: recovery
     title: 失败修复与补洞
-    description: 计划校验失败、缺证据时如何改计划
+    description: 计划校验失败、证据缺口时如何改计划；上轮失败或 Reflect 要求 replan 补洞时读
     file: recovery.md
-    always: false
-    when: 上轮计划失败、校验错误或 Reflect 要求 replan 补洞
-    match_any:
-      - "失败"
-      - "校验"
-      - "修复"
-      - "重试"
-      - "缺口"
-      - "缺少"
-      - "未满足"
-      - "无效"
-      - "replan"
-      - "evidenceGap"
-      - "补"
-    match_fields:
-      - planValidationError
-      - previousInvalidPlan
-      - repairHint
-      - evidenceGap
-    tags: [recovery]
 
   - id: acceptance_focus
     title: 验收驱动规划
-    description: 按 pendingRequirements / nextAgentFocus 排优先级
+    description: 按 pendingRequirements / nextAgentFocus 排优先级；存在验收进度或下一焦点时读
     file: acceptance_focus.md
-    always: false
-    when: 存在验收进度或下一焦点
-    match_any:
-      - "验收"
-      - "pending"
-      - "nextAgentFocus"
-      - "successCriteria"
-      - "expectedOutcome"
-    match_fields:
-      - acceptanceProgress
-      - intent.successCriteria
-      - intent.nextAgentFocus
-      - intent.expectedOutcome
-    tags: [acceptance]
+
   - id: registry_query
     title: 纯数据库查询规划
-    description: 数据库描述、舷号、列表与数量查询的最小工具链及证据边界
+    description: 数据库描述、舷号、列表与数量查询的最小工具链及证据边界；targetScope=registry 或问题限定数据库时读
     file: registry_query.md
-    always: false
-    when: targetScope=registry 或问题明确限定数据库
-    match_any:
-      - "数据库"
-      - "数据仓库"
-      - "先验库"
-      - "库中"
-      - "库里"
-      - "targetScope:registry"
-      - "registry_description"
-    tags: [registry, planning]

@@ -154,7 +154,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
             if self.name == "plan":
                 messages = []
                 messages += _tool_messages(
-                    "loadSkill", {"skillId": "recovery"},
+                    "load_recovery", {},
                     {"ok": True, "skillId": "recovery", "content": "恢复规则"}, "plan-skill"
                 )
                 handoff = {
@@ -177,7 +177,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
             if self.name == "observe":
                 messages = []
                 messages += _tool_messages(
-                    "loadSkill", {"skillId": "argument_rules"},
+                    "load_argument_rules", {},
                     {"ok": True, "skillId": "argument_rules", "content": "参数规则"}, "observe-skill"
                 )
                 handoff = {
@@ -198,7 +198,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
             if self.name == "reflect":
                 messages = []
                 messages += _tool_messages(
-                    "loadSkill", {"skillId": "conflict_uncertain"},
+                    "load_conflict_uncertain", {},
                     {"ok": True, "skillId": "conflict_uncertain", "content": "不确定规则"}, "reflect-skill"
                 )
                 handoff = {
@@ -273,7 +273,7 @@ def test_three_collaboration_nodes_emit_skill_reads_and_keep_database_scope():
     assert state["tool_chain"] == ["listRegistry", "matchText"]
     assert state["final_state"] == "sufficient"
     for name in ("plan", "observe", "reflect"):
-        assert "loadSkill" in tool_sets[name]
+        assert any(t.startswith("load_") for t in tool_sets[name])
     end_events = {
         event["role"]: event
         for event in events

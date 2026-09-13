@@ -1,69 +1,28 @@
-# ReflectAgent 可选技能目录
+# ReflectAgent 技能目录。
+# 每个技能由 lc_tools.build_skill_tools 挂成 load_<id> 工具，description 即
+# 模型看到的工具说明 —— 它是模型判断「要不要读这篇」的唯一依据，所以写具体些。
 skills:
   - id: core_exit
     title: 退出判定核心
     description: Reflect 权威状态、判定顺序与输出格式
     file: core_exit.md
-    always: true
-    tags: [core]
 
   - id: acceptance_audit
     title: 验收进度审计
-    description: acceptanceProgress 与 pendingRequirements 的权威验收规则
+    description: acceptanceProgress 与 pendingRequirements 的权威验收规则；有验收上下文或 pending 项时读
     file: acceptance_audit.md
-    always: false
-    when: 有验收上下文或 pending 项
-    match_any:
-      - "验收"
-      - "pending"
-      - "acceptance"
-      - "未满足"
-      - "已满足"
-    match_fields:
-      - acceptanceProgress
-      - acceptance
-    tags: [acceptance]
 
   - id: conflict_uncertain
     title: 冲突与不确定
-    description: conflict / uncertain 边界与空计划处理
+    description: conflict / uncertain 的边界与空计划处理；证据冲突、空结果或接近轮次上限时读
     file: conflict_uncertain.md
-    always: false
-    when: 证据冲突、空结果或接近轮次上限
-    match_any:
-      - "冲突"
-      - "矛盾"
-      - "不确定"
-      - "空"
-      - "失败"
-      - "mismatch"
-      - "上限"
-      - "maxRounds"
-      - "轮次"
-    match_fields:
-      - evidenceGap
-      - maxRounds
-      - round
-    tags: [conflict, uncertain]
 
   - id: replan_guidance
     title: 再规划指示
-    description: state=replan 时如何写 nextAction 给 Plan
+    description: state=replan 时如何写 nextAction 交给 PlanAgent
     file: replan_guidance.md
-    always: true
-    tags: [replan, core]
+
   - id: registry_acceptance
     title: 纯数据库查询验收
-    description: 数据库查询的完成条件、阈值结论与禁止越界规则
+    description: 数据库查询的完成条件、阈值结论与禁止越界规则；acceptanceProgress.mode=registry_only 或问题限定数据库时读
     file: registry_acceptance.md
-    always: false
-    when: acceptanceProgress.mode=registry_only 或问题限定数据库
-    match_any:
-      - "数据库"
-      - "registry_only"
-      - "targetScope:registry"
-      - "registry_description"
-    match_fields:
-      - acceptanceProgress
-      - acceptance
-    tags: [registry, acceptance]
