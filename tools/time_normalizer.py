@@ -577,30 +577,3 @@ def _has_date_phrase(text: str) -> bool:
 
 def _timestamp_range(start: datetime, end: datetime) -> tuple[float, float]:
     return start.timestamp(), end.timestamp()
-
-
-def _parse_time_endpoint(value: Any, now: datetime | None) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if re.fullmatch(r"\d+(?:\.\d+)?", text):
-        return float(text)
-    normalized = text.replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        parsed = None
-    if parsed is None:
-        for pattern in _cfg()["datetime_formats"]:
-            try:
-                parsed = datetime.strptime(text, pattern)
-                break
-            except ValueError:
-                continue
-    if parsed is None:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_local_now(now).tzinfo)
-    return parsed.timestamp()
