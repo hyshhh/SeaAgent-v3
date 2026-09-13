@@ -14,7 +14,7 @@
 .agent-detail-grid{display:grid;grid-template-columns:minmax(0,.88fr) minmax(0,1.12fr);gap:16px;align-items:start}.agent-detail-grid .round-list{max-height:610px;overflow:auto}.agent-detail-grid .evidence-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-height:610px;overflow:auto}.agent-detail-grid .evidence-group-media{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media(max-width:1100px){.agent-query-grid,.agent-detail-grid{grid-template-columns:1fr}.agent-query-panel,.agent-thinking-panel{min-height:auto}.thought-stream{max-height:520px}.agent-memory-flow{grid-template-columns:1fr}.agent-memory-flow>i{transform:rotate(90deg);justify-self:center}.monitor-workspace .result-area,.monitor-workspace .stream-preview,.monitor-workspace .video-preview{min-height:410px}}@media(max-width:760px){.agent-memory-flow{padding:12px}.agent-memory-flow article{min-height:auto}.agent-example-grid{padding-left:12px;padding-right:12px}.agent-question-box{padding-left:12px;padding-right:12px}.question-actions{align-items:stretch;flex-direction:column}.question-actions .btn{width:100%}.agent-query-panel .agent-answer,.answer-section-title{margin-left:12px;margin-right:12px}.agent-detail-grid .evidence-grid{grid-template-columns:1fr}.agent-detail-grid .evidence-group-media{grid-template-columns:1fr}.thought-stream{margin-left:8px;margin-right:8px}}
 
-/* 三智能体逐段流式推理 */
+/* 多智能体逐段流式推理 */
 .thought-stream{max-height:620px;gap:12px;padding:6px 8px 12px}.thought-system-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:8px 11px;border:1px solid rgba(48,91,120,.72);border-radius:8px;background:rgba(6,24,37,.72);font-size:10px}.thought-system-card strong{color:#c9e5f3}.thought-system-card span{color:#7897ad;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.thought-system-card time{color:#56758c;font-size:9px}.thought-round{display:grid;gap:9px;padding:11px;border:1px solid #2b506a;border-radius:13px;background:linear-gradient(155deg,rgba(15,45,65,.82),rgba(5,20,32,.88));box-shadow:0 12px 30px rgba(0,0,0,.12)}.thought-round-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 2px}.thought-round-head strong{color:#e0f1fa;font-size:12px}.thought-round-head span{color:#5d8299;font-size:9px}.thought-agent-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.agent-thought-card{position:relative;min-width:0;min-height:168px;display:grid;grid-template-rows:auto auto minmax(62px,auto) auto;gap:8px;padding:11px;border:1px solid #294b63;border-radius:10px;background:rgba(5,22,34,.86);overflow:hidden;transition:border-color .2s,box-shadow .2s,transform .2s}.agent-thought-card:before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:#3fcadd}.agent-thought-card.observer:before{background:#3bd6a1}.agent-thought-card.reflector:before{background:#ffd052}.agent-thought-card.active{border-color:#45c8df;box-shadow:0 0 0 1px rgba(69,200,223,.18),0 0 24px rgba(36,169,195,.11);transform:translateY(-1px)}.agent-thought-card.observer.active{border-color:#40d8a7}.agent-thought-card.reflector.active{border-color:#e8bd4a}.agent-thought-card.failed{border-color:rgba(255,101,119,.72)}.agent-thought-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.agent-thought-head>div{display:grid;gap:2px}.agent-thought-head strong{color:#e3f3fb;font-size:11px}.agent-thought-head span{color:#6e93aa;font-size:9px}.agent-thought-head em{font-style:normal;padding:2px 6px;border-radius:10px;background:rgba(57,117,148,.2);color:#7fa4b9;font-size:8px}.agent-thought-card.active .agent-thought-head em{color:#52d7e8;background:rgba(40,199,217,.12)}.agent-thought-card.failed .agent-thought-head em{color:#ff98a7;background:rgba(255,101,119,.12)}.agent-thought-hint{margin:0;color:#648399;font-size:9px}.agent-stream-text{min-width:0;padding:9px;border:1px solid rgba(40,78,102,.72);border-radius:8px;background:rgba(2,14,23,.66);color:#b7cfdd;font-size:10px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;overflow-y:auto;max-height:112px}.agent-stream-placeholder{color:#506f83}.agent-stream-cursor{display:inline-block;width:5px;height:12px;margin-left:2px;vertical-align:-2px;background:#45d6e8;animation:thinkingPulse .8s steps(1) infinite}.agent-thought-tags{display:flex;align-content:flex-start;gap:4px;flex-wrap:wrap;min-height:18px}.agent-thought-tags span{padding:3px 5px;border-radius:5px;background:#15354a;color:#92bfd1;font-size:8px}.agent-thought-tags span.failed{color:#ff9dac;background:rgba(255,101,119,.1)}
 @media(max-width:1250px){.thought-agent-grid{grid-template-columns:1fr}.agent-thought-card{min-height:150px;grid-template-rows:auto auto minmax(54px,auto) auto}}@media(max-width:760px){.thought-round{padding:8px}.thought-round-head{align-items:flex-start;flex-direction:column}.thought-system-card{grid-template-columns:1fr auto}.thought-system-card span{grid-column:1/-1;grid-row:2;white-space:normal}}
 
@@ -160,7 +160,7 @@
   .evidence-column-media { max-height: 60vh; }
 }
 
-/* 三智能体摘要式展示 */
+/* 多智能体摘要式展示 */
 .agent-thinking-panel {
   min-height: 0;
 }
@@ -269,7 +269,7 @@
   .intent-agent-summary.compact { grid-template-columns: 1fr; }
   .thought-stream { max-height: 560px; }
 }
-/* 智能体问答：固定三智能体与持续计划面板 */
+/* 智能体问答：固定协作卡与持续计划面板 */
 .agent-query-grid {
   grid-template-columns: minmax(520px, 1.12fr) minmax(390px, .88fr);
   align-items: stretch;
@@ -688,7 +688,7 @@
     min-height: 400px;
   }
 }
-/* 三智能体区域宽度与字体平衡 */
+/* 协作卡区域宽度与字体平衡 */
 .agent-query-grid {
   grid-template-columns: minmax(460px, .90fr) minmax(560px, 1.10fr);
 }

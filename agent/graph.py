@@ -1,6 +1,6 @@
 """LangGraph 四 Agent 编排：角色工具集 → handoff → Graph。
 
-流程（对齐 old 自主规划）：
+流程：
   IntentAgent ⇄ tools → handoff_to_plan
   PlanAgent ⇄ tools → handoff_to_observe(calls+$ref) | handoff_to_reflect
   ObserveAgent = 确定性执行 calls（完整结果进 working_scope，模型只看摘要）→ reflect
@@ -1604,7 +1604,7 @@ def build_sea_agent_graph(
         return update
 
     def observe_node(state: AgentState) -> dict[str, Any]:
-        """确定性执行 Plan 的 calls（对齐 old Observer），不把完整工具结果塞进 ReAct 对话。"""
+        """确定性执行 Plan 的 calls，不把完整工具结果塞进 ReAct 对话。"""
         loop_count = int(state.get("loop_count") or 0)
         round_number = loop_count + 1
         plan_calls, _ = _prepare_plan_calls(

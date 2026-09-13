@@ -577,7 +577,7 @@ function renderDedupResults(result) {
 
 function roleTimelineMeta(role) {
   return ({
-    intent: {index: '00', title: 'InitAgent', stage: 'Intent Parsing'},
+    intent: {index: '00', title: 'IntentAgent', stage: 'Intent Parsing'},
     planner: {index: '01', title: 'PlanAgent', stage: 'Planning'},
     observer: {index: '02', title: 'ObserveAgent', stage: 'Observation'},
     reflector: {index: '03', title: 'ReflectAgent', stage: 'Verification'},

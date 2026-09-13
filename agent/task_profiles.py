@@ -20,7 +20,7 @@ _MEMBERSHIP_QUESTION_TYPES = frozenset({"registry_in_list", "registry_out_list"}
 def registry_membership_list_mode(intent: dict[str, Any] | None) -> str:
     """识别「在库/未在库船舶列表」任务，返回 in/out；其他任务返回空字符串。
 
-    判定依据（与旧版 graph._registry_membership_list_mode 语义一致）：
+    判定依据（与 graph 侧的验收分派同源）：
     - registryRelation 为 in/out；
     - operation 为 list；
     - 没有具体舷号（列表任务面向全体候选）；

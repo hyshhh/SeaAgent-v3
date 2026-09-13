@@ -1,4 +1,4 @@
-"""按 PlanAgent 产出的 calls 确定性执行工具（对齐 old Observer）。
+"""按 PlanAgent 产出的 calls 确定性执行工具。
 
 完整结果写入 working_scope，供后续 $ref 与最终合成；
 回传给模型 / Reflect 的仅是压缩摘要，不把关键帧大 JSON 塞进对话。

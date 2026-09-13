@@ -976,7 +976,7 @@ tbody tr:hover td { background: #f2f6f9; }
   text-align: center;
 }
 
-/* 研究问答：左侧意图识别，右侧三智能体协作 */
+/* 研究问答：左侧意图识别，右侧多智能体协作面板 */
 .agent-process-intent .intent-result-card {
   min-height: 176px;
   margin: 0;
