@@ -150,7 +150,7 @@ class ShipService:
 
     def stats(self) -> dict[str, Any]:
         items = self.list_ships()
-        return {"total_ships": len(items), "total_reference_images": sum(len(item["references"]) for item in items), "backend": "CSV+FAISS"}
+        return {"total_ships": len(items), "total_reference_images": sum(len(item["references"]) for item in items)}
 
     @staticmethod
     def list_ships_by_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -111,7 +111,6 @@ async function loadStats() {
   const stats = await apiFetch(`${SHIP_API}/stats`);
   document.getElementById('totalCount').textContent = stats.total_ships;
   document.getElementById('totalImages').textContent = stats.total_reference_images;
-  document.getElementById('backendType').textContent = stats.backend;
 }
 
 function renderShips() {

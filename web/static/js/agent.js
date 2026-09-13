@@ -754,9 +754,9 @@ function showAgentFinalView(state = 'completed') {
 function renderAgentAnswer(result) {
   showAgentFinalView('completed');
   const scope = Array.isArray(result.queryScope) ? `${formatMonitorTime(result.queryScope[0])}—${formatMonitorTime(result.queryScope[1])}` : 'All monitoring time';
-  const records = Array.isArray(result.toolRecords) && result.toolRecords.length
-    ? result.toolRecords
-    : (result.toolChain || []).map((item, index) => ({round: index + 1, legacy: item}));
+  // controller 同一份 result 里同时给出 toolRecords 与 toolChain（后者是 list[str]，
+  // 无法按对象格式化），所以只认 toolRecords
+  const records = Array.isArray(result.toolRecords) ? result.toolRecords : [];
   const chain = records.map((item) => `<div class="answer-tool-item"><code>${escapeHtml(formatToolCall(item.round, item))}</code></div>`).join('');
   const toolSummary = document.getElementById('agentToolSummary');
   const toolBody = document.getElementById('agentResultTools');
@@ -1406,10 +1406,9 @@ function syncPlanProgress(event) {
   const roundNumber = Number(event.round || 1);
   const calls = Array.isArray(event.calls) ? event.calls : [];
   calls.forEach((call, index) => {
-    const stepId = String(call.planStepId || '');
+    // planStepId 后端早已不再产出（旧版遗留字段），恒为空；按工具名匹配即可
     const tool = String(call.tool || call.id || 'tool');
-    let item = agentPlanItems.find((entry) => stepId && entry.stepId === stepId);
-    if (!item) item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
+    let item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
     if (!item && !agentPlanLocked) {
       item = {
         key: stepId || `fallback-step-${index + 1}`,
@@ -1444,10 +1443,8 @@ function syncPlanProgress(event) {
 function updatePlanProgressFromTool(event) {
   const roundNumber = Number(event.round || activeAgentRound || 1);
   const id = String(event.id || '');
-  const stepId = String(event.planStepId || '');
   const tool = String(event.tool || event.id || 'tool');
-  let item = agentPlanItems.find((entry) => stepId && entry.stepId === stepId);
-  if (!item) item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
+  let item = agentPlanItems.find((entry) => (entry.tools || []).includes(tool));
   if (!item && !agentPlanLocked) {
     item = {
       key: stepId || `fallback-step-${agentPlanItems.length + 1}`,
@@ -1806,7 +1803,6 @@ function formatToolArguments(argumentsValue) {
 
 function formatToolCall(round, call = {}) {
   const roundNumber = Math.max(1, Number(round || call.round || 1));
-  if (call.legacy) return `${roundNumber}-${call.legacy}-done`;
   const tool = call.tool || 'tool';
   return `${roundNumber} · ${tool}(${formatToolArguments(toolArgumentsForCall(call))}) · ${toolResultText(call)}`;
 }
@@ -2162,7 +2158,7 @@ function appendThoughtEvent(event) {
     if (event.role === 'planner') syncPlanProgress(event);
     if (event.role === 'observer') updatePlanFromObservation(event);
     if (event.role === 'reflector') updatePlanReflection(event);
-    const isPlanCard = event.role === 'planner' || event.planOnly;
+    const isPlanCard = event.role === 'planner';
     card._skillReads = normalizedSkillReads(event);
     clearSkillReading(card);
     card._currentSkill = null;
