@@ -100,10 +100,11 @@ class PlanExecutor:
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
-            # ② matchImage 特例分支：禁止因 $ref 空列表提前 skip；先 resolve + 从
-            #    scope 补图再执行。参数不可用时记软失败（ok=True + visualAttempted
-            #    标记），使 reflect 能区分「没试过」与「试了但没法试」。
-            # matchImage：禁止因 $ref 空列表提前 skip；先 resolve+从 scope 补图再执行
+            # ② matchImage 特例分支：本分支跳过 ③ 依赖预检，因为配图可能来自
+            #    $ref、本轮 getFrames 或本轮 listRegistry 三处，$ref 解析为空不
+            #    等于无图可用。故先 resolve + 从 scope 补图；参数仍不可用时记
+            #    软失败（ok=True + visualAttempted），使 reflect 能区分
+            #    「没试过」与「试了但没法试」，而不是直接 skip。
             if tool == "matchImage":
                 arguments = self._resolve(call.get("arguments", {}), working)
                 arguments = self._enrich_match_image_args(arguments, working)
