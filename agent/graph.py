@@ -5,6 +5,29 @@
   PlanAgent ⇄ tools → handoff_to_observe(calls+$ref) | handoff_to_reflect
   ObserveAgent = 确定性执行 calls（完整结果进 working_scope，模型只看摘要）→ reflect
   ReflectAgent ⇄ tools → handoff_to_plan_replan | handoff_finish
+
+设计要点：
+  - 节点之间不用条件边，全部由节点返回 Command(goto=...) 动态路由；唯一静态边是
+    START → intent。
+  - 「模型提议、代码定夺」：模型只产出 handoff JSON 与计划草稿；是否采纳、如何修正、
+    往哪跳，全部由本文件的确定性守卫决定。
+  - 终态只有 sufficient / conflict / uncertain。replan 只是路由动作而非终态，且
+    conflict 只能由模型的 handoff_finish 显式给出，确定性层不主动产生。
+  - 图内不落库：持久化由 controller 在图结束后统一完成。
+
+文件分区（以 S 编号为锚点检索）：
+    S1  状态与合并语义        AgentState + reducer
+    S2  交接契约              五个 handoff 的 args_schema
+    S3  事件与流式工具        内容解析 / 前端事件 / 收流护栏
+    S4  工具结果摘要          统一压缩各工具返回
+    S5  时间守卫              无显式时间时清空时间字段
+    S6  重规划指令族          replan directive 与跨轮去重
+    S7  计划生成与校验        _default_plan_calls 等确定性兜底
+    S8  验收清单              _build_acceptance_progress，判定中枢
+    S9  图装配                建图 + 注册节点与工具
+    S10 通用 ReAct 执行器     _run_agent，四节点共用
+    S11 四个协作节点          intent / plan / observe / reflect
+    S12 对外入口              run_sea_agent
 """
 from __future__ import annotations
 
@@ -44,6 +67,12 @@ from .task_profiles import (
 )
 
 
+# ============================================================================
+# S1 状态与合并语义
+# 图状态 AgentState 及两个 reducer。无 Annotated 标注的字段由 LangGraph 直接
+# 覆盖；标注了 reducer 的字段按 reducer(left, right) 累积。reducer 必须是纯
+# 函数（返回新对象、不原地改入参），否则会污染 LangGraph 手中的旧状态。
+# ============================================================================
 def _merge_dict(left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
     result = dict(left or {})
     if right:
@@ -56,27 +85,40 @@ def _merge_list(left: list[Any] | None, right: list[Any] | None) -> list[Any]:
 
 
 class AgentState(TypedDict, total=False):
-    # 跨节点只共享结构化字段；各角色内层 ReAct 的 messages 不写入图状态
-    question: str
-    intent: dict[str, Any]
+    # 跨节点只共享结构化字段；各角色内层 ReAct 的 messages 不写入图状态。
+    # 合并语义：无标注 = 后写覆盖前值；_merge_dict / _merge_list = 跨节点累积。
+    question: str                # 用户原始问题，全流程只读
+    intent: dict[str, Any]       # IntentAgent 产出的结构化意图，下游三个节点都依赖
+    # 按工具 call id 存完整工具结果：plan 用 $ref 回读上一轮，reflect 扫它统计证据
     working_scope: Annotated[dict[str, Any], _merge_dict]
+    # reflect 的判定（handoff/nextAction/evidenceGap/decisionSource），plan 重规划时读
     reflection: dict[str, Any]
+    # 每轮一条快照；图内无人读取，只供 controller 落库到 qa_rounds
     rounds: Annotated[list[dict[str, Any]], _merge_list]
+    # 四节点各自追加自己的工具名，累积拼接，供审计
     tool_chain: Annotated[list[str], _merge_list]
+    # 每次工具调用一条（id/tool/arguments/result/summary/ok/round），跨轮累积，
+    # 是「某工具是否已尝试 / 已完成」的判定依据
     tool_records: Annotated[list[dict[str, Any]], _merge_list]
-    plan_hint: str
-    plan_calls: list[dict[str, Any]]
-    observation_summary: str
-    active_agent: str
-    final_state: str
-    final_reason: str
-    loop_count: int
-    max_rounds: int
-    query_top_k: int
-    broad_match_top_k: int
-    error: str
+    plan_hint: str               # 本轮计划说明；reflect 重规划时会覆盖
+    plan_calls: list[dict[str, Any]]  # 本轮计划调用 {id, tool, arguments}，支持 $ref/condition
+    observation_summary: str     # observe 的执行摘要 + ObserveAgent 审阅意见
+    active_agent: str            # 状态标记（plan/observe/reflect），图内无人读取
+    final_state: str             # 终态，仅 sufficient/conflict/uncertain；controller 据此合成结论
+    final_reason: str            # 终态的说明文本，进入最终答案
+    loop_count: int              # 已完成的 reflect 轮数，reflect 入口 +1；轮次护栏
+    max_rounds: int              # 轮次上限（config: pipeline.agent.max_rounds）
+    query_top_k: int             # 检索条数（config: pipeline.retrieval.top_k，夹取 [1,20]）
+    broad_match_top_k: int       # 广泛匹配库图 topK 上限；0 表示不截断
+    error: str                   # 遗留字段：声明后全文件无读写
 
 
+# ============================================================================
+# S2 交接契约
+# 五个 handoff 工具的 args_schema。它们只把模型的意图编码成 JSON，真正的路由
+# 由节点解析后返回 Command 决定（见 S9/S11）。HandoffFinishArgs.state 的
+# Literal 是 conflict 终态的唯一入口。
+# ============================================================================
 class HandoffToPlanArgs(BaseModel):
     intent: dict[str, Any] = Field(default_factory=dict, description="结构化意图规格")
     note: str = Field(default="", description="给 PlanAgent 的备注")
@@ -122,6 +164,13 @@ def _safe_json(text: str) -> dict[str, Any]:
         return {"raw": text}
 
 
+# ============================================================================
+# S3 事件与流式工具
+# 三条互不相干的底层通道，均不含业务判定：
+#   ① 内容解析   _content_parts / _last_ai_text / _last_ai_thinking
+#   ② 前端事件   _emit / _skill_read_records / _emit_skill_read_events
+#   ③ 流式收流   _bounded_model / _stream_tool_chunk_chars / _stream_delta_piece
+# ============================================================================
 def _skill_read_records(agent_key: str, skill_ids: list[str], *, source: str) -> list[dict[str, Any]]:
     """把注入或按需读取的技能转换为前端可展示的结构化记录。"""
     records: list[dict[str, Any]] = []
@@ -298,6 +347,10 @@ def _emit_skill_read_events(
         _emit(handler, {**common, "phase": done_phase})
 
 
+# ============================================================================
+# S4 工具结果摘要
+# 把各工具形态各异的返回压缩成统一的摘要字段，供 tool_records 与前端事件复用。
+# ============================================================================
 def _tool_summary(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for key in (
@@ -372,6 +425,11 @@ def _normalize_broad_match_top_k(value: int | None) -> int:
         return 0
 
 
+# ============================================================================
+# S5 时间守卫
+# 用户未显式给出时间时，强制清空时间字段并剥离时间过滤，避免模型凭空编造时间
+# 范围。时间只影响检索参数，不进入验收项。
+# ============================================================================
 def _ground_intent_time(
     intent: dict[str, Any],
     question: str,
@@ -435,6 +493,11 @@ _CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
 }
 
 
+# ============================================================================
+# S6 重规划指令族
+# reflect 判定需要重规划时，把「缺什么」编码成权威 directive 交给 plan；并做
+# 跨轮去重，避免重复调用已完成的等价调用。
+# ============================================================================
 def _normalize_replan_directive(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -656,6 +719,14 @@ def _remove_completed_call_repeats(
     return retained, removed
 
 
+# ============================================================================
+# S7 计划生成与校验
+# 模型不给计划、或计划不合法时的确定性兜底：
+#   _default_plan_calls        按意图装配标准调用序列（含 $ref 引用）
+#   _apply_retrieval_limits    按 evidenceMode 调整检索体量
+#   _attach_dependency_conditions / _prepare_plan_calls  校验并修复计划
+#   _find_tool_contract_failures  检出违反工具契约的调用
+# ============================================================================
 def _default_plan_calls(
     intent: dict[str, Any],
     top_k: int,
@@ -1097,6 +1168,13 @@ def _find_tool_contract_failures(records: list[dict[str, Any]], round_number: in
     return failures
 
 
+# ============================================================================
+# S8 验收清单
+# 编排的判定中枢：按 targetScope / targetKind / operation / description 分派，
+# 生成 requirements / pending / completed，并以「有工具证据 且 pending 为空」
+# 定义 acceptanceSatisfied。reflect 的全部路由与 controller 的结论合成都以它
+# 为依据。注意：本函数不读取任何时间字段。
+# ============================================================================
 def _build_acceptance_progress(
     intent: dict[str, Any],
     tool_names: set[str],
@@ -1225,6 +1303,12 @@ def _build_acceptance_progress(
     }
 
 
+# ============================================================================
+# S9 图装配
+# 建共享 model 与受限 reflect_model，注册四节点，然后把交接工具与技能加载器
+# 注入各节点。唯一的静态边是 START → intent，其余路由全部由节点返回的
+# Command(goto=...) 决定。
+# ============================================================================
 def build_sea_agent_graph(
     llm: AgentLLMService,
     tools: ToolService,
@@ -1248,6 +1332,7 @@ def build_sea_agent_graph(
     default_top_k = int(query_top_k or 3)
     default_broad_match_top_k = _normalize_broad_match_top_k(broad_match_top_k)
 
+    # ---- 交接工具：只把模型意图编码成 JSON，路由由节点解析后决定 ----------
     @tool("handoff_to_plan", args_schema=HandoffToPlanArgs, return_direct=True)
     def handoff_to_plan(intent: dict[str, Any] | None = None, note: str = "") -> str:
         """意图完成后移交给 PlanAgent。"""
@@ -1368,6 +1453,12 @@ def build_sea_agent_graph(
         handoff_finish,
     ]
 
+    # ------------------------------------------------------------------------
+    # S10 通用 ReAct 执行器：_run_agent —— 四节点共用的单次 agent 调用
+    # 拼系统提示词与技能 → 流式收流 → 解析 handoff 与工具调用 → 派发前端事件。
+    # 异常在此收束为 invoke_error，由各节点走确定性兜底，因此模型故障不会冒泡
+    # 出图；流式超时/超限只 break，不重试。
+    # ------------------------------------------------------------------------
     def _run_agent(
         name: str,
         agent_key: str,
@@ -1836,6 +1927,14 @@ def build_sea_agent_graph(
             "deferred_end_event": end_event if role in {"planner", "reflector"} else None,
         }
 
+    # ========================================================================
+    # S11 四个协作节点
+    # 每个节点返回 Command(goto=...) 决定下一跳：
+    #   intent_node   意图识别 + 规则回填，无条件 → plan
+    #   plan_node     生成计划调用 → observe（无法规划时 → reflect）
+    #   observe_node  PlanExecutor 确定性执行 + 模型审阅，无条件 → reflect
+    #   reflect_node  验收审计与循环决策 → plan（重规划）或 END
+    # ========================================================================
     def intent_node(state: AgentState) -> Command:
         question = state.get("question") or ""
         user = json.dumps(
@@ -2614,11 +2713,18 @@ def build_sea_agent_graph(
         )
 
     def reflect_node(state: AgentState) -> Command:
+        # 本节点是编排的判定中枢，共七个阶段（下文以「阶段 n/7」标注）：
+        #   1 证据扫描 → 2 验收计算 → 3 pre_handoff 短路 → 4 模型判定
+        #   → 5 确定性覆盖链 → 6 归一化与 directive 合并 → 7 路由与写回
+        # 注意：进入本节点即 loop_count + 1，因此轮次上限在这里生效。
         loop_count = int(state.get("loop_count") or 0) + 1
         limit = int(state.get("max_rounds") or max_rounds)
         intent = state.get("intent") or {}
         scope = state.get("working_scope") or {}
         question = str(state.get("question") or "")
+        # --------------------------------------------------------------------
+        # 阶段 1/7：证据扫描 —— 把 working_scope 归一成一组布尔证据标志
+        # --------------------------------------------------------------------
         # 成功证据：working_scope 中存在 ok 且含 tracks/matches/keyframes/registry 等
         has_tool_evidence = False
         evidence_bits: list[str] = []
@@ -2869,6 +2975,10 @@ def build_sea_agent_graph(
             and registry_checked
             and (visual_attempted or not can_try_visual)
         )
+        # --------------------------------------------------------------------
+        # 阶段 2/7：验收计算 —— 生成验收清单与权威 replan directive
+        # acceptanceSatisfied = 有工具证据 且 pendingRequirements 为空（见 S8）
+        # --------------------------------------------------------------------
         acceptance_progress = _build_acceptance_progress(
             intent,
             successful_tool_names,
@@ -2892,6 +3002,9 @@ def build_sea_agent_graph(
             working_scope=scope,
             tool_records=state.get("tool_records") or [],
         )
+        # --------------------------------------------------------------------
+        # 阶段 3/7：pre_handoff 短路 —— 命中则完全跳过模型调用
+        # --------------------------------------------------------------------
         pre_handoff: dict[str, Any] | None = None
         # 仅工具契约损坏和无候选终态提前短路；普通证据缺口交给 ReflectAgent 判定。
         if tool_contract_failures and loop_count < limit:
@@ -3064,6 +3177,10 @@ def build_sea_agent_graph(
                 },
             }
         else:
+            # ----------------------------------------------------------------
+            # 阶段 4/7：模型判定 —— 受限 ReflectAgent（thinking 关闭，输出与
+            # 超时均夹取上限，收流超时/超限只 break 不重试）
+            # ----------------------------------------------------------------
             out = _run_agent(
                 "reflect",
                 "reflect_agent",
@@ -3083,6 +3200,10 @@ def build_sea_agent_graph(
                 agent_model=reflect_model,
             )
         handoff = out.get("handoff") or {}
+        # --------------------------------------------------------------------
+        # 阶段 5/7：确定性覆盖链 —— 下面的 if/elif 顺序即优先级，逐层覆盖或
+        # 纠偏模型判定。本段结束后 handoff 即「权威决策」。
+        # --------------------------------------------------------------------
         # 工具参数契约错误必须切换为确定性计划，禁止让模型重复同一错误调用。
         if tool_contract_failures and loop_count < limit:
             handoff = {
@@ -3289,6 +3410,10 @@ def build_sea_agent_graph(
             if not str(handoff.get("nextAction") or "").strip():
                 handoff["nextAction"] = "补全尚未满足的验收证据"
 
+        # --------------------------------------------------------------------
+        # 阶段 6/7：归一化 —— 合并权威 directive、校验终态取值合法性
+        # reflect_state 只允许 sufficient / replan / conflict / uncertain
+        # --------------------------------------------------------------------
         handoff.setdefault("decisionSource", "model")
         handoff["acceptanceProgress"] = acceptance_progress
         reflect_state = str(handoff.get("state") or (
@@ -3361,6 +3486,13 @@ def build_sea_agent_graph(
             },
         )
 
+        # --------------------------------------------------------------------
+        # 阶段 7/7：路由与写回
+        #   replan 且未达上限 → Command(goto="plan")
+        #   replan 但已达上限 → Command(goto=END) 且 final_state = "uncertain"
+        #   其余            → Command(goto=END)，final_state 仅取
+        #                     sufficient / conflict / uncertain
+        # --------------------------------------------------------------------
         if handoff.get("handoff") == "plan" or handoff.get("replan") or str(handoff.get("state") or "") == "replan":
             if loop_count >= limit:
                 return Command(
@@ -3439,6 +3571,11 @@ def build_sea_agent_graph(
     return graph.compile()
 
 
+# ============================================================================
+# S12 对外入口
+# 构造初始 state 并 invoke 编译后的图。recursion_limit 按 max_rounds 放大，
+# 作为图内异常循环的护栏。
+# ============================================================================
 def run_sea_agent(
     question: str,
     llm: AgentLLMService,

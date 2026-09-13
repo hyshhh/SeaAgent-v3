@@ -1,4 +1,12 @@
-"""Agent 角色系统提示：从 skills catalog 按需拼装。"""
+"""Agent 角色系统提示：从 skills catalog 按需拼装。
+
+本文件只决定「把什么放进 system prompt」，不决定技能内容（那在 skills/）。
+拼装顺序：角色定位 → 本轮已启用技能正文 → 未加载技能目录 → 工作方式。
+
+文件分区：
+    R1  角色提示词拼装   role_system_prompt
+    R2  职责描述常量     四个角色的一句话职责，由 graph 传入 R1
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -6,6 +14,11 @@ from typing import Any
 from .skill_loader import catalog_index, compose_skills, select_skill_ids
 
 
+# ===========================================================================
+# R1 角色提示词拼装
+# 返回值是 (prompt, skill_ids) 二元组 —— skill_ids 同时用于前端 agent_skill
+# 事件与轨迹记录，所以不能只返回 prompt。
+# ===========================================================================
 def role_system_prompt(
     agent_key: str,
     title: str,
@@ -22,6 +35,7 @@ def role_system_prompt(
         lines = [f"- `{item['id']}`: {item.get('description') or item.get('title')}" for item in available]
         catalog_hint = "\n未加载可选技能（可用 loadSkill）：\n" + "\n".join(lines)
 
+    # 通用工作方式：intent 角色直接用它；plan/observe/reflect 在下面各自覆盖。
     work_style = (
         "## 工作方式\n"
         "- 可多轮调用工具收集信息，再给出结论。\n"
@@ -70,6 +84,11 @@ def role_system_prompt(
     return prompt, skill_ids
 
 
+# ===========================================================================
+# R2 职责描述常量
+# 与上面的 work_style 分工：这里回答「你是谁」，work_style 回答「你怎么干活」。
+# 由 graph.py 的四个节点分别传入 role_system_prompt。
+# ===========================================================================
 INTENT_RESPONSIBILITY = (
     "理解用户问题：判定时间范围、多目标、舷号/描述、操作类型；"
     "完成后调用 handoff_to_plan，arguments 中携带结构化意图。"

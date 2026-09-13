@@ -12,6 +12,11 @@ from typing import Any
 _MEMBERSHIP_QUESTION_TYPES = frozenset({"registry_in_list", "registry_out_list"})
 
 
+# ===========================================================================
+# T1 membership 判定：识别「在库 / 未在库船舶列表」这类问法
+# 消费方：graph.py（验收清单分派）与 controller.py（结论措辞）共用，
+# 二者必须同源，否则会出现「验收按 membership 走、结论按别的走」的矛盾。
+# ===========================================================================
 def registry_membership_list_mode(intent: dict[str, Any] | None) -> str:
     """识别「在库/未在库船舶列表」任务，返回 in/out；其他任务返回空字符串。
 
@@ -54,6 +59,11 @@ def relation_for_membership(question_type: Any) -> str:
     return ""
 
 
+# ===========================================================================
+# T2 证据量级：focused（单目标，少量证据）vs broad（枚举/对照，全量证据）
+# 注意：这不是配置项，而是从意图派生的值。它只影响检索体量与展示截断，
+# 不进入验收清单 —— 即「要多少证据」与「够不够」是两套判定。
+# ===========================================================================
 # 枚举型问法：需要全量证据（列表 / 计数 / 时间定位 / 在库对照）
 _BROAD_QUESTION_TYPES = frozenset({
     "registry_in_list", "registry_out_list", "track_list", "registry_list",

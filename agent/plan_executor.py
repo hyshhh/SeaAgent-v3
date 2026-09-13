@@ -2,6 +2,20 @@
 
 完整结果写入 working_scope，供后续 $ref 与最终合成；
 回传给模型 / Reflect 的仅是压缩摘要，不把关键帧大 JSON 塞进对话。
+
+定位：observe_node 的执行内核。模型只负责「提议调用哪些工具」，本文件负责
+「这些调用是否合法、依赖是否就绪、参数是否齐全，然后真正执行」。所有失败都被
+降级为 skip 记录，单个 call 出错不影响同批其他 call。
+
+文件分区（以 P 编号为锚点检索）：
+    P1  工具契约白名单      必填/允许参数，校验的唯一事实源
+    P2  执行主流程          execute：逐 call 六步判断
+    P3  依赖与契约校验      $ref 依赖、三层参数校验、skip 记录
+    P4  参数富化与归一化    从 scope 补参；dedupTracks 入参规整
+    P5  scope 收集器        汇总历史结果，供 P4 补参
+    P6  事件与 $ref 解析    事件派发 + 引用求值（$ref/$slice/$default/$map）
+    P7  摘要压缩            完整结果 → 回传模型的摘要
+    P8  调用去重与语义签名  semantic_signature / sanitize_calls
 """
 from __future__ import annotations
 
@@ -12,6 +26,12 @@ from typing import Any, Callable
 class PlanExecutor:
     """确定性执行器：解析 $ref、校验依赖、调用 ToolService。"""
 
+    # ------------------------------------------------------------------------
+    # P1 工具契约白名单
+    # _REQUIRED_ARGUMENTS 声明每个工具必须提供的参数；_ALLOWED_ARGUMENTS 声明
+    # 允许出现的参数。二者是参数校验的唯一事实源 —— 工具新增参数必须同步到这里，
+    # 否则会被判为契约不符而 skip（lc_tools 的工具定义需与之保持一致）。
+    # ------------------------------------------------------------------------
     _REQUIRED_ARGUMENTS = {
         "getFrames": ("trackIds",),
         "getClip": ("trackId",),
@@ -38,6 +58,12 @@ class PlanExecutor:
     def __init__(self, tools: Any):
         self.tools = tools
 
+    # ------------------------------------------------------------------------
+    # P2 执行主流程：execute —— 逐 call 确定性执行
+    # 对每个 call 依次走六步判断（下文标注 ①–⑥），任一环不通过都只 skip 该
+    # call、不中断后续。全部执行完后汇总 observations / scope / summary /
+    # tool_records，其中 scope 就是写回 working_scope 的完整结果。
+    # ------------------------------------------------------------------------
     def execute(
         self,
         calls: list[dict[str, Any]],
@@ -57,6 +83,7 @@ class PlanExecutor:
             if not tool:
                 continue
 
+            # ① 条件判断：condition 不满足直接 skip，不进依赖与契约校验
             if not self._condition(call.get("condition"), working):
                 result = {"ok": False, "error": "condition_not_met", "tool": tool}
                 observation = {
@@ -73,6 +100,9 @@ class PlanExecutor:
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
+            # ② matchImage 特例分支：禁止因 $ref 空列表提前 skip；先 resolve + 从
+            #    scope 补图再执行。参数不可用时记软失败（ok=True + visualAttempted
+            #    标记），使 reflect 能区分「没试过」与「试了但没法试」。
             # matchImage：禁止因 $ref 空列表提前 skip；先 resolve+从 scope 补图再执行
             if tool == "matchImage":
                 arguments = self._resolve(call.get("arguments", {}), working)
@@ -155,6 +185,7 @@ class PlanExecutor:
                 )
                 continue
 
+            # ③ 依赖预检：$ref 指向的根步骤若失败/为空，本 call 直接 skip
             dependency_issue = self._dependency_issue(call.get("arguments", {}), working)
             if dependency_issue:
                 result = {"ok": False, "error": dependency_issue, "tool": tool}
@@ -172,9 +203,11 @@ class PlanExecutor:
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
+            # ④ 引用解析 + 参数富化：$ref 求值，dedupTracks 另从 scope 补 tracks
             arguments = self._resolve(call.get("arguments", {}), working)
             if tool == "dedupTracks":
                 arguments = self._enrich_dedup_tracks_args(arguments, working)
+            # ⑤ 契约校验：白名单 / 必填 / 解析后取值 三层，任一不过即 skip
             argument_issue = (
                 self._argument_contract_issue(tool, arguments)
                 or self._required_argument_issue(tool, arguments)
@@ -196,6 +229,9 @@ class PlanExecutor:
                 self._emit(on_tool_event, "skipped", observation)
                 continue
 
+            # ⑥ 执行与记录：调 ToolService.execute，结果写 working_scope（供后续
+            #    $ref），同时产出 observation / tool_record / 前端事件。工具异常
+            #    在此被吞成 ok=False，不向外抛。
             self._emit(on_tool_event, "running", {"id": call_id, "tool": tool, "arguments": self._compact_args(arguments)})
             try:
                 result = self.tools.execute(tool, arguments)
@@ -233,6 +269,7 @@ class PlanExecutor:
                 observation,
             )
 
+        # ⑦ 汇总：executedCount 不含 skip；依赖未满足的 skip 不计入 failedCount
         summary = {
             "calls": [self.summarize_observation(item) for item in observations],
             "executedCount": sum(1 for item in observations if not item.get("skipped")),
@@ -252,6 +289,16 @@ class PlanExecutor:
             "tool_records": tool_records,
         }
 
+    # ------------------------------------------------------------------------
+    # P3 依赖与契约校验
+    # _dependency_issue            检查 $ref 指向的根步骤是否可用（ok=False 视为不可用）
+    # _empty_dependency            判定依赖值是否为空
+    # _argument_contract_issue     参数超出白名单？
+    # _required_argument_issue     必填参数缺失？
+    # _resolved_argument_issue     解析后取值是否有效？
+    # call_contract_issues         计划级批量校验，供 graph 判定是否触发契约守卫
+    # _skipped_record              统一构造 skip 记录
+    # ------------------------------------------------------------------------
     @classmethod
     def _dependency_issue(cls, value: Any, scope: dict[str, Any]) -> str | None:
         if isinstance(value, dict):
@@ -374,6 +421,15 @@ class PlanExecutor:
             **summary,
         }
 
+    # ------------------------------------------------------------------------
+    # P4 参数富化与归一化
+    # _enrich_match_image_args / _enrich_dedup_tracks_args
+    #     从 scope 补参数（$ref 之外的另一条补参路径）
+    # _normalize_dedup_tracks 及 _keyframes_by_track_from / _group_keyframes /
+    # _normalize_keyframe_groups / _expand_to_registry_images
+    #     把 dedupTracks 的松散入参（外部 id、分组形态、关键帧结构）统一成工具
+    #     要求的规范形态
+    # ------------------------------------------------------------------------
     @classmethod
     def _enrich_match_image_args(cls, arguments: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
         """保证 query=库参考图、gallery=关键帧；空列表/库项外壳时从 scope 展开补齐。"""
@@ -551,6 +607,11 @@ class PlanExecutor:
             unique.append(img)
         return unique
 
+    # ------------------------------------------------------------------------
+    # P5 scope 收集器
+    # 从 working_scope 的历次工具结果中汇总出 images / registry / keyframes /
+    # tracks，供 P4 的参数富化使用。全部为纯读取，不改 scope。
+    # ------------------------------------------------------------------------
     @classmethod
     def _collect_registry_images(cls, scope: dict[str, Any]) -> list[dict[str, Any]]:
         images: list[dict[str, Any]] = []
@@ -652,6 +713,14 @@ class PlanExecutor:
                 frames.extend([f for f in kfs if isinstance(f, dict)])
         return frames
 
+    # ------------------------------------------------------------------------
+    # P6 事件与 $ref 解析
+    # _emit                 向 observe_node 回调派发工具事件（异常不外抛）
+    # resolve_references    $ref / $slice / $default / $map 的求值入口
+    # _resolve / _condition / _read / _read_with_presence  具体求值实现
+    # 注意：_dependency_issue 要求根步骤非 ok=False，而 _read 直接取值不做失败
+    #       判定 —— 两者对「依赖失败」的处理并不对称。
+    # ------------------------------------------------------------------------
     @staticmethod
     def _emit(callback: Callable[[dict[str, Any]], None] | None, phase: str, observation: dict[str, Any]) -> None:
         if not callback:
@@ -742,6 +811,11 @@ class PlanExecutor:
         present, current = PlanExecutor._read_with_presence(value, path)
         return current if present else None
 
+    # ------------------------------------------------------------------------
+    # P7 摘要压缩
+    # _compact_args / summarize_observation 把完整工具结果压成回传模型的摘要，
+    # 避免关键帧大 JSON 进入对话上下文（完整结果仍在 working_scope 里）。
+    # ------------------------------------------------------------------------
     @staticmethod
     def _compact_args(arguments: dict[str, Any]) -> dict[str, Any]:
         compact = {}
@@ -820,6 +894,14 @@ class PlanExecutor:
                 summary[key] = result.get(key)
         return summary
 
+    # ------------------------------------------------------------------------
+    # P8 调用去重与语义签名
+    # semantic_signature  归一化参数后生成签名：getTrack 补默认 offset、
+    #                     matchImage 忽略 topK、集合类参数排序消除顺序差异
+    # sanitize_calls      计划内去重：签名相同则丢弃后者并把 $ref 改写到保留项，
+    #                     重名 id 加 -2/-3 后缀，最后统一重写前向引用
+    # 注意：去重只影响「是否执行」，不改变实际执行参数。
+    # ------------------------------------------------------------------------
     @staticmethod
     def _rewrite_call_refs(value: Any, aliases: dict[str, str]) -> Any:
         """把被去重步骤的引用改写到实际保留的步骤，避免后续依赖失效。"""

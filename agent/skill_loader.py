@@ -5,6 +5,24 @@
 - always=true 的 skill 始终注入 system prompt
 - 其余按任务上下文关键词/字段匹配，或由模型通过 loadSkill 补载
 - YAML 仍供代码侧读取（如 target/time 解析），不整包注入对话
+
+定位：四个 agent 的 system prompt 装配线。本文件只决定「放哪些规则、以什么形式
+放」，不决定「规则内容」—— 规则正文都在 skills/ 目录里。
+
+披露层级（两级）：
+  第一级  未选中的技能只给「id：标题 — 简介（适用场景）」目录，不占正文 token
+  第二级  选中的技能注入全文；模型可随时用 loadSkill 拉取目录里的其他技能
+
+注意：选择是**代码做的字面匹配**（token in text），不是模型做的语义判断。
+      因此某个技能的 match_any 里若含「船」这类高频词，会实际退化为 always。
+
+文件分区（以 K 编号为锚点检索）：
+    K1  路径与元数据      skill_dir / SkillMeta
+    K2  目录与正文读取    带 lru_cache 的加载入口
+    K3  技能选择          select_skill_ids：always + 上下文 + 显式 三通道
+    K4  提示词拼装        compose_skills 正文 + 可选目录
+    K5  匹配辅助          上下文化文本、关键词匹配、点路径取值
+    K6  YAML 通道与缓存   代码侧结构化约束 + 缓存失效
 """
 from __future__ import annotations
 
@@ -18,6 +36,10 @@ import yaml
 _SKILLS_ROOT = Path(__file__).resolve().parent.parent / "skills"
 
 
+# ============================================================================
+# K1 路径与元数据
+# skills/{agent_key}/ 的目录定位，以及 catalog.yaml 条目的内存模型。
+# ============================================================================
 def skill_dir(agent_key: str) -> Path:
     return _SKILLS_ROOT / agent_key
 
@@ -49,6 +71,11 @@ class SkillMeta:
         return item
 
 
+# ============================================================================
+# K2 目录与正文读取
+# 全部带 lru_cache：技能文件在进程生命周期内视为不可变，改动后需调用
+# clear_skill_cache()（K6）主动失效。
+# ============================================================================
 @lru_cache(maxsize=64)
 def load_skill_file(agent_key: str, filename: str) -> str:
     path = skill_dir(agent_key) / filename
@@ -131,6 +158,11 @@ def get_skill_meta(agent_key: str, skill_id: str) -> SkillMeta | None:
     return None
 
 
+# ============================================================================
+# K3 技能选择
+# 三个通道按优先级依次叠加，去重保序：always → 显式 extra_ids → 上下文匹配
+# （上限 max_optional）。若一个都没选中，强制取 catalog 首项兜底，避免空 prompt。
+# ============================================================================
 def select_skill_ids(
     agent_key: str,
     context: dict[str, Any] | None = None,
@@ -174,6 +206,12 @@ def select_skill_ids(
     return selected
 
 
+# ============================================================================
+# K4 提示词拼装
+# compose_skills 产出最终注入 system prompt 的 Markdown：选中技能给全文，
+# 未选中且非 always 的技能只给「目录」（含 when 适用场景），提示模型可按需
+# loadSkill 补载 —— 这就是两级披露的落点。
+# ============================================================================
 def compose_skills(
     agent_key: str,
     skill_ids: list[str] | None = None,
@@ -216,6 +254,12 @@ def catalog_index(agent_key: str, exclude_ids: list[str] | None = None) -> list[
     ]
 
 
+# ============================================================================
+# K5 匹配辅助
+# _context_text 把上下文摊平成一大段文本（含 question 全文与 intent 全部字段），
+# _skill_matches 在其上做**字面包含**判断 —— 没有分词、没有语义相关性。
+# 这是 K3 选择质量的上限所在：高频词会让技能被普遍命中。
+# ============================================================================
 def _context_text(ctx: dict[str, Any]) -> str:
     parts: list[str] = []
     for key in (
@@ -276,6 +320,11 @@ def _dig(ctx: dict[str, Any], dotted: str) -> Any:
     return current
 
 
+# ============================================================================
+# K6 YAML 通道与缓存
+# .yaml 与 .md 走两条路：YAML 只给代码读（如 tools/target_parser.py），
+# 不注入对话。clear_skill_cache 是四个缓存的手动失效入口。
+# ============================================================================
 @lru_cache(maxsize=32)
 def load_skill_yaml(agent_key: str, filename: str) -> dict[str, Any]:
     """加载 skills/{agent_key}/{filename}.yaml 或 .yml。"""

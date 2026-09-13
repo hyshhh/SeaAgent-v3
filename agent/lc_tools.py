@@ -1,4 +1,16 @@
-"""将现有 ToolService / 解析函数封装为 LangChain tools。"""
+"""将现有 ToolService / 解析函数封装为 LangChain tools。
+
+定位：这是**模型直调**路径的工具封装，与 plan_executor.py 的**确定性执行**
+路径并存。当前 graph 只用了本文件的 intent 工具与 loadSkill ——
+observe 的业务工具走 PlanExecutor.execute，build_observe_tools 无调用方。
+
+文件分区（以 L 编号为锚点检索）：
+    L1  序列化辅助与参数 schema   _jsonable / _dump / 各 *Args
+    L2  intent 工具                parseTime / parseTargets / extractHull
+    L3  结果压缩                   完整工具结果 → 回传模型的摘要
+    L4  observe 工具                业务工具封装（含会话缓存与自动补参）
+    L5  技能加载工具                loadSkill
+"""
 from __future__ import annotations
 
 import json
@@ -12,6 +24,11 @@ from tools.target_parser import extract_hull_number, extract_target_items
 from tools.time_normalizer import normalize_time_range
 
 
+# ===========================================================================
+# L1 序列化辅助与参数 schema
+# _jsonable / _dump 负责把工具结果转成可 JSON 化的形态；*Args 是各工具的参数
+# schema —— 它们的 description 会进入模型看到的工具说明，是提示词的一部分。
+# ===========================================================================
 def _jsonable(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -111,6 +128,11 @@ class LoadSkillArgs(BaseModel):
     skillId: str = Field(description="catalog 中的 skill id")
 
 
+# ===========================================================================
+# L2 intent 工具
+# 三个纯解析工具（时间/多目标/舷号），由 IntentAgent 调用。返回的是「待确认」
+# 的建议值，节点侧还会用 infer_intent_fields 做规则回填兜底。
+# ===========================================================================
 def build_intent_tools(reference_time: datetime | None = None) -> list[StructuredTool]:
     now = reference_time or datetime.now().astimezone()
 
@@ -155,6 +177,11 @@ def build_intent_tools(reference_time: datetime | None = None) -> list[Structure
     ]
 
 
+# ===========================================================================
+# L3 结果压缩
+# 把各工具返回的大列表压成模型可用的小样本；完整数据仍留在会话缓存里，由
+# L4 的 _auto_fill 自动注入，模型无需复述。这是「大 JSON 不进对话」的落点。
+# ===========================================================================
 def _compact_track(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "trackId": item.get("trackId") or item.get("id"),
@@ -292,6 +319,15 @@ def compact_tool_result_for_model(name: str, result: dict[str, Any], *, sample: 
     return compact
 
 
+# ===========================================================================
+# L4 observe 工具：业务工具 → LangChain 工具（模型直调路径）
+# 两个机制：
+#   会话缓存  本轮 getFrames / listRegistry / getTrack 的结果存入 session，
+#             后续 matchText / matchImage / dedupTracks 未传参时自动注入
+#   自动补参  _auto_fill 按工具名决定从缓存取哪一侧图像
+# 注意：本函数当前无调用方 —— graph 的 observe 节点走 PlanExecutor 确定性
+# 执行路径，此处是保留的备选实现。
+# ===========================================================================
 def build_observe_tools(
     tools_service: Any,
     on_tool: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
@@ -327,6 +363,8 @@ def build_observe_tools(
             if result.get("tracks") is not None:
                 session["tracks"] = result.get("tracks")
 
+    # 自动补参：模型省略图像参数时，从本轮缓存挑合适的来源填上。
+    # matchImage 的四个分支覆盖两个方向（轨迹查库 / 库图查轨迹）。
     def _auto_fill(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         args = dict(arguments)
         if name == "matchText" and args.get("galleryImages") is None:
@@ -362,6 +400,8 @@ def build_observe_tools(
                     args["keyframeIds"] = ids
         return args
 
+    # 通用包装器：参数整形（timeRange 转 tuple、getFrames 截断到 12 条）→ 自动
+    # 补参 → 执行 → 写回会话缓存 → 派发事件（事件里不带大图像对象）→ 压缩返回。
     def _wrap(name: str, schema: type[BaseModel], description: str) -> StructuredTool:
         def _run(**kwargs: Any) -> str:
             arguments = {k: v for k, v in kwargs.items() if v is not None}
@@ -452,6 +492,11 @@ def build_observe_tools(
     ]
 
 
+# ===========================================================================
+# L5 技能加载工具
+# 模型在 ReAct 过程中按需拉取「只给了目录、未注入正文」的技能全文，
+# 与 skill_loader 的两级披露配套。load_fn 由 graph 注入（_skill_loader）。
+# ===========================================================================
 def build_load_skill_tool(agent_key: str, load_fn: Callable[[str], dict[str, Any]]) -> StructuredTool:
     def _run(skillId: str) -> str:
         return _dump(load_fn(skillId))
