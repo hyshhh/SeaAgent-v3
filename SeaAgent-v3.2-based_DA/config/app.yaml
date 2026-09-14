@@ -34,4 +34,6 @@ paths:
   registry_image_dir: /media/ddc/新加卷/hys/hysnew3/SeaAgent/data/registry/reference_images
   video_dir: /media/ddc/新加卷/hys/hysnew3/SQL-boat-v2/demovid/
   keyframe_index: data/indexes/keyframe_index.faiss
-  registry_index: data/indexes/registry_index.faiss
+  # 先验库向量索引与两个 CSV 同盘：直接复用旧索引，避免把参考图重新嵌入一遍。
+  # 伴生清单 <同名>.faiss.json 由主路径派生（vector_store/index.py），改这一行即可一起搬。
+  registry_index: /media/ddc/新加卷/hys/hysnew3/SeaAgent/data/indexes/registry_index.faiss
