@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,6 +15,7 @@ from agent import AgentController
 from web.models import AgentQuery
 
 router = APIRouter(tags=["agent-memory"])
+logger = logging.getLogger(__name__)
 
 def _controller(request: Request, event_handler=None) -> AgentController:
     return AgentController(
@@ -43,25 +46,50 @@ async def stream_agent_query(body: AgentQuery, request: Request):
     async def events():
         loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue[dict] = asyncio.Queue()
-        error_emitted = False
+        terminal_seen = threading.Event()
 
         def emit(event: dict) -> None:
-            nonlocal error_emitted
-            error_emitted = error_emitted or event.get("type") == "error"
+            # runtime 在 worker 线程中执行；用线程安全标记保证 terminal 事件只由一个来源发送。
+            if event.get("type") in {"complete", "error"}:
+                terminal_seen.set()
             loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
         async def execute() -> None:
             try:
                 result = await run_in_threadpool(_controller(request, emit).answer, body.question)
+                if terminal_seen.is_set():
+                    return
                 if result.get("success", False):
-                    await event_queue.put({"type": "complete", "title": "Harness 完成", "message": "最终回答与视觉证据已生成", "result": result})
-                elif not error_emitted:
-                    await event_queue.put({"type": "error", "title": "Harness 未完成", "message": str(result.get("error") or "未能生成完整回答"), "result": result})
-            except Exception as error:  # noqa: BLE001
-                message = str(error)
+                    terminal_seen.set()
+                    await event_queue.put({
+                        "type": "complete",
+                        "title": "Harness 完成",
+                        "message": "最终回答与视觉证据已生成",
+                        "result": result,
+                    })
+                else:
+                    terminal_seen.set()
+                    await event_queue.put({
+                        "type": "error",
+                        "title": "Harness 未完成",
+                        "message": str(result.get("error") or "未能生成完整回答"),
+                        "errorType": result.get("errorType"),
+                        "result": result,
+                    })
+            except Exception as error:
+                logger.exception("Agent stream task failed")
+                if terminal_seen.is_set():
+                    return
+                terminal_seen.set()
+                message = str(error).strip() or f"{type(error).__name__}: {error!r}"
                 if len(message) > 240:
                     message = message[:240] + "…"
-                await event_queue.put({"type": "error", "title": "Harness 执行失败", "message": message})
+                await event_queue.put({
+                    "type": "error",
+                    "title": "Harness 执行失败",
+                    "message": message,
+                    "errorType": type(error).__name__,
+                })
 
         task = asyncio.create_task(execute())
         try:

@@ -1,6 +1,7 @@
 """Thin HTTP/application boundary for the single-agent harness."""
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -9,6 +10,8 @@ from config import load_config
 from harness.runtime import SeaVideoHarness
 from memory import MemoryRepository
 from tools import ToolService
+
+logger = logging.getLogger(__name__)
 
 
 class AgentController:
@@ -29,7 +32,9 @@ class AgentController:
             result = self._project(session_id, state)
             self.repository.finish_session(session_id, result)
             return result
-        except Exception as error:  # noqa: BLE001 - application boundary must persist runtime failures
+        except Exception as error:
+            logger.exception("Agent controller failed: session_id=%s", session_id)
+            message = str(error).strip() or f"{type(error).__name__}: {error!r}"
             result = {
                 "success": False,
                 "sessionId": session_id,
@@ -41,7 +46,8 @@ class AgentController:
                 "toolChain": [],
                 "toolRecords": [],
                 "executionMode": str(self.config.get("harness", {}).get("execution_mode", "single-agent-harness")),
-                "error": str(error),
+                "error": message,
+                "errorType": type(error).__name__,
             }
             self.repository.finish_session(session_id, result)
             return result

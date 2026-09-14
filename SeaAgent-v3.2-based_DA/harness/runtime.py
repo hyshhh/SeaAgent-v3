@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from collections.abc import Callable, Iterator
@@ -25,6 +26,16 @@ from config import project_root
 from .middleware import build_middleware
 from .model import build_model
 from .tools import build_tools
+
+logger = logging.getLogger(__name__)
+
+def _error_message(error: BaseException, limit: int) -> str:
+    """Return a useful, bounded public error without leaking a traceback."""
+    message = str(error).strip()
+    if not message:
+        message = f"{type(error).__name__}: {error!r}"
+    return message if len(message) <= limit else message[:limit] + "…"
+
 
 # ---------------------------------------------------------------------------
 # 一、消息与载荷工具
@@ -347,9 +358,9 @@ class SeaVideoHarness:
         """装配主智能体：注册 harness profile、开检查点、挂 skills，最后交给 create_deep_agent。"""
         try:
             from deepagents import (
-            GeneralPurposeSubagentProfile,
-            HarnessProfile,
-            create_deep_agent,
+                GeneralPurposeSubagentProfile,
+                HarnessProfile,
+                create_deep_agent,
                 register_harness_profile,
             )
             from deepagents.backends import FilesystemBackend
@@ -380,7 +391,21 @@ class SeaVideoHarness:
         backend = FilesystemBackend(root_dir=project_root())
         skills_path = "/" + str(harness.get("skills_dir", "skills")).replace("\\", "/").strip("/")
         # 渐进式披露：只把 skills 目录交给框架，description 随提示词注入、正文按需读取
-        return create_deep_agent(model=self.model, tools=self.tools, system_prompt=self.system_prompt, skills=[skills_path], backend=backend, middleware=build_middleware(self.config, self.model), checkpointer=saver, name="sea_video_harness")
+        try:
+            return create_deep_agent(
+                model=self.model,
+                tools=self.tools,
+                system_prompt=self.system_prompt,
+                skills=[skills_path],
+                backend=backend,
+                middleware=build_middleware(self.config, self.model),
+                checkpointer=saver,
+                name="sea_video_harness",
+            )
+        except Exception:
+            logger.exception("Harness assembly failed")
+            self.close()
+            raise
 
     def close(self) -> None:
         """Release the SQLite checkpoint connection owned by this run.
@@ -423,17 +448,18 @@ class SeaVideoHarness:
                 stream_mode=harness.get("stream_mode", "updates"),
             ):
                 trace.consume(update)
-        except Exception as error:  # noqa: BLE001 - provider/tool errors are runtime-defined
-            # 模型/工具/provider 的异常在此统一收口，调用方无需再包一层 try
-            message = str(error)[: trace.event_limit]
-            trace.event({"type": "error", "title": "Harness 执行失败", "message": message})
+        except Exception as error:
+            # 对外只返回安全的短消息，完整 traceback 进入服务日志，便于定位模型/工具/中间件故障。
+            logger.exception("Harness run failed: thread_id=%s", thread_id)
+            message = _error_message(error, trace.event_limit)
             result = trace.result(thread_id, self.config, state="error")
             result["error"] = message
+            trace.event({"type": "error", "title": "Harness 执行失败", "message": message, "errorType": type(error).__name__, "result": result})
             return result
         finally:
             self.close()
         result = trace.result(thread_id, self.config)
-        trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成"})
+        trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成", "result": result})
         return result
 
     def stream(self, question: str, thread_id: str | None = None) -> Iterator[dict[str, Any]]:
@@ -478,11 +504,12 @@ class SeaVideoHarness:
             trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成", "result": result})
             while pending:
                 yield pending.pop(0)
-        except Exception as error:  # noqa: BLE001 - provider/tool errors are runtime-defined
-            message = str(error)[: trace.event_limit]
+        except Exception as error:
+            logger.exception("Harness stream failed: thread_id=%s", thread_id)
+            message = _error_message(error, trace.event_limit)
             result = trace.result(thread_id, self.config, state="error")
             result["error"] = message
-            trace.event({"type": "error", "title": "Harness 执行失败", "message": message, "result": result})
+            trace.event({"type": "error", "title": "Harness 执行失败", "message": message, "errorType": type(error).__name__, "result": result})
             while pending:
                 yield pending.pop(0)
         finally:

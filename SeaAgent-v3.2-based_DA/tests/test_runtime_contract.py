@@ -61,6 +61,7 @@ def test_stream_yields_only_public_events_and_complete_result():
     events = list(runtime.stream('问题', thread_id='thread-stream'))
     assert [event['type'] for event in events] == ['status', 'model', 'complete']
     assert events[-1]['result']['answer'] == '回答文本'
+    assert events[-1]['result']['state'] == 'completed'
     assert all('messages' not in event and 'raw' not in event for event in events)
 
 
@@ -70,4 +71,5 @@ def test_stream_converts_runtime_error_to_public_error_event():
     assert [event['type'] for event in events] == ['status', 'error']
     assert events[-1]['result']['state'] == 'error'
     assert 'provider unavailable' in events[-1]['message']
+    assert events[-1]['result']['error'] == 'provider unavailable'
 
