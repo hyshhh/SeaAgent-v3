@@ -64,6 +64,12 @@ function scrollConversation(force = false) {
   requestAnimationFrame(() => { node.scrollTop = node.scrollHeight; });
 }
 
+function scrollActivity(force = false) {
+  const node = document.getElementById('agentThoughtStream');
+  if (!node || (!force && !isNearBottom(node))) return;
+  requestAnimationFrame(() => { node.scrollTop = node.scrollHeight; });
+}
+
 function resetThoughtStream() {
   const stream = document.getElementById('agentActivityStream');
   if (stream) stream.innerHTML = '<div class="qa-empty-state">Activity will appear here when the harness starts.</div>';
@@ -177,6 +183,7 @@ function appendHarnessEvent(event) {
     appendStandardEvent(event, 'error', '!', 'ERROR', detail || 'Harness failed');
     setHarnessState('Failed', 'failed');
   }
+  scrollActivity();
   scrollConversation();
 }
 
@@ -197,6 +204,7 @@ function renderAgentAnswer(result) {
   renderToolRecords(result?.toolRecords || result?.tool_records);
   renderEvidence(result?.evidence || null);
   setHarnessState(result?.success === false ? 'Failed' : 'Complete', result?.success === false ? 'failed' : 'complete');
+  scrollActivity(true);
   scrollConversation(true);
 }
 
