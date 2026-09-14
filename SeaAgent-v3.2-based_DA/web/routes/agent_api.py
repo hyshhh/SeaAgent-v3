@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import threading
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -40,6 +41,17 @@ async def query_agent(body: AgentQuery, request: Request):
     return await run_in_threadpool(_controller(request).answer, body.question, body.session_id)
 
 
+def _begin_run(request: Request, session_id: str) -> threading.Event:
+    """登记一次进行中的问答，返回它的中断信号。
+
+    进行中的运行按 session_id 记账：一个会话同时只跑一轮，停止接口凭会话号就能找到它，
+    前端也可以在列表里标出「哪个会话在回答」。
+    """
+    cancel = threading.Event()
+    request.app.state.agent_runs[session_id] = cancel
+    return cancel
+
+
 @router.post("/api/agent/query/stream")
 async def stream_agent_query(body: AgentQuery, request: Request):
     """逐行返回 Harness 状态、工具与最终回答事件。"""
@@ -47,6 +59,9 @@ async def stream_agent_query(body: AgentQuery, request: Request):
         loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue[dict] = asyncio.Queue()
         terminal_seen = threading.Event()
+        # 会话号在进入 worker 线程前定下来，停止接口才能在同一 key 上找到这次运行
+        session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
+        cancel = _begin_run(request, session_id)
 
         def emit(event: dict) -> None:
             # runtime 在 worker 线程中执行；用线程安全标记保证 terminal 事件只由一个来源发送。
@@ -56,7 +71,7 @@ async def stream_agent_query(body: AgentQuery, request: Request):
 
         async def execute() -> None:
             try:
-                result = await run_in_threadpool(_controller(request, emit).answer, body.question, body.session_id)
+                result = await run_in_threadpool(_controller(request, emit).answer, body.question, session_id, cancel)
                 if terminal_seen.is_set():
                     return
                 if result.get("success", False):
@@ -65,6 +80,14 @@ async def stream_agent_query(body: AgentQuery, request: Request):
                         "type": "complete",
                         "title": "Harness 完成",
                         "message": "最终回答与视觉证据已生成",
+                        "result": result,
+                    })
+                elif result.get("state") == "cancelled":
+                    terminal_seen.set()
+                    await event_queue.put({
+                        "type": "complete",
+                        "title": "Harness 已停止",
+                        "message": "本轮已按请求停止",
                         "result": result,
                     })
                 else:
@@ -99,6 +122,7 @@ async def stream_agent_query(body: AgentQuery, request: Request):
                 if event.get("type") in {"complete", "error"}:
                     break
         finally:
+            request.app.state.agent_runs.pop(session_id, None)
             await task
 
     return StreamingResponse(
@@ -106,6 +130,16 @@ async def stream_agent_query(body: AgentQuery, request: Request):
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/api/agent/sessions/{session_id}/stop")
+async def stop_agent_run(session_id: str, request: Request):
+    """请求停止某个会话正在进行的问答；只置中断信号，不删除会话与历史。"""
+    cancel = request.app.state.agent_runs.get(session_id)
+    if cancel is None:
+        return {"success": False, "message": "该会话当前没有进行中的问答", "data": {"sessionId": session_id}}
+    cancel.set()
+    return {"success": True, "message": "已请求停止，本轮会在当前步骤结束后收尾", "data": {"sessionId": session_id}}
 
 @router.delete("/api/agent/memory")
 async def clear_agent_memory(request: Request):

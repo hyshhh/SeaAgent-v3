@@ -22,12 +22,15 @@ class AgentController:
         self.llm = llm
         self.event_handler = event_handler
 
-    def answer(self, question: str, session_id: str | None = None) -> dict[str, Any]:
+    def answer(self, question: str, session_id: str | None = None, cancel: Any = None) -> dict[str, Any]:
         """跑一轮问答，并把这轮问答写进会话记忆。
 
         ``session_id`` 决定这一轮是「新会话」还是「追问」：不传（或会话已不存在）就新建并
         以本轮问题作标题；传入已存在的会话则沿用同一个 thread_id —— SQLite 检查点会带回
         该会话的历史消息，模型因此看得到上文，前端也在这条会话下继续追加轮次。
+
+        ``cancel`` 是可选的中断信号（``threading.Event``）：置位后本轮以 ``cancelled`` 收尾，
+        问题仍会作为一轮记录留在会话里，只是没有回答——用户停掉的那一轮不该凭空消失。
         """
         session_id = str(session_id or "").strip() or f"session-{uuid.uuid4().hex[:12]}"
         if self.repository.get_session(session_id) is None:
@@ -35,7 +38,7 @@ class AgentController:
         runtime: SeaVideoHarness | None = None
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
-            state = runtime.run(question, thread_id=session_id)
+            state = runtime.run(question, thread_id=session_id, cancel=cancel)
             result = self._project(session_id, state)
         except Exception as error:
             logger.exception("Agent controller failed: session_id=%s", session_id)
@@ -96,7 +99,7 @@ class AgentController:
         evidence = state.get(evidence_key) or state.get("evidence") or {}
         harness_settings = self.config.get("harness", {})
         result = {
-            "success": run_state != "error",
+            "success": run_state not in {"error", "cancelled"},
             "sessionId": session_id,
             "answerText": answer,
             "conclusion": answer,

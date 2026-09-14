@@ -1,6 +1,8 @@
 """会话记忆：仓库层的轮次存档，以及控制器把「追问」接到同一个 thread 上。"""
 import csv
 import json
+import threading
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -152,3 +154,35 @@ def test_appending_to_a_legacy_session_keeps_the_migrated_turn(tmp_path):
 
     assert repository.append_turn("session-old", "追问", {"answerText": "答", "state": "completed"}) == 2
     assert [turn["question"] for turn in repository.get_session("session-old")["turns"]] == ["旧问题", "追问"]
+
+
+def test_cancelled_run_is_kept_as_a_stopped_turn(agent, monkeypatch):
+    """被停掉的那一轮仍留在会话里：问题不该凭空消失，回答位置写明已停止。"""
+
+    class _CancellingRuntime(_FakeRuntime):
+        def run(self, question, thread_id=None, cancel=None, **_kwargs):
+            if cancel is not None:
+                cancel.set()
+            type(self).threads.append(thread_id)
+            return {"answer": "", "state": "cancelled", "evidence": {}, "tool_records": [], "rounds": [], "tool_chain": []}
+
+    monkeypatch.setattr(controller_module, "SeaVideoHarness", _CancellingRuntime)
+    result = agent.answer("会被停掉的问题")
+
+    assert result["state"] == "cancelled"
+    assert result["success"] is False
+    session = agent.repository.get_session(result["sessionId"])
+    assert session["turnCount"] == 1
+    assert session["turns"][0]["question"] == "会被停掉的问题"
+    assert session["turns"][0]["state"] == "cancelled"
+    assert session["turns"][0]["answer"] == ""
+
+
+@pytest.mark.asyncio
+async def test_stop_endpoint_signals_the_running_session():
+    registry = {"session-abc": threading.Event()}
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(agent_runs=registry)))
+
+    assert (await agent_api.stop_agent_run("session-abc", request))["success"] is True
+    assert registry["session-abc"].is_set()
+    assert (await agent_api.stop_agent_run("session-none", request))["success"] is False

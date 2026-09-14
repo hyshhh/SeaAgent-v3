@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
 <link rel="stylesheet" href="/static/css/academic.css?v=36">
-<link rel="stylesheet" href="/static/css/qa.css?v=5">
+<link rel="stylesheet" href="/static/css/qa.css?v=6">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -215,7 +215,7 @@
             <textarea id="agentQuestion" rows="3" placeholder="例如：数据库中有没有黄色的无人艇？">数据库中有没有黄色的无人艇？</textarea>
             <div class="qa-composer-actions">
               <div class="qa-composer-tools"><button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="Refresh memory summary">↻ <span>Refresh memory</span></button><button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="Clear QA memory">⌫ <span>Clear memory</span></button><span class="qa-shortcut">Ctrl / ⌘ + Enter to run</span></div>
-              <button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()"><span>Run Harness</span><b aria-hidden="true">↑</b></button>
+              <div class="qa-composer-buttons"><button type="button" class="qa-stop-button" id="btnStopAgent" onclick="stopAgentRun()" hidden>■ <span>停止</span></button><button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()"><span>Run Harness</span><b aria-hidden="true">↑</b></button></div>
             </div>
           </div>
         </div>
@@ -400,8 +400,9 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=21"></script>
   <script src="/static/js/memory.js?v=8"></script>
-<script src="/static/js/agent.js?v=75"></script>
+<script src="/static/js/agent.js?v=76"></script>
 <script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>
+
 

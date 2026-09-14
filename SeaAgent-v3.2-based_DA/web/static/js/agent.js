@@ -1,4 +1,19 @@
 /* Sea-Video-Harness QA interaction layer. Public activity only; no hidden chain-of-thought is rendered. */
+
+/* ── 会话与运行状态 ───────────────────────────────────────────────────────────
+   一个会话一轮问答。sessionRuns 以 session_id 为键保存「进行中或刚结束」的那一轮：
+   事件先写进该轮的缓冲区，只有当前正在查看这个会话时才落到 DOM 上。于是：
+
+     · 切到别的会话，运行继续跑，事件一条不丢；
+     · 切回来立刻看到这一轮的完整实时过程（缓冲区回放），而不是空白；
+     · 正在跑的会话在列表里带「回答中」标记，随时可以切走或停止。
+
+   currentSessionId 只表示「正在看哪个会话」，不再兼任运行归属。 */
+const sessionRuns = new Map();
+let currentSessionId = null;   // 正在查看的会话；null = 尚未提问的新会话
+let currentSession = null;     // 该会话在服务端的存档（含每轮问答）
+let sessionSummaries = [];     // 会话栏列表
+
 let harnessResult = null;
 let harnessEvidence = null;
 let harnessEventCount = 0;
@@ -6,10 +21,6 @@ let harnessToolCount = 0;
 const harnessToolCards = new Map();
 const harnessSkillNames = new Set();
 let harnessSkillActivityCard = null;
-/* 会话状态：currentSessionId 为 null 表示下一轮问答会开一段新会话，否则在该会话里追问。 */
-let currentSessionId = null;
-let currentSession = null;
-let sessionSummaries = [];
 
 function useQuestion(text) {
   const input = document.getElementById('agentQuestion');
@@ -42,11 +53,19 @@ function formatSessionTime(value) {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/* 会话条目的副标题：有时间的显示「时间 · N 轮」，没时间的只留「N 轮」。 */
+/* 会话条目的副标题：有时间的显示「时间 · N 轮」，没有轮次的（如正在回答的新会话）只留有时间的部分。 */
 function sessionMeta(session) {
   const stamp = formatSessionTime(session?.updatedAt);
   const turns = Number(session?.turnCount || 0);
-  return [stamp, `${turns} 轮`].filter(Boolean).join(' · ');
+  return [stamp, turns > 0 ? `${turns} 轮` : ''].filter(Boolean).join(' · ');
+}
+
+/* 会话号由前端生成，运行一开始就有 key，不必等后端回传才开始记账。 */
+function newSessionId() {
+  const bytes = new Uint8Array(6);
+  if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `session-${hex || Math.random().toString(16).slice(2, 14)}`;
 }
 
 function setHarnessState(label, state = '') {
@@ -90,21 +109,20 @@ function scrollActivity(force = false) {
   requestAnimationFrame(() => { node.scrollTop = node.scrollHeight; });
 }
 
-function resetThoughtStream() {
+/* 清空「当前这一轮」的渲染状态；切会话、重放事件前都会调用，保证渲染是幂等的。 */
+function resetActivityDom() {
   const stream = document.getElementById('agentActivityStream');
   if (stream) stream.innerHTML = '<div class="qa-empty-state">Activity will appear here when the harness starts.</div>';
   const final = document.getElementById('agentFinalView');
   if (final) final.hidden = true;
-  const welcome = document.getElementById('qaWelcome');
-  if (welcome) welcome.hidden = true;
-  const userTurn = document.getElementById('qaUserTurn');
-  if (userTurn) userTurn.hidden = false;
   const skills = document.getElementById('qaSkillList');
   if (skills) skills.innerHTML = '<div class="qa-inspector-empty">Skills load with the harness.</div>';
   const evidence = document.getElementById('evidenceGallery');
   if (evidence) evidence.innerHTML = '<div class="qa-inspector-empty">No evidence available.</div>';
   const count = document.getElementById('evidenceResultCount');
   if (count) count.textContent = 'Waiting';
+  const summary = document.getElementById('agentToolSummary');
+  if (summary) summary.textContent = 'Waiting for completion';
   harnessEventCount = 0;
   harnessToolCount = 0;
   harnessToolCards.clear();
@@ -113,10 +131,25 @@ function resetThoughtStream() {
   harnessResult = null;
   harnessEvidence = null;
   updateHarnessStats();
-  setHarnessState('Running', 'running');
 }
 
-/* ---------------------------------------------------------------- 会话记忆 */
+/* 输入区的按钮随「当前会话是否在跑」切换：跑着的时候只能停，不能在同一个会话里再发一轮。 */
+function syncComposer(run) {
+  const button = document.getElementById('btnAskAgent');
+  const stop = document.getElementById('btnStopAgent');
+  const running = run?.status === 'running';
+  if (button) {
+    button.disabled = running;
+    button.querySelector('span')?.replaceChildren(document.createTextNode(running ? 'Running…' : 'Run Harness'));
+  }
+  if (stop) {
+    stop.hidden = !running;
+    stop.disabled = !running;
+    stop.querySelector('span')?.replaceChildren(document.createTextNode('停止'));
+  }
+}
+
+/* ── 会话栏 ───────────────────────────────────────────────────────────────── */
 
 function renderSessionList() {
   const list = document.getElementById('qaSessionList');
@@ -130,11 +163,12 @@ function renderSessionList() {
   list.innerHTML = sessionSummaries.map((session) => {
     const active = session.sessionId === currentSessionId ? ' is-active' : '';
     const title = session.title || '未命名会话';
+    const live = session.running ? '<span class="qa-session-live">● 回答中</span>' : '';
     return `<div class="qa-session-item${active}" role="button" tabindex="0" data-session-id="${escapeHtml(session.sessionId)}" onclick="openSession(this.dataset.sessionId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSession(this.dataset.sessionId);}">
       <span class="qa-session-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.3-.6L3 21l1.7-4.6A8.3 8.3 0 0 1 3.6 11.5 8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z"/></svg></span>
       <div class="qa-session-body">
         <strong class="qa-session-name">${escapeHtml(title)}</strong>
-        <small class="qa-session-note">${escapeHtml(sessionMeta(session))}</small>
+        <small class="qa-session-note">${live}${live ? ' · ' : ''}${escapeHtml(sessionMeta(session))}</small>
       </div>
       <button type="button" class="qa-session-delete" title="删除该会话" aria-label="删除该会话" onclick="event.stopPropagation();deleteSession(this.closest('.qa-session-item').dataset.sessionId)">×</button>
     </div>`;
@@ -142,14 +176,26 @@ function renderSessionList() {
 }
 
 async function loadSessions() {
+  let server = [];
   try {
     const response = await fetch('/api/agent/sessions');
     const data = await response.json();
     if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
-    sessionSummaries = Array.isArray(data?.sessions) ? data.sessions : [];
+    server = Array.isArray(data?.sessions) ? data.sessions : [];
   } catch (_error) {
-    sessionSummaries = [];
+    server = [];
   }
+  // 合并本地正在跑的会话：服务端可能刚建行、也可能还没轮到写列表
+  const byId = new Map(server.map((item) => [item.sessionId, item]));
+  for (const [id, run] of sessionRuns) {
+    const entry = byId.get(id) || { sessionId: id, title: run.question, updatedAt: '', turnCount: 0 };
+    entry.running = run.status === 'running';
+    byId.set(id, entry);
+  }
+  sessionSummaries = [...byId.values()].sort((left, right) => {
+    if (!!right.running !== !!left.running) return right.running ? 1 : -1;
+    return String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''));
+  });
   renderSessionList();
   return sessionSummaries;
 }
@@ -163,11 +209,10 @@ async function fetchSession(sessionId) {
 }
 
 /* 已往轮次只展示问答对：工具明细属于当轮实时事件流，历史里保留工具名序列足够定位。 */
-function renderSessionHistory(session) {
+function renderSessionHistory(turns) {
   const node = document.getElementById('qaSessionHistory');
   if (!node) return;
-  const turns = Array.isArray(session?.turns) ? session.turns : [];
-  const past = turns.slice(0, -1);
+  const past = Array.isArray(turns) ? turns : [];
   if (!past.length) {
     node.hidden = true;
     node.innerHTML = '';
@@ -180,9 +225,15 @@ function renderSessionHistory(session) {
       <span>You</span>
       <p>${escapeHtml(turn.question || '')}</p>
       <span>Harness</span>
-      <p class="qa-history-answer">${escapeHtml(compact(turn.answer || turn.state || '（该轮未留下回答）', 420))}</p>
+      <p class="qa-history-answer">${escapeHtml(compact(turnAnswer(turn), 420))}</p>
     </article>`).join('');
   node.hidden = false;
+}
+
+function turnAnswer(turn) {
+  if (turn?.answer) return turn.answer;
+  if (turn?.state === 'cancelled') return '（这一轮已停止）';
+  return turn?.state || '（该轮未留下回答）';
 }
 
 /* 把某一轮问答还原到主面板：回答、工具名序列与证据都来自会话存档。 */
@@ -190,7 +241,7 @@ function renderRestoredTurn(turn) {
   const view = document.getElementById('agentFinalView');
   const answer = document.getElementById('agentAnswer');
   if (view) view.hidden = false;
-  if (answer) answer.textContent = turn?.answer || '（该轮未留下回答）';
+  if (answer) answer.textContent = turnAnswer(turn) || '（该轮未留下回答）';
   const summary = document.getElementById('agentToolSummary');
   const tools = document.getElementById('agentResultTools');
   const chain = Array.isArray(turn?.toolChain) ? turn.toolChain : [];
@@ -201,50 +252,97 @@ function renderRestoredTurn(turn) {
       : '<div class="qa-inspector-empty">这轮没有留下工具调用记录。</div>';
   }
   renderEvidence(turn?.evidence || null);
-  setHarnessState(turn?.state === 'error' ? 'Failed' : 'Restored', turn?.state === 'error' ? 'failed' : 'complete');
+  const state = turn?.state === 'error' ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : 'Restored';
+  setHarnessState(state, turn?.state === 'error' ? 'failed' : turn?.state === 'cancelled' ? '' : 'complete');
+}
+
+/* 一轮结束后由运行结果收尾；客户端提前断开时用占位结果补齐。 */
+function renderRunOutcome(run) {
+  if (run.result) {
+    renderAgentAnswer(run.result);
+    return;
+  }
+  const stopped = run.status === 'stopped';
+  renderAgentAnswer({
+    success: false,
+    state: stopped ? 'cancelled' : 'error',
+    answerText: stopped ? '本轮已停止。' : (run.error || '本轮未能完成。'),
+    evidence: {},
+    toolRecords: [],
+    toolChain: [],
+  });
+}
+
+/* 主面板的唯一渲染入口：正在看的会话 + 它当前那一轮（运行中 / 已结束 / 存档）。 */
+function renderView() {
+  const session = currentSession;
+  const run = currentSessionId ? sessionRuns.get(currentSessionId) : null;
+  const turns = Array.isArray(session?.turns) ? session.turns : [];
+  // 运行结果里带着轮次序号：等于已存轮数说明这一轮已经落库，历史里就要去掉它，免得同一轮显示两次
+  const stored = !!(run?.result && Number(run.result.turnIndex) === turns.length && turns.length > 0);
+  const history = run ? (stored ? turns.slice(0, -1) : turns) : turns.slice(0, -1);
+  const latest = turns[turns.length - 1] || null;
+
+  resetActivityDom();
+  syncComposer(run);
+  renderSessionHistory(history);
+
+  const welcome = document.getElementById('qaWelcome');
+  const userTurn = document.getElementById('qaUserTurn');
+  if (!session && !run) {
+    if (welcome) welcome.hidden = false;
+    if (userTurn) userTurn.hidden = true;
+    setHarnessState('Ready', '');
+    return;
+  }
+  if (welcome) welcome.hidden = true;
+  if (userTurn) userTurn.hidden = false;
+  const questionNode = document.getElementById('qaUserQuestion');
+  if (questionNode) questionNode.textContent = run ? run.question : (latest?.question || '');
+
+  if (run) {
+    run.events.forEach((event) => appendHarnessEvent(event));
+    if (run.status === 'running') setHarnessState('Running', 'running');
+    else renderRunOutcome(run);
+  } else if (latest) {
+    renderRestoredTurn(latest);
+  }
+  scrollActivity(true);
+  scrollConversation(true);
 }
 
 async function openSession(sessionId) {
-  if (!sessionId) return;
+  if (!sessionId || sessionId === currentSessionId) return;
+  currentSessionId = sessionId;
+  const run = sessionRuns.get(sessionId);
+  // 有运行就先按运行渲染——即便它这一轮还没落库，也绝不会是空白
+  if (!currentSession || currentSession.sessionId !== sessionId) {
+    currentSession = { sessionId, title: run?.question || '', turns: [] };
+  }
+  renderSessionList();
+  renderView();
   try {
-    const session = await fetchSession(sessionId);
-    currentSession = session;
-    currentSessionId = session.sessionId;
-    renderSessionList();
-    resetThoughtStream();
-    const turns = Array.isArray(session.turns) ? session.turns : [];
-    const last = turns[turns.length - 1] || null;
-    renderRestoredTurn(last);
-    renderSessionHistory(session);
-    const questionNode = document.getElementById('qaUserQuestion');
-    if (questionNode) questionNode.textContent = last?.question || '';
-    const welcome = document.getElementById('qaWelcome');
-    if (welcome) welcome.hidden = true;
-    const userTurn = document.getElementById('qaUserTurn');
-    if (userTurn) userTurn.hidden = false;
-    scrollConversation(true);
-    scrollActivity(true);
+    const detail = await fetchSession(sessionId);
+    if (currentSessionId !== sessionId) return;   // 期间又切走了，别覆盖新视图
+    currentSession = detail;
+    renderView();
   } catch (error) {
     if (typeof showToast === 'function') showToast(error.message, 'error');
   }
 }
 
 function startNewSession() {
+  // 只把视图切到空白会话，不动正在后台跑的那一轮
   currentSessionId = null;
   currentSession = null;
   renderSessionList();
-  resetThoughtStream();
-  const history = document.getElementById('qaSessionHistory');
-  if (history) { history.hidden = true; history.innerHTML = ''; }
+  renderView();
   const welcome = document.getElementById('qaWelcome');
   if (welcome) welcome.hidden = false;
   const userTurn = document.getElementById('qaUserTurn');
   if (userTurn) userTurn.hidden = true;
-  const answer = document.getElementById('agentAnswer');
-  if (answer) answer.textContent = 'The final answer will appear here after execution.';
-  const tools = document.getElementById('agentResultTools');
-  if (tools) tools.innerHTML = '<div class="qa-inspector-empty">No tool records.</div>';
-  setHarnessState('Ready', '');
+  document.getElementById('agentQuestion')?.focus();
+  scrollConversation(true);
 }
 
 async function deleteSession(sessionId) {
@@ -253,7 +351,13 @@ async function deleteSession(sessionId) {
     const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, {method: 'DELETE'});
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
-    if (currentSessionId === sessionId) startNewSession();
+    sessionRuns.get(sessionId)?.controller?.abort();
+    sessionRuns.delete(sessionId);
+    if (currentSessionId === sessionId) {
+      currentSessionId = null;
+      currentSession = null;
+      renderView();
+    }
     await loadSessions();
     if (typeof showToast === 'function') showToast('会话已删除');
   } catch (error) {
@@ -261,21 +365,7 @@ async function deleteSession(sessionId) {
   }
 }
 
-/* 一轮问答结束后刷新会话栏，并把刚结束的那轮挤出历史区（主面板已经在展示它）。 */
-async function refreshCurrentSession() {
-  await loadSessions();
-  if (currentSessionId) {
-    try {
-      currentSession = await fetchSession(currentSessionId);
-      renderSessionHistory(currentSession);
-    } catch (_error) {
-      /* 会话栏刷新失败不影响已经渲染好的本轮回答 */
-    }
-  }
-  renderSessionList();
-}
-
-/* ---------------------------------------------------------------- 事件渲染 */
+/* ── 事件渲染 ─────────────────────────────────────────────────────────────── */
 
 function appendSkillToInspector(event) {
   const name = String(event.skill || event.name || event.title || '').trim();
@@ -379,7 +469,7 @@ function appendHarnessEvent(event) {
     appendStandardEvent(event, 'status', '◈', 'SYSTEM', event.message || 'Harness ready');
   } else if (event.type === 'complete') {
     appendStandardEvent(event, 'complete', '✓', 'DONE', event.message || 'Answer and evidence generated');
-    setHarnessState('Complete', 'complete');
+    setHarnessState(event.result?.state === 'cancelled' ? 'Stopped' : 'Complete', event.result?.state === 'cancelled' ? '' : 'complete');
   } else if (event.type === 'error') {
     const detail = [event.message, event.error, event.result?.error].filter(Boolean).join('\n');
     appendStandardEvent(event, 'error', '!', 'ERROR', detail || 'Harness failed');
@@ -401,11 +491,13 @@ function renderToolRecords(records) {
 function renderAgentAnswer(result) {
   const view = document.getElementById('agentFinalView');
   const answer = document.getElementById('agentAnswer');
+  const cancelled = result?.state === 'cancelled';
   if (view) view.hidden = false;
-  if (answer) answer.textContent = result?.answerText || result?.answer || '未生成回答。';
+  if (answer) answer.textContent = result?.answerText || result?.answer || (cancelled ? '本轮已停止。' : '未生成回答。');
   renderToolRecords(result?.toolRecords || result?.tool_records);
   renderEvidence(result?.evidence || null);
-  setHarnessState(result?.success === false ? 'Failed' : 'Complete', result?.success === false ? 'failed' : 'complete');
+  if (cancelled) setHarnessState('Stopped', '');
+  else setHarnessState(result?.success === false ? 'Failed' : 'Complete', result?.success === false ? 'failed' : 'complete');
   scrollActivity(true);
   scrollConversation(true);
 }
@@ -452,22 +544,36 @@ async function loadAgentMemorySummary(showNotice = false) {
 
 async function clearAgentMemory() {
   try {
+    // 先停掉所有在跑的会话，否则它们的轮次会在清空后又写回记忆
+    for (const run of sessionRuns.values()) run.controller?.abort();
+    sessionRuns.clear();
     const response = await fetch('/api/agent/memory', {method: 'DELETE'});
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
     startNewSession();
     await loadSessions();
-    setHarnessState('Ready', '');
     if (typeof showToast === 'function') showToast('QA memory cleared');
   } catch (error) {
     if (typeof showToast === 'function') showToast(error.message, 'error');
   }
 }
 
-async function streamAgentQuery(question, sessionId) {
-  const payload = {question};
-  if (sessionId) payload.sessionId = sessionId;
-  const response = await fetch('/api/agent/query/stream', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+/* ── 一轮问答 ─────────────────────────────────────────────────────────────── */
+
+/* 事件先入该轮的缓冲区，再决定要不要落到 DOM：正在看这个会话才渲染。 */
+function dispatchRunEvent(run, event) {
+  run.events.push(event);
+  if (run.events.length > 500) run.events.splice(0, run.events.length - 500);
+  if (currentSessionId === run.id) appendHarnessEvent(event);
+}
+
+async function streamAgentQuery(question, sessionId, run) {
+  const response = await fetch('/api/agent/query/stream', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({question, sessionId}),
+    signal: run.controller?.signal,
+  });
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `Request failed: ${response.status}`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -475,7 +581,7 @@ async function streamAgentQuery(question, sessionId) {
   let result = null;
   let errorEvent = null;
   const consume = (event) => {
-    appendHarnessEvent(event);
+    dispatchRunEvent(run, event);
     if (event.type === 'complete') result = event.result || result;
     if (event.type === 'error') { errorEvent = event; result = event.result || result; }
   };
@@ -500,26 +606,70 @@ async function streamAgentQuery(question, sessionId) {
 
 async function askAgent() {
   const question = document.getElementById('agentQuestion')?.value.trim();
-  const button = document.getElementById('btnAskAgent');
-  if (!question) return typeof showToast === 'function' && showToast('请输入问题', 'error');
-  resetThoughtStream();
-  const questionNode = document.getElementById('qaUserQuestion');
-  if (questionNode) questionNode.textContent = question;
-  if (button) { button.disabled = true; button.querySelector('span')?.replaceChildren(document.createTextNode('Running…')); }
-  setHarnessState('Running', 'running');
-  try {
-    harnessResult = await streamAgentQuery(question, currentSessionId);
-    renderAgentAnswer(harnessResult);
-  } catch (error) {
-    if (!error.harnessEventRendered) appendHarnessEvent({type: 'error', title: 'Harness 执行失败', message: error.message});
-    if (error.result) { harnessResult = error.result; renderAgentAnswer(error.result); }
-    if (typeof showToast === 'function') showToast(error.message, 'error');
-  } finally {
-    if (button) { button.disabled = false; button.querySelector('span')?.replaceChildren(document.createTextNode('Run Harness')); }
-    // 后端每轮都会把问答写进会话，拿到 sessionId 后即成为当前会话，后续提问就是追问
-    if (harnessResult?.sessionId) currentSessionId = harnessResult.sessionId;
-    await refreshCurrentSession();
+  if (!question) { if (typeof showToast === 'function') showToast('请输入问题', 'error'); return; }
+  const sessionId = currentSessionId || newSessionId();
+  if (sessionRuns.get(sessionId)?.status === 'running') {
+    if (typeof showToast === 'function') showToast('这个会话还在回答，先停止或换一个会话', 'error');
+    return;
   }
+  currentSessionId = sessionId;
+  if (!currentSession || currentSession.sessionId !== sessionId) currentSession = {sessionId, title: question, turns: []};
+  const run = {id: sessionId, question, events: [], result: null, error: null, status: 'running', stopping: false, controller: new AbortController()};
+  sessionRuns.set(sessionId, run);
+  renderView();
+  // 新会话立刻进列表并打上「回答中」标记：不等服务端把行写出来
+  await loadSessions();
+
+  try {
+    const result = await streamAgentQuery(question, sessionId, run);
+    run.result = result || null;
+    run.status = result?.state === 'cancelled' ? 'stopped' : result?.success === false ? 'error' : 'done';
+  } catch (error) {
+    // 用户按过停止：无论流是抛 AbortError 还是直接断掉，都算「已停止」而不是失败
+    if (error.name === 'AbortError' || run.stopping) {
+      run.status = 'stopped';
+      run.error = '已停止';
+    } else {
+      run.status = 'error';
+      run.error = error.message;
+      if (!error.harnessEventRendered && currentSessionId === sessionId) {
+        appendHarnessEvent({type: 'error', title: 'Harness 执行失败', message: error.message});
+      }
+      if (typeof showToast === 'function') showToast(error.message, 'error');
+    }
+  } finally {
+    run.controller = null;
+    if (currentSessionId === sessionId) renderView();
+    await loadSessions();
+    try {
+      const detail = await fetchSession(sessionId);
+      if (currentSessionId === sessionId) {
+        currentSession = detail;
+        renderView();
+      }
+    } catch (_error) {
+      /* 存档刷新失败不影响已经渲染好的本轮结果 */
+    }
+  }
+}
+
+async function stopAgentRun() {
+  const run = currentSessionId ? sessionRuns.get(currentSessionId) : null;
+  if (!run || run.status !== 'running') return;
+  run.stopping = true;   // 先记意图：随后流无论是报错还是直接断，都按「已停止」处理
+  const stop = document.getElementById('btnStopAgent');
+  if (stop) {
+    stop.disabled = true;
+    stop.querySelector('span')?.replaceChildren(document.createTextNode('停止中…'));
+  }
+  setHarnessState('Stopping…', 'running');
+  try {
+    // 先让服务端在当前步骤收尾，再断开前端这条流，避免它继续等到超时
+    await fetch(`/api/agent/sessions/${encodeURIComponent(run.id)}/stop`, {method: 'POST'});
+  } catch (_error) {
+    /* 服务端没收到也要能把前端停下来 */
+  }
+  run.controller?.abort();
 }
 
 document.addEventListener('DOMContentLoaded', () => {

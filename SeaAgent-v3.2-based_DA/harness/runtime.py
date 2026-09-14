@@ -447,8 +447,13 @@ class SeaVideoHarness:
     def __exit__(self, _exc_type: type[BaseException] | None, _exc_value: BaseException | None, _traceback: TracebackType | None) -> None:
         self.close()
 
-    def run(self, question: str, thread_id: str | None = None, **_: Any) -> dict[str, Any]:
-        """跑完一轮问答后一次性返回结果；运行期异常一律降级为 error 结果，不向外抛。"""
+    def run(self, question: str, thread_id: str | None = None, cancel: Any = None, **_: Any) -> dict[str, Any]:
+        """跑完一轮问答后一次性返回结果；运行期异常一律降级为 error 结果，不向外抛。
+
+        ``cancel`` 是可选的 ``threading.Event``：置位后本轮在**下一个超步边界**收尾，
+        状态记为 ``cancelled``。之所以只能按超步取消，是因为 ``agent.stream`` 是阻塞生成器，
+        模型调用本身无法从外部打断——能保证的是「当前这一步跑完就停」。
+        """
         # thread_id 同时是检查点的会话键：复用同一 id 即续接历史，缺省则视为全新问答
         thread_id = thread_id or uuid.uuid4().hex
         harness = self.config.get("harness", {})
@@ -465,6 +470,7 @@ class SeaVideoHarness:
             tool_labels,
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
+        cancelled = False
         try:
             # updates 模式每次产出一帧增量，交给 _Trace 去重并翻译成事件
             for update in self.agent.stream(
@@ -472,6 +478,9 @@ class SeaVideoHarness:
                 config={"configurable": {"thread_id": thread_id}},
                 stream_mode=harness.get("stream_mode", "updates"),
             ):
+                if cancel is not None and cancel.is_set():
+                    cancelled = True
+                    break
                 trace.consume(update)
         except Exception as error:
             # 对外只返回安全的短消息，完整 traceback 进入服务日志，便于定位模型/工具/中间件故障。
@@ -483,6 +492,10 @@ class SeaVideoHarness:
             return result
         finally:
             self.close()
+        if cancelled:
+            result = trace.result(thread_id, self.config, state="cancelled")
+            trace.event({"type": "complete", "title": "Harness 已停止", "message": "本轮已按请求停止", "result": result})
+            return result
         result = trace.result(thread_id, self.config)
         trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成", "result": result})
         return result

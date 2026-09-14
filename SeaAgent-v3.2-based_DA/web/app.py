@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
     app.state.memory_manager = TrackMemoryManager(config, repository, vectors)
     app.state.tool_service = ToolService(config, repository, embedder, llm, vectors)
     app.state.ship_service = ShipService(config, repository, embedder, llm, vectors)
+    # 进行中的问答：session_id -> threading.Event，供停止接口置位（见 web/routes/agent_api.py）
+    app.state.agent_runs = {}
     if not shutil.which("ffmpeg"):
         logging.getLogger(__name__).warning("未找到 ffmpeg，部分浏览器视频转码能力不可用")
     yield

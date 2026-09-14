@@ -1,5 +1,7 @@
 from langchain_core.messages import AIMessage, ToolMessage
 
+import threading
+
 from config import load_config
 from harness.runtime import SeaVideoHarness, _Trace
 
@@ -72,4 +74,26 @@ def test_stream_converts_runtime_error_to_public_error_event():
     assert events[-1]['result']['state'] == 'error'
     assert 'provider unavailable' in events[-1]['message']
     assert events[-1]['result']['error'] == 'provider unavailable'
+
+
+def test_run_stops_between_frames_when_cancelled():
+    """中断信号置位后本轮以 cancelled 收尾，且不再消费后续帧。"""
+    cancel = threading.Event()
+    cancel.set()
+    runtime = _runtime_with_agent(_FakeAgent([
+        {'model': {'messages': [AIMessage(content='不该被消费的回答', id='answer-cancel')]}},
+    ]))
+    result = runtime.run('问题', thread_id='thread-cancel', cancel=cancel)
+    assert result['state'] == 'cancelled'
+    assert result['answer'] == ''
+    assert result['tool_records'] == []
+
+
+def test_run_without_cancel_signal_still_completes():
+    runtime = _runtime_with_agent(_FakeAgent([
+        {'model': {'messages': [AIMessage(content='回答文本', id='answer-ok')]}},
+    ]))
+    result = runtime.run('问题', thread_id='thread-ok', cancel=threading.Event())
+    assert result['state'] == 'completed'
+    assert result['answer'] == '回答文本'
 
