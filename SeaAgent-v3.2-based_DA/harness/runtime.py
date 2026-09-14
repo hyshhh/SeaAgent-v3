@@ -355,6 +355,7 @@ _BUILTIN_TOOL_LABELS = {
     "glob": "技能检索",
     "grep": "技能内容检索",
     "write_todos": "任务清单",
+    "task": "委派子智能体",
 }
 
 
@@ -366,6 +367,47 @@ def _tool_labels(config: dict[str, Any]) -> dict[str, str]:
             name = str(item["name"])
             labels[name] = str(item.get("label") or name)
     return labels
+
+
+def _load_subagents(config: dict[str, Any], tools: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """按 ``config/subagents.yaml`` 装配从智能体，返回（从智能体规格, 主智能体工具白名单）。
+
+    这里是主从协同的装配点，几条硬约束都来自 Deep Agents 官方语义：
+      · ``tools`` 不写就继承主智能体全部工具——所以逐个按名字显式取，名字写错就当场报错；
+      · ``skills`` 不继承，不写就一条技能都看不到，需要技能的从智能体必须自己声明；
+      · 从智能体默认隔离（只看得到 task 里那段描述），所以它的 system_prompt 必须自带输出契约。
+
+    主智能体的工具白名单（``master_tools``）是「主不查数据」的落地方式：只留它必须亲自调的工具，
+    其余全部下放。``show_evidence`` 必须留在主智能体——从智能体的内部调用不会回到主事件流，
+    下放它会让前端证据面板永远是空的。
+    """
+    import yaml
+
+    harness = config.get("harness", {})
+    spec_path = project_root() / str(harness.get("subagents_file", "config/subagents.yaml"))
+    if not spec_path.is_file():
+        raise RuntimeError(f"开启了主从协同但找不到从智能体配置：{spec_path}")
+    raw = yaml.safe_load(spec_path.read_text(encoding="utf-8")) or {}
+    by_name = {str(getattr(tool, "name", "")): tool for tool in tools}
+    subagents: list[dict[str, Any]] = []
+    for spec in raw.get("subagents") or []:
+        name = str(spec.get("name") or "").strip()
+        if not name:
+            raise ValueError("从智能体缺少 name")
+        wanted = [str(item) for item in (spec.get("tools") or [])]
+        missing = [item for item in wanted if item not in by_name]
+        if missing:
+            raise ValueError(f"从智能体 {name} 引用了未在 tools.yaml 声明的工具：{'、'.join(missing)}")
+        subagents.append({
+            "name": name,
+            "description": str(spec.get("description") or ""),
+            "system_prompt": str(spec.get("system_prompt") or ""),
+            "tools": [by_name[item] for item in wanted],
+            "skills": [str(path) for path in (spec.get("skills") or [])],
+        })
+    if not subagents:
+        raise ValueError(f"开启了主从协同但 {spec_path} 里没有 subagents")
+    return subagents, [str(item) for item in (raw.get("master_tools") or [])]
 
 
 def _filesystem_permissions(harness: dict[str, Any], permission_type: Any) -> list[Any] | None:
@@ -402,8 +444,15 @@ class SeaVideoHarness:
         self.model = model if model is not None and callable(getattr(model, "bind_tools", None)) else build_model(config)
         self.tools = build_tools(config, service)
         harness = config.get("harness", {})
-        prompt_file = project_root() / str(harness.get("system_prompt_file", "harness/system.md"))
-        self.system_prompt = prompt_file.read_text(encoding="utf-8")  # 系统提示词是文件而非配置项
+        # 主从协同：装配从智能体，并把主智能体的领域工具收窄到白名单（主只规划与汇总）
+        self.subagents, master_tools = ([], [])
+        if harness.get("subagents_enabled"):
+            self.subagents, master_tools = _load_subagents(config, self.tools)
+        agent_tools = [tool for tool in self.tools if str(getattr(tool, "name", "")) in master_tools] if self.subagents else self.tools
+        prompt_file = str(harness.get("planner_prompt_file", "harness/planner.md")) if self.subagents else str(harness.get("system_prompt_file", "harness/system.md"))
+        prompt_path = project_root() / prompt_file
+        self.system_prompt = prompt_path.read_text(encoding="utf-8")  # 系统提示词是文件而非配置项
+        self.agent_tools = agent_tools
         self._connection: sqlite3.Connection | None = None
         self.agent = self._build_agent()  # 构造即装配，后续多次调用共用同一 agent
 
@@ -452,11 +501,12 @@ class SeaVideoHarness:
         try:
             return create_deep_agent(
                 model=self.model,
-                tools=self.tools,
+                tools=self.agent_tools,
                 system_prompt=self.system_prompt,
                 skills=[skills_path],
                 backend=backend,
                 permissions=permissions,
+                subagents=self.subagents or None,
                 middleware=build_middleware(self.config, self.model),
                 checkpointer=saver,
                 name="sea_video_harness",

@@ -1,5 +1,11 @@
 harness:
   system_prompt_file: harness/system.md
+  # 主从协同时主智能体改读这份「规划者」提示词（见 harness/planner.md）
+  planner_prompt_file: harness/planner.md
+  # 主从协同开关：开启后按 subagents.yaml 装配从智能体，主智能体只保留 master_tools 里的工具。
+  # 关掉即退回单智能体（官方语义：禁用 general-purpose 且不传 subagents ⇒ 根本没有 task 工具）。
+  subagents_enabled: true
+  subagents_file: config/subagents.yaml
   execution_mode: single-agent-harness
   skills_dir: skills
   tools_file: config/tools.yaml
@@ -31,9 +37,10 @@ harness:
   - /skills
   - /skills/**
   # 仍然禁用的框架自带工具：写入、shell 与子智能体；主智能体只做 ReAct，不落地文件。
+  # 注意这里不再列 task：官方的做法是「关掉 general-purpose 且不传 subagents」⇒ 根本不会挂
+  # SubAgentMiddleware，也就没有 task 工具；开启主从协同时 task 必须是可用的。
   disabled_deepagent_tools:
   - write_file
   - edit_file
   - delete
   - execute
-  - task
