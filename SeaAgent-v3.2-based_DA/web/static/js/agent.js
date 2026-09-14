@@ -5,6 +5,7 @@ let harnessEventCount = 0;
 let harnessToolCount = 0;
 const harnessToolCards = new Map();
 const harnessSkillNames = new Set();
+let harnessSkillActivityCard = null;
 
 function useQuestion(text) {
   const input = document.getElementById('agentQuestion');
@@ -89,6 +90,7 @@ function resetThoughtStream() {
   harnessToolCount = 0;
   harnessToolCards.clear();
   harnessSkillNames.clear();
+  harnessSkillActivityCard = null;
   harnessResult = null;
   harnessEvidence = null;
   updateHarnessStats();
@@ -116,6 +118,20 @@ function appendStandardEvent(event, kind, icon, label, message) {
   row.className = `qa-event-row qa-${kind}`;
   row.innerHTML = `<span class="qa-event-icon" aria-hidden="true">${icon}</span><div class="qa-event-main"><div class="qa-event-title"><span>${escapeHtml(event.title || label)}</span><em class="qa-event-label">${escapeHtml(label)}</em></div><div class="qa-event-message">${escapeHtml(message || '')}</div></div><time class="qa-event-meta">${formatEventTime()}</time>`;
   stream.appendChild(row);
+  return row;
+}
+
+function updateSkillActivitySummary() {
+  const names = [...harnessSkillNames];
+  const message = names.length
+    ? `已挂载 ${names.length} 个 Skills · ${names.join('、')}`
+    : 'Skills 已挂载';
+  if (!harnessSkillActivityCard) {
+    harnessSkillActivityCard = appendStandardEvent({title: 'Skills 已注入'}, 'skill', '✦', 'SKILLS', message);
+    return;
+  }
+  const messageNode = harnessSkillActivityCard.querySelector('.qa-event-message');
+  if (messageNode) messageNode.textContent = message;
 }
 
 function createToolEvent(event) {
@@ -162,8 +178,8 @@ function appendHarnessEvent(event) {
   updateHarnessStats();
   if (event.type === 'skill') {
     appendSkillToInspector(event);
-    appendStandardEvent(event, 'skill', '✦', 'SKILL', event.message || 'Skill loaded');
-    setHarnessState(`Skill · ${event.skill || event.name || 'loaded'}`, 'running');
+    updateSkillActivitySummary();
+    setHarnessState(`Skills · ${harnessSkillNames.size} loaded`, 'running');
   } else if (event.type === 'tool_start') {
     createToolEvent(event);
     setHarnessState(`Tool · ${event.label || event.tool || 'running'}`, 'running');

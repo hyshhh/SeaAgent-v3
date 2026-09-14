@@ -16,7 +16,8 @@
 }
 #tab-agent-qa .qa-shell {
   width: auto;
-  min-height: calc(100vh - 188px);
+  height: calc(100vh - 138px);
+  min-height: 0;
   margin: -26px -32px -48px;
   color: var(--qa-ink);
   background: #fbfbfc;
@@ -106,9 +107,9 @@
 #tab-agent-qa #agentThinkingDot.failed,
 #tab-agent-qa #qaHeaderDot.failed { background: var(--qa-red); }
 #tab-agent-qa .qa-layout {
-  height: calc(100vh - 190px);
-  min-height: 520px;
-  max-height: calc(100vh - 190px);
+  height: calc(100vh - 138px);
+  min-height: 0;
+  max-height: calc(100vh - 138px);
   display: grid;
   grid-template-columns: minmax(0, 1fr) 318px;
 }
