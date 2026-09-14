@@ -1,13 +1,17 @@
 """智能体、记忆和证据接口。"""
 from __future__ import annotations
+
 import asyncio
 import json
 from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
+
 from agent import AgentController
 from web.models import AgentQuery
+
 router = APIRouter(tags=["agent-memory"])
 
 def _controller(request: Request, event_handler=None) -> AgentController:
@@ -39,18 +43,21 @@ async def stream_agent_query(body: AgentQuery, request: Request):
     async def events():
         loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue[dict] = asyncio.Queue()
+        error_emitted = False
 
         def emit(event: dict) -> None:
+            nonlocal error_emitted
+            error_emitted = error_emitted or event.get("type") == "error"
             loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
         async def execute() -> None:
             try:
                 result = await run_in_threadpool(_controller(request, emit).answer, body.question)
-                event_type = "complete" if result.get("success", False) else "error"
-                title = "Harness 完成" if event_type == "complete" else "Harness 未完成"
-                message = "最终回答与视觉证据已生成" if event_type == "complete" else str(result.get("error") or "未能生成完整回答")
-                await event_queue.put({"type": event_type, "title": title, "message": message, "result": result})
-            except Exception as error:
+                if result.get("success", False):
+                    await event_queue.put({"type": "complete", "title": "Harness 完成", "message": "最终回答与视觉证据已生成", "result": result})
+                elif not error_emitted:
+                    await event_queue.put({"type": "error", "title": "Harness 未完成", "message": str(result.get("error") or "未能生成完整回答"), "result": result})
+            except Exception as error:  # noqa: BLE001
                 message = str(error)
                 if len(message) > 240:
                     message = message[:240] + "…"

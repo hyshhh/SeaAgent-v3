@@ -1,16 +1,21 @@
 """先验库图片、CSV 与向量索引的一致性管理。"""
 from __future__ import annotations
+
 import shutil
 import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+
 import cv2
 import numpy as np
+
 from config import load_config
 from memory import MemoryRepository, normalize_hull_number
 from services import AgentLLMService, QwenMultimodalEmbedder
 from vector_store import VectorCatalog, stable_vector_id
+
 
 class ShipService:
     def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None):
@@ -150,7 +155,12 @@ class ShipService:
 
     def stats(self) -> dict[str, Any]:
         items = self.list_ships()
-        return {"total_ships": len(items), "total_reference_images": sum(len(item["references"]) for item in items)}
+        backend = self.config["registry"]["backend"]
+        return {
+            "total_ships": len(items),
+            "total_reference_images": sum(len(item["references"]) for item in items),
+            "backend": str(backend),
+        }
 
     @staticmethod
     def list_ships_by_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
