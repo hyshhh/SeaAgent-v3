@@ -7,12 +7,45 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Annotated
+
+from pydantic import BeforeValidator
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    """Accept provider JSON strings as well as native arrays for list arguments.
+
+    OpenAI-compatible providers occasionally serialize an array-valued tool
+    argument as a JSON string.  The public tool contract remains ``list[str]``
+    while this boundary normalizes that transport variation before validation.
+    """
+    import json
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return []
+        if candidate.startswith("["):
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError as error:
+                raise ValueError("expected a JSON array of strings") from error
+        elif "," in candidate:
+            value = [item.strip() for item in candidate.split(",")]
+        else:
+            value = [candidate]
+    if isinstance(value, (tuple, set)):
+        value = list(value)
+    if not isinstance(value, list):
+        raise ValueError("expected a list of strings")
+    if not all(isinstance(item, (str, int, float)) for item in value):
+        raise ValueError("expected a list of strings")
+    return [str(item) for item in value]
 
 
 def _type_for(spec: dict[str, Any]) -> Any:
     """把 yaml 的类型名映射成 Python 注解；未声明的类型退化为 Any，即不拦截参数。"""
-    return {"string": str, "integer": int, "number": float, "string_list": list[str], "tuple_float": tuple[float, float], "json": Any}.get(str(spec.get("type", "json")), Any)
+    return {"string": str, "integer": int, "number": float, "string_list": Annotated[list[str], BeforeValidator(_coerce_string_list)], "tuple_float": tuple[float, float], "json": Any}.get(str(spec.get("type", "json")), Any)
 
 def _build_schema(name: str, arguments: dict[str, Any]):
     """按声明动态生成 pydantic 参数模型，交给 LangChain 当工具的 args_schema。
