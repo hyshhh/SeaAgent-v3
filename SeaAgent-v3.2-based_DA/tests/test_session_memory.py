@@ -156,6 +156,47 @@ def test_appending_to_a_legacy_session_keeps_the_migrated_turn(tmp_path):
     assert [turn["question"] for turn in repository.get_session("session-old")["turns"]] == ["旧问题", "追问"]
 
 
+def _write_legacy_sessions(path, entries):
+    with open(path, "w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("session_id", "query_info", "final_result"))
+        writer.writeheader()
+        for session_id, question, answer in entries:
+            writer.writerow({
+                "session_id": session_id,
+                "query_info": json.dumps({"question": question}, ensure_ascii=False),
+                "final_result": json.dumps({"answerText": answer, "state": "completed"}, ensure_ascii=False),
+            })
+
+
+def test_legacy_sessions_survive_the_first_write(tmp_path):
+    """核心回归：旧列必须在任何写入之前迁移完，否则第一次写入就把历史会话抹成空壳。"""
+    paths = _paths(tmp_path)
+    _write_legacy_sessions(paths["qa_sessions_csv"], [("session-old", "舷号 0857 出现过吗？", "出现过一次")])
+    repository = MemoryRepository({"paths": paths})
+
+    repository.create_session("session-new", "新问题")
+
+    reopened = MemoryRepository({"paths": paths})
+    titles = {item["sessionId"]: (item["title"], item["turnCount"]) for item in reopened.list_sessions()}
+    assert titles["session-old"] == ("舷号 0857 出现过吗？", 1)
+    assert titles["session-new"] == ("新问题", 0)
+
+
+def test_unrecoverable_session_shells_are_dropped_on_load(tmp_path):
+    """既无标题也无轮次的行只会在会话栏里制造「未命名会话」，启动时清掉。"""
+    paths = _paths(tmp_path)
+    with open(paths["qa_sessions_csv"], "w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("session_id", "title", "created_at", "updated_at", "turns"))
+        writer.writeheader()
+        writer.writerow({"session_id": "session-shell", "title": "", "created_at": "", "updated_at": "", "turns": "[]"})
+        writer.writerow({"session_id": "session-real", "title": "真实问题", "created_at": "", "updated_at": "", "turns": "[]"})
+
+    repository = MemoryRepository({"paths": paths})
+
+    assert [item["sessionId"] for item in repository.list_sessions()] == ["session-real"]
+    assert repository.get_session("session-shell") is None
+
+
 def test_cancelled_run_is_kept_as_a_stopped_turn(agent, monkeypatch):
     """被停掉的那一轮仍留在会话里：问题不该凭空消失，回答位置写明已停止。"""
 

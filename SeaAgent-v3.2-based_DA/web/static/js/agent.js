@@ -185,6 +185,8 @@ async function loadSessions() {
   } catch (_error) {
     server = [];
   }
+  // 没有标题也没有轮次的会话点开就是空白，不进列表（服务端启动时也会清掉这类残壳）
+  server = server.filter((item) => item.title || Number(item.turnCount || 0) > 0);
   // 合并本地正在跑的会话：服务端可能刚建行、也可能还没轮到写列表
   const byId = new Map(server.map((item) => [item.sessionId, item]));
   for (const [id, run] of sessionRuns) {

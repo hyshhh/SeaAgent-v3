@@ -1,6 +1,7 @@
 """以 tracks 为主表的三层记忆仓库。"""
 from __future__ import annotations
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -8,6 +9,8 @@ from typing import Any, Iterable
 from config import load_config
 from memory.csv_store import CsvTable
 from memory.schema import KEYFRAME_FIELDS, QA_EVIDENCE_FIELDS, QA_ROUND_FIELDS, QA_SESSION_FIELDS, REGISTRY_FIELDS, REGISTRY_IMAGE_FIELDS, TRACK_FIELDS
+
+logger = logging.getLogger(__name__)
 
 def normalize_hull_number(value: str | None) -> str:
     return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", (value or "").strip()).upper()
@@ -44,6 +47,39 @@ class MemoryRepository:
         self.qa_sessions = CsvTable(paths["qa_sessions_csv"], QA_SESSION_FIELDS)
         self.qa_rounds = CsvTable(paths["qa_rounds_csv"], QA_ROUND_FIELDS)
         self.qa_evidence = CsvTable(paths["qa_evidence_csv"], QA_EVIDENCE_FIELDS)
+        self._migrate_qa_sessions()
+
+    def _migrate_qa_sessions(self) -> None:
+        """把旧格式会话升级成 turns 结构，并清掉无法还原的空壳行。
+
+        为什么必须抢在任何写入之前：CsvTable 整表按当前字段重写，旧列（query_info /
+        final_result）会被直接丢弃。先写后迁移的话，历史会话只剩一行空壳——标题、轮次、
+        时间全没，前端就显示成一堆「未命名会话」，且再也救不回来。
+        """
+        header = self.qa_sessions.header()
+        if not header:
+            return
+        rows = self.qa_sessions.rows()
+        migrated: list[dict[str, Any]] = []
+        dropped = 0
+        for row in rows:
+            turns = self._turns_of(row)
+            title = str(row.get("title") or (turns[0]["question"] if turns else "") or "")
+            if not title and not turns:
+                dropped += 1  # 既没标题也没轮次：点开也是空白，只会在列表里制造噪声
+                continue
+            migrated.append({
+                "session_id": row.get("session_id", ""),
+                "title": title,
+                "created_at": row.get("created_at") or "",
+                "updated_at": row.get("updated_at") or "",
+                "turns": _json(turns),
+            })
+        legacy = "turns" not in header
+        if not legacy and not dropped:
+            return
+        self.qa_sessions.replace_all(migrated, expect_stale_columns=True)
+        logger.info("问答会话已迁移：保留 %d 条，清理空壳 %d 条（原表头 %s）", len(migrated), dropped, ",".join(header))
 
     def upsert_track(self, track: dict[str, Any]) -> None:
         row = dict(track)
