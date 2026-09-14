@@ -14,6 +14,8 @@
   padding: 0;
   background: #fbfbfc;
 }
+/* 本页多处用 display 覆盖了元素默认样式，hidden 属性会被一并盖掉；这里统一兜住。 */
+#tab-agent-qa [hidden] { display: none !important; }
 #tab-agent-qa .qa-shell {
   /* 高度 = 视口 − （页眉 58 + 导航 44 + .page-shell 上下内边距 36）。
      这里曾经用 margin: -26px -32px -48px 去抵消 .page-shell 的内边距，
@@ -283,7 +285,7 @@
   flex: 1 1 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 34px clamp(22px, 7vw, 118px) 170px;
+  padding: 34px clamp(22px, 7vw, 118px) 140px;
   scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-gutter: stable;
@@ -394,28 +396,29 @@
 #tab-agent-qa .qa-trace-record strong { color: #4f6e5f; font-weight: 650; }
 #tab-agent-qa .qa-trace-record code { overflow: hidden; color: #8a9891; font: 9px/1.35 Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 #tab-agent-qa .qa-trace-record span { color: #9aaa9f; }
-#tab-agent-qa .qa-composer-wrap { position: absolute; right: 0; bottom: 0; left: 0; z-index: 4; padding: 22px clamp(18px, 6vw, 98px) 24px; pointer-events: none; background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.9) 28%, #fff 52%); }
-#tab-agent-qa .qa-composer { max-width: 860px; margin: 0 auto; padding: 11px 13px 10px; pointer-events: auto; border: 1px solid #d9dfe6; border-radius: 15px; background: rgba(255,255,255,.97); box-shadow: 0 9px 28px rgba(25, 45, 63, .11), 0 1px 3px rgba(25, 45, 63, .06); }
-#tab-agent-qa .qa-composer-topline { justify-content: space-between; gap: 10px; margin: 0 3px 6px; }
-#tab-agent-qa .qa-composer-label { color: #627181; font-size: 10px; font-weight: 650; }
-#tab-agent-qa .agent-preset-select { max-width: 210px; padding: 4px 7px; color: #748291; border: 0; outline: 0; background: transparent; font-size: 10px; cursor: pointer; }
-#tab-agent-qa .qa-composer textarea { width: 100%; min-height: 64px; max-height: 150px; box-sizing: border-box; padding: 8px 5px; resize: vertical; color: #263644; border: 0; outline: 0; background: transparent; font: 13px/1.55 "Segoe UI Variable", "Microsoft YaHei", sans-serif; }
+/* 输入区：单个紧凑圆角容器——上面一行输入，下面一行图标按钮与发送键，没有标题行与分隔线。 */
+#tab-agent-qa .qa-composer-wrap { position: absolute; right: 0; bottom: 0; left: 0; z-index: 4; padding: 18px clamp(18px, 6vw, 98px) 20px; pointer-events: none; background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.9) 28%, #fff 52%); }
+#tab-agent-qa .qa-composer { max-width: 860px; margin: 0 auto; padding: 9px 10px 8px 12px; pointer-events: auto; border: 1px solid #dde2e8; border-radius: 14px; background: rgba(255,255,255,.98); box-shadow: 0 6px 20px rgba(25, 45, 63, .09), 0 1px 2px rgba(25, 45, 63, .05); }
+#tab-agent-qa .qa-composer:focus-within { border-color: #c3d2de; box-shadow: 0 6px 22px rgba(25, 45, 63, .12), 0 0 0 3px rgba(47, 111, 159, .06); }
+#tab-agent-qa .agent-preset-select { width: auto; max-width: 116px; height: 28px; padding: 0 20px 0 8px; color: #6b7885; border: 0; border-radius: 8px; outline: 0; background: transparent; font-family: inherit; font-size: 11px; font-weight: 500; cursor: pointer; }
+#tab-agent-qa .agent-preset-select:hover,
+#tab-agent-qa .agent-preset-select:focus { color: #1f4f74; background: #f2f6f9; box-shadow: none; }
+#tab-agent-qa .qa-composer textarea { width: 100%; min-height: 26px; max-height: 132px; box-sizing: border-box; padding: 3px 2px 2px; overflow-y: auto; resize: none; color: #263644; border: 0; outline: 0; background: transparent; font: 13px/1.6 "Segoe UI Variable", "Microsoft YaHei", sans-serif; }
 #tab-agent-qa .qa-composer textarea::placeholder { color: #a5afb9; }
-#tab-agent-qa .qa-composer-actions { justify-content: space-between; gap: 12px; padding-top: 7px; border-top: 1px solid #f0f2f4; }
+#tab-agent-qa .qa-tool-button svg { width: 15px; height: 15px; }
+#tab-agent-qa .qa-composer-actions { justify-content: space-between; gap: 10px; padding-top: 3px; border-top: 0; }
 #tab-agent-qa .qa-composer-buttons { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-#tab-agent-qa .qa-stop-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 88px; padding: 8px 12px; color: #a4404a; border: 1px solid #ecc9cd; border-radius: 9px; background: #fff5f6; cursor: pointer; font-size: 11px; font-weight: 700; transition: background .16s ease, border-color .16s ease; }
-#tab-agent-qa .qa-stop-button:hover { border-color: #e0aab0; background: #ffecee; }
-#tab-agent-qa .qa-stop-button:disabled { cursor: progress; opacity: .7; }
-#tab-agent-qa .qa-composer-tools { display: flex; align-items: center; gap: 3px; min-width: 0; }
-#tab-agent-qa .qa-tool-button { padding: 5px 7px; color: #7c8995; border: 0; border-radius: 7px; background: transparent; cursor: pointer; font-size: 11px; }
+#tab-agent-qa .qa-send-button { width: 32px; height: 32px; min-width: 0; display: grid; place-items: center; padding: 0; color: #fff; border: 0; border-radius: 50%; background: #202a35; box-shadow: 0 3px 8px rgba(32, 42, 53, .2); cursor: pointer; font-size: 15px; font-weight: 700; line-height: 1; transition: background .16s ease, transform .16s ease; }
+#tab-agent-qa .qa-send-button:hover { background: #344657; transform: translateY(-1px); }
+#tab-agent-qa .qa-send-button:disabled { cursor: progress; opacity: .45; transform: none; box-shadow: none; }
+#tab-agent-qa .qa-stop-button { width: 32px; height: 32px; min-width: 0; display: grid; place-items: center; padding: 0; color: #fff; border: 0; border-radius: 50%; background: var(--qa-red); box-shadow: 0 3px 8px rgba(180, 79, 88, .26); cursor: pointer; font-size: 13px; line-height: 1; transition: background .16s ease; }
+#tab-agent-qa .qa-stop-button:hover { background: #9c3f48; }
+#tab-agent-qa .qa-stop-button:disabled { cursor: progress; opacity: .6; }
+#tab-agent-qa .qa-composer-tools { display: flex; align-items: center; gap: 2px; min-width: 0; }
+#tab-agent-qa .qa-tool-button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; color: #7c8995; border: 0; border-radius: 50%; background: transparent; cursor: pointer; font-size: 13px; line-height: 1; }
 #tab-agent-qa .qa-tool-button:hover { color: #416a89; background: #f2f6f9; }
 #tab-agent-qa .qa-tool-button-danger:hover { color: var(--qa-red); background: #fff4f4; }
-#tab-agent-qa .qa-tool-button span { margin-left: 3px; font-size: 10px; }
-#tab-agent-qa .qa-shortcut { margin-left: 7px; color: #a1acb6; font-size: 9px; white-space: nowrap; }
-#tab-agent-qa .qa-send-button { min-width: 126px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 8px 11px 8px 14px; color: #fff; border: 0; border-radius: 9px; background: #202a35; box-shadow: 0 4px 10px rgba(32,42,53,.18); cursor: pointer; font-size: 11px; font-weight: 700; transition: background .16s ease, transform .16s ease; }
-#tab-agent-qa .qa-send-button:hover { background: #344657; transform: translateY(-1px); }
-#tab-agent-qa .qa-send-button:disabled { cursor: wait; opacity: .65; transform: none; }
-#tab-agent-qa .qa-send-button b { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 6px; background: rgba(255,255,255,.16); font-size: 14px; line-height: 1; }
+#tab-agent-qa .qa-shortcut { margin: 0; color: #aab4be; font-size: 9px; white-space: nowrap; }
 #tab-agent-qa .qa-inspector {
   min-width: 0;
   max-width: 100%;
@@ -492,17 +495,14 @@
   #tab-agent-qa .qa-sessions { max-height: 196px; border-right: 0; border-bottom: 1px solid var(--qa-line); }
   #tab-agent-qa .qa-inspector { border-top: 1px solid var(--qa-line); border-left: 0; }
   #tab-agent-qa .qa-inspector-card { max-width: none; }
-  #tab-agent-qa .qa-conversation { padding: 24px 16px 175px; }
+  #tab-agent-qa .qa-conversation { padding: 24px 16px 145px; }
   #tab-agent-qa .qa-composer-wrap { padding: 16px 12px 14px; }
 }
 @media (max-width: 560px) {
   #tab-agent-qa .qa-brand p { display: none; }
   #tab-agent-qa .qa-user-bubble { max-width: 92%; }
-  #tab-agent-qa .qa-composer-topline { align-items: flex-start; flex-direction: column; gap: 2px; }
-  #tab-agent-qa .agent-preset-select { max-width: 100%; width: 100%; padding-left: 0; }
-  #tab-agent-qa .qa-composer-tools span:not(.qa-shortcut) { display: none; }
-  #tab-agent-qa .qa-shortcut { margin-left: 3px; }
-  #tab-agent-qa .qa-send-button { min-width: 104px; }
+  #tab-agent-qa .agent-preset-select { max-width: 88px; }
+  #tab-agent-qa .qa-shortcut { display: none; }
 }
 
 /* Evidence controls apply to the rendered previews without coupling the QA UI to a backend format. */

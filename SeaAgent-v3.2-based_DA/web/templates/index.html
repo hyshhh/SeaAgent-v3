@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
 <link rel="stylesheet" href="/static/css/academic.css?v=36">
-<link rel="stylesheet" href="/static/css/qa.css?v=6">
+<link rel="stylesheet" href="/static/css/qa.css?v=7">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -211,11 +211,14 @@
 
         <div class="qa-composer-wrap">
           <div class="qa-composer">
-            <div class="qa-composer-topline"><span class="qa-composer-label">Ask Sea-Video-Harness</span><select class="agent-preset-select" aria-label="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Try a preset question…</option><option value="舷号 0857 有没有在视频中出现？">Hull number query</option><option value="数据库中有没有黄色的无人艇？">Registry query</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Out-of-registry vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">In-registry vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance query</option></select></div>
-            <textarea id="agentQuestion" rows="3" placeholder="例如：数据库中有没有黄色的无人艇？">数据库中有没有黄色的无人艇？</textarea>
+            <textarea id="agentQuestion" rows="1" placeholder="问点什么，Ctrl / ⌘ + Enter 运行">数据库中有没有黄色的无人艇？</textarea>
             <div class="qa-composer-actions">
-              <div class="qa-composer-tools"><button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="Refresh memory summary">↻ <span>Refresh memory</span></button><button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="Clear QA memory">⌫ <span>Clear memory</span></button><span class="qa-shortcut">Ctrl / ⌘ + Enter to run</span></div>
-              <div class="qa-composer-buttons"><button type="button" class="qa-stop-button" id="btnStopAgent" onclick="stopAgentRun()" hidden>■ <span>停止</span></button><button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()"><span>Run Harness</span><b aria-hidden="true">↑</b></button></div>
+              <div class="qa-composer-tools">
+                <select class="agent-preset-select" aria-label="预设问题" title="预设问题" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">预设问题</option><option value="舷号 0857 有没有在视频中出现？">舷号查询</option><option value="数据库中有没有黄色的无人艇？">先验库查询</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">未在库船</option><option value="查找一下15:30到15:40有哪些在库船出现？">在库船</option><option value="从15:30到15:40一共出现多少艘船？">数量统计</option><option value="监控中什么时间出现过一艘黄色无人艇？">外观检索</option></select>
+                <button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="刷新记忆概览" aria-label="刷新记忆概览">↻</button>
+                <button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="清除问答记忆" aria-label="清除问答记忆"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></svg></button>
+              </div>
+              <div class="qa-composer-buttons"><span class="qa-shortcut">Ctrl / ⌘ + Enter</span><button type="button" class="qa-stop-button" id="btnStopAgent" onclick="stopAgentRun()" title="停止本轮" aria-label="停止本轮" hidden>■</button><button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()" title="运行（Ctrl / ⌘ + Enter）" aria-label="运行">↑</button></div>
             </div>
           </div>
         </div>
@@ -398,12 +401,13 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>Recognize Images &amp; Add to Registry</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>Select one to six reference images</strong><span>The first image is used to recognize the hull number and description.</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>Recognized Hull Number<input id="recHullNumber" type="text"></label><label>Recognized Description<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">Cancel</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">Recognize First Image</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">Confirm Add</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=8"></script>
-<script src="/static/js/pipeline.js?v=21"></script>
+<script src="/static/js/pipeline.js?v=22"></script>
   <script src="/static/js/memory.js?v=8"></script>
-<script src="/static/js/agent.js?v=77"></script>
+<script src="/static/js/agent.js?v=78"></script>
 <script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>
+
 
 
 

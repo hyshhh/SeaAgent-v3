@@ -27,6 +27,7 @@ function useQuestion(text) {
   if (input) {
     input.value = text;
     input.focus();
+    autoGrowComposer();
   }
 }
 
@@ -133,6 +134,14 @@ function resetActivityDom() {
   updateHarnessStats();
 }
 
+/* 输入框默认一行，随内容长高到上限为止（不用 CSS 的 field-sizing，兼容性还不齐）。 */
+function autoGrowComposer() {
+  const node = document.getElementById('agentQuestion');
+  if (!node) return;
+  node.style.height = 'auto';
+  node.style.height = `${Math.min(node.scrollHeight, 132)}px`;
+}
+
 /* 输入区的按钮随「当前会话是否在跑」切换：跑着的时候只能停，不能在同一个会话里再发一轮。 */
 function syncComposer(run) {
   const button = document.getElementById('btnAskAgent');
@@ -140,12 +149,11 @@ function syncComposer(run) {
   const running = run?.status === 'running';
   if (button) {
     button.disabled = running;
-    button.querySelector('span')?.replaceChildren(document.createTextNode(running ? 'Running…' : 'Run Harness'));
+    button.title = running ? '本轮进行中…' : '运行（Ctrl / ⌘ + Enter）';
   }
   if (stop) {
     stop.hidden = !running;
     stop.disabled = !running;
-    stop.querySelector('span')?.replaceChildren(document.createTextNode('停止'));
   }
 }
 
@@ -618,6 +626,9 @@ async function askAgent() {
   if (!currentSession || currentSession.sessionId !== sessionId) currentSession = {sessionId, title: question, turns: []};
   const run = {id: sessionId, question, events: [], result: null, error: null, status: 'running', stopping: false, controller: new AbortController()};
   sessionRuns.set(sessionId, run);
+  // 发出去就清空输入框并收回到一行，保持输入区紧凑
+  const input = document.getElementById('agentQuestion');
+  if (input) { input.value = ''; autoGrowComposer(); }
   renderView();
   // 新会话立刻进列表并打上「回答中」标记：不等服务端把行写出来
   await loadSessions();
@@ -660,10 +671,7 @@ async function stopAgentRun() {
   if (!run || run.status !== 'running') return;
   run.stopping = true;   // 先记意图：随后流无论是报错还是直接断，都按「已停止」处理
   const stop = document.getElementById('btnStopAgent');
-  if (stop) {
-    stop.disabled = true;
-    stop.querySelector('span')?.replaceChildren(document.createTextNode('停止中…'));
-  }
+  if (stop) stop.disabled = true;
   setHarnessState('Stopping…', 'running');
   try {
     // 先让服务端在当前步骤收尾，再断开前端这条流，避免它继续等到超时
@@ -679,6 +687,8 @@ document.addEventListener('DOMContentLoaded', () => {
   input?.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); askAgent(); }
   });
+  input?.addEventListener('input', autoGrowComposer);
+  autoGrowComposer();
   for (const id of ['evidenceImageScale', 'evidenceVideoScale', 'evidenceMaxItems']) {
     const control = document.getElementById(id);
     const output = document.getElementById(`${id}Value`);

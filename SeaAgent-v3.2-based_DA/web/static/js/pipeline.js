@@ -34,6 +34,8 @@ function switchTab(tabName) {
     if (typeof startMemoryAutoRefresh === 'function') startMemoryAutoRefresh();
   } else if (tabName === 'agent-qa') {
     if (typeof loadAgentMemorySummary === 'function') loadAgentMemorySummary();
+    // 输入框按内容自适应高度，隐藏时量不到 scrollHeight，因此切回来要重新量一次
+    if (typeof autoGrowComposer === 'function') autoGrowComposer();
   } else if (tabName === 'camera-demo') {
     onCameraSourceChange();
   } else if (tabName === 'database') {
