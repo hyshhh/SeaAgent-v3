@@ -6,6 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
 <link rel="stylesheet" href="/static/css/academic.css?v=36">
+<link rel="stylesheet" href="/static/css/qa.css?v=1">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -153,43 +154,93 @@
   </div>
 </section>
 <section class="tab-content" id="tab-agent-qa">
-  <div class="agent-workspace">
-    <div class="agent-query-grid">
-      <section class="panel agent-query-panel">
-        <div class="panel-head agent-query-head">
-          <div class="agent-query-mainline"><h2>Research Query</h2><select class="agent-preset-select" aria-label="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Preset Questions</option><option value="舷号 0857 有没有在视频中出现？">Hull Number Query</option><option value="数据库中有没有黄色的无人艇？">Registry Query</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Out-of-Registry Vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">In-Registry Vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel Count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance Query</option></select></div>
-          <div class="panel-actions agent-query-actions"><span class="round-limit" id="agentRoundLimit">Harness ready</span><button class="btn ghost btn-sm" id="agentMemoryRefreshButton" onclick="loadAgentMemorySummary(true)">Refresh</button><button class="btn danger btn-sm" id="agentMemoryClearButton" onclick="clearAgentMemory()">Clear Memory</button></div>
-        </div>
-        <div class="question-box agent-question-box">
-          <textarea id="agentQuestion" rows="2" placeholder="例如：数据库中有没有黄色的无人艇？">数据库中有没有黄色的无人艇？</textarea>
-          <div class="question-actions agent-question-submit"><button class="btn primary" id="btnAskAgent" onclick="askAgent()">Run Harness</button><span>Ctrl + Enter</span></div>
+  <div class="qa-shell">
+    <header class="qa-topbar">
+      <div class="qa-brand">
+        <span class="qa-brand-icon" aria-hidden="true">⌁</span>
+        <div><span class="qa-kicker">SEA-VIDEO-HARNESS</span><h2>Maritime Video QA</h2><p>Evidence-first analysis workspace</p></div>
+      </div>
+      <div class="qa-topbar-meta">
+        <span class="qa-runtime-badge"><i id="qaHeaderDot"></i><span id="qaHeaderStatus">Ready</span></span>
+        <span class="qa-session-meta" id="agentRoundLimit">Harness ready</span>
+      </div>
+    </header>
+
+    <div class="qa-layout">
+      <main class="qa-main" aria-label="Video question answering workspace">
+        <div class="qa-conversation" id="qaConversationScroll">
+          <div class="qa-welcome" id="qaWelcome">
+            <div class="qa-welcome-mark" aria-hidden="true">✦</div>
+            <span class="qa-kicker">VIDEO QA AGENT</span>
+            <h1>Ask about vessels in your videos.</h1>
+            <p>Use trajectory memory, registry knowledge and visual evidence together. Every answer keeps its evidence trail.</p>
+            <div class="qa-suggestion-row">
+              <button type="button" onclick="useQuestion('舷号 0857 有没有在视频中出现？')">Hull number <span>0857</span></button>
+              <button type="button" onclick="useQuestion('数据库中有没有黄色的无人艇？')">Registry <span>yellow vessels</span></button>
+              <button type="button" onclick="useQuestion('从15:30到15:40一共出现多少艘船？')">Count vessels <span>15:30–15:40</span></button>
+            </div>
+          </div>
+
+          <div class="qa-user-turn" id="qaUserTurn" hidden>
+            <div class="qa-user-bubble"><span class="qa-message-label">You</span><p id="qaUserQuestion"></p></div>
+          </div>
+
+          <section id="agentResultPanel" class="qa-activity" data-state="idle" aria-label="Harness activity">
+            <div class="qa-section-head">
+              <div><span class="qa-section-title"><i class="qa-live-indicator"></i>Harness activity</span><span id="agentResultHint">Public execution events only</span></div>
+              <strong id="agentThinkingState">Waiting</strong>
+            </div>
+            <div id="agentThoughtStream" class="qa-activity-scroll" aria-live="polite">
+              <div id="agentActivityStream" class="qa-activity-list"><div class="qa-empty-state">Activity will appear here when the harness starts.</div></div>
+            </div>
+          </section>
+
+          <section id="agentFinalView" class="qa-answer-card" hidden>
+            <div class="qa-answer-head"><div><span class="qa-answer-badge">ANSWER</span><span class="qa-answer-caption">Evidence-grounded response</span></div><strong id="agentIntentState">Complete</strong></div>
+            <div id="agentAnswer" class="qa-answer-text">The final answer will appear here after execution.</div>
+            <details id="agentToolDisclosure" class="qa-trace-disclosure" open>
+              <summary><span class="qa-summary-icon">↳</span><strong>Execution trace</strong><em id="agentToolSummary">Waiting for completion</em><b aria-hidden="true"></b></summary>
+              <div id="agentResultTools" class="qa-trace-list"></div>
+            </details>
+          </section>
         </div>
 
-        <section id="agentResultPanel" class="agent-response-panel agent-result-panel" data-state="idle">
-          <div class="agent-result-head"><div><span>Result</span><em id="agentResultHint">Harness events appear here in real time</em></div><b id="agentIntentState">Waiting</b></div>
-          <div id="agentFinalView" class="agent-final-view agent-result-final" hidden>
-            <details id="agentToolDisclosure" class="agent-result-disclosure agent-tool-disclosure" open><summary><strong>Tool records</strong><em id="agentToolSummary">Waiting for completion</em></summary><div id="agentResultTools" class="agent-result-tool-body"></div></details>
-            <div id="agentAnswer" class="agent-answer empty-state">The final answer will appear here after execution.</div>
+        <div class="qa-composer-wrap">
+          <div class="qa-composer">
+            <div class="qa-composer-topline"><span class="qa-composer-label">Ask Sea-Video-Harness</span><select class="agent-preset-select" aria-label="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Try a preset question…</option><option value="舷号 0857 有没有在视频中出现？">Hull number query</option><option value="数据库中有没有黄色的无人艇？">Registry query</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Out-of-registry vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">In-registry vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance query</option></select></div>
+            <textarea id="agentQuestion" rows="3" placeholder="例如：数据库中有没有黄色的无人艇？">数据库中有没有黄色的无人艇？</textarea>
+            <div class="qa-composer-actions">
+              <div class="qa-composer-tools"><button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="Refresh memory summary">↻ <span>Refresh memory</span></button><button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="Clear QA memory">⌫ <span>Clear memory</span></button><span class="qa-shortcut">Ctrl / ⌘ + Enter to run</span></div>
+              <button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()"><span>Run Harness</span><b aria-hidden="true">↑</b></button>
+            </div>
           </div>
-        </section>
-      </section>
-      <section class="panel agent-thinking-panel">
-        <div class="panel-head agent-collab-head"><div class="agent-collab-title"><h2>Harness activity</h2><span id="agentPlanMode">Skills · model · tools · evidence</span></div><div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">Waiting</strong></div></div>
-        <div id="agentThoughtStream" class="harness-activity-stream" aria-live="polite"><div id="agentActivityStream" class="agent-activity-stack"><div class="agent-result-empty">No activity yet.</div></div></div>
-      </section>
-    </div>
-    <section class="panel evidence-panel evidence-panel-wide">
-      <div class="panel-head evidence-panel-head evidence-toolbar">
-        <div class="evidence-toolbar-title"><span class="eyebrow">Experimental Evidence</span><h3>Multimodal Evidence Records</h3></div>
-        <div id="evidenceDisplaySettings" class="evidence-display-settings evidence-display-inline">
-          <label title="Scale and cache video evidence previews">Video Scale<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output></label>
-          <label title="Scale keyframe and registry reference previews">Image Scale<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output></label>
-          <label title="Enter 0 to display all results">Max Items<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">All</output></label>
         </div>
-        <span id="evidenceResultCount" class="round-limit evidence-result-count">Waiting for query</span>
-      </div>
-      <div id="evidenceGallery" class="evidence-track-list"><div class="evidence-track-empty">No evidence available</div></div>
-    </section>
+      </main>
+
+      <aside class="qa-inspector" aria-label="Harness inspector">
+        <section class="qa-inspector-card qa-status-card">
+          <div class="qa-inspector-heading"><span>Run status</span><i id="agentThinkingDot"></i></div>
+          <strong id="qaInspectorState">Ready to inspect</strong>
+          <p>Skills, tools and evidence are kept visible without exposing hidden chain-of-thought.</p>
+          <div class="qa-stat-grid"><div><b id="qaEventCount">0</b><span>events</span></div><div><b id="qaSkillCount">0</b><span>skills</span></div><div><b id="qaToolCount">0</b><span>tools</span></div></div>
+        </section>
+
+        <section class="qa-inspector-card">
+          <div class="qa-inspector-heading"><span>Loaded skills</span><span class="qa-muted">progressive disclosure</span></div>
+          <div id="qaSkillList" class="qa-skill-list"><div class="qa-inspector-empty">Skills load with the harness.</div></div>
+        </section>
+
+        <section class="qa-inspector-card qa-evidence-card">
+          <div class="qa-inspector-heading"><span>Evidence</span><span id="evidenceResultCount" class="qa-muted">Waiting</span></div>
+          <div class="qa-evidence-toolbar">
+            <label>Image<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output></label>
+            <label>Video<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output></label>
+            <label>Max<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">All</output></label>
+          </div>
+          <div id="evidenceGallery" class="qa-evidence-gallery"><div class="qa-inspector-empty">No evidence available.</div></div>
+        </section>
+      </aside>
+    </div>
   </div>
 </section>
 <section class="tab-content" id="tab-database">
