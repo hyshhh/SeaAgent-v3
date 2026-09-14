@@ -34,12 +34,19 @@ function formatEventTime() {
   return new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 }
 
-/* 会话时间戳由后端给 ISO-8601（带时区），这里统一收成 MM-DD HH:mm。 */
+/* 会话时间戳由后端给 ISO-8601（带时区）；旧格式会话没有时间戳，返回空串让调用方省掉这一段。 */
 function formatSessionTime(value) {
   const date = new Date(String(value || ''));
-  if (Number.isNaN(date.getTime())) return '—';
+  if (!value || Number.isNaN(date.getTime())) return '';
   const pad = (number) => String(number).padStart(2, '0');
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/* 会话条目的副标题：有时间的显示「时间 · N 轮」，没时间的只留「N 轮」。 */
+function sessionMeta(session) {
+  const stamp = formatSessionTime(session?.updatedAt);
+  const turns = Number(session?.turnCount || 0);
+  return [stamp, `${turns} 轮`].filter(Boolean).join(' · ');
 }
 
 function setHarnessState(label, state = '') {
@@ -113,18 +120,23 @@ function resetThoughtStream() {
 
 function renderSessionList() {
   const list = document.getElementById('qaSessionList');
+  const count = document.getElementById('qaSessionCount');
+  if (count) count.textContent = String(sessionSummaries.length);
   if (!list) return;
   if (!sessionSummaries.length) {
-    list.innerHTML = '<div class="qa-inspector-empty">暂无会话记录</div>';
+    list.innerHTML = '<div class="qa-sessions-empty">还没有会话。提一个问题，对话就会出现在这里。</div>';
     return;
   }
   list.innerHTML = sessionSummaries.map((session) => {
     const active = session.sessionId === currentSessionId ? ' is-active' : '';
-    const turns = Number(session.turnCount || 0);
+    const title = session.title || '未命名会话';
     return `<div class="qa-session-item${active}" role="button" tabindex="0" data-session-id="${escapeHtml(session.sessionId)}" onclick="openSession(this.dataset.sessionId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSession(this.dataset.sessionId);}">
-      <strong title="${escapeHtml(session.title || '未命名会话')}">${escapeHtml(session.title || '未命名会话')}</strong>
-      <small>${escapeHtml(formatSessionTime(session.updatedAt))} · ${turns} 轮</small>
-      <button type="button" class="qa-session-delete" title="删除该会话" onclick="event.stopPropagation();deleteSession(this.closest('.qa-session-item').dataset.sessionId)">✕</button>
+      <span class="qa-session-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.3-.6L3 21l1.7-4.6A8.3 8.3 0 0 1 3.6 11.5 8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z"/></svg></span>
+      <div class="qa-session-body">
+        <strong class="qa-session-name">${escapeHtml(title)}</strong>
+        <small class="qa-session-note">${escapeHtml(sessionMeta(session))}</small>
+      </div>
+      <button type="button" class="qa-session-delete" title="删除该会话" aria-label="删除该会话" onclick="event.stopPropagation();deleteSession(this.closest('.qa-session-item').dataset.sessionId)">×</button>
     </div>`;
   }).join('');
 }

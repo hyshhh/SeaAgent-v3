@@ -197,9 +197,12 @@ class MemoryRepository:
         return self._session_record(rows[0]) if rows else None
 
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
-        """会话摘要列表，最近更新的在前；摘要不含 turns 正文，避免列表接口搬运大字段。"""
+        """会话摘要列表，最近更新的在前；摘要不含 turns 正文，避免列表接口搬运大字段。
+
+        排序键带 session_id 兜底：旧格式会话没有时间戳，否则同为空值时顺序会随读取次序抖动。
+        """
         records = [self._session_record(row, include_turns=False) for row in self.qa_sessions.rows()]
-        records.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+        records.sort(key=lambda item: (str(item.get("updatedAt") or ""), str(item.get("sessionId") or "")), reverse=True)
         return records[:limit] if limit and limit > 0 else records
 
     def append_turn(self, session_id: str, question: str, result: dict[str, Any]) -> int:
@@ -207,8 +210,8 @@ class MemoryRepository:
         rows = self.qa_sessions.find(lambda row: row["session_id"] == session_id)
         now = _now()
         row = rows[0] if rows else {"session_id": session_id, "title": _title(question), "created_at": now, "updated_at": now, "turns": "[]"}
-        turns = _loads(row.get("turns", ""), [])
-        turns = turns if isinstance(turns, list) else []
+        # 旧格式会话可能只有 query_info：先迁移出已有轮次，再把本轮追加在后面，避免覆盖旧记录
+        turns = self._turns_of(row)
         turns.append(self._turn_record(question, result, now))
         self.qa_sessions.upsert({"session_id": session_id, "title": row.get("title") or _title(question), "created_at": row.get("created_at") or now, "updated_at": now, "turns": _json(turns)}, "session_id")
         return len(turns)
@@ -242,15 +245,35 @@ class MemoryRepository:
             "evidence": {key: list(evidence.get(key) or []) for key in ("shownKeyframeIds", "shownShipSegmentIds", "shownRegistryReferenceIds")},
         }
 
-    @staticmethod
-    def _session_record(row: dict[str, str], include_turns: bool = True) -> dict[str, Any]:
+    @classmethod
+    def _turns_of(cls, row: dict[str, str]) -> list[dict[str, Any]]:
+        """取会话的轮次列表；旧格式行（一问一会话）就地迁移成一轮，避免历史会话显示成空壳。"""
         turns = _loads(row.get("turns", ""), [])
-        turns = turns if isinstance(turns, list) else []
+        if isinstance(turns, list) and turns:
+            return turns
+        return cls._legacy_turns(row)
+
+    @classmethod
+    def _legacy_turns(cls, row: dict[str, str]) -> list[dict[str, Any]]:
+        """把 v3.2 早期 ``query_info`` / ``final_result`` 两列迁移成本轮次。"""
+        query = _loads(row.get("query_info", ""), {})
+        result = _loads(row.get("final_result", ""), {})
+        question = str((query or {}).get("question") or "") if isinstance(query, dict) else ""
+        result = result if isinstance(result, dict) else {}
+        if not question and not result:
+            return []
+        return [cls._turn_record(question, result, "")]
+
+    @classmethod
+    def _session_record(cls, row: dict[str, str], include_turns: bool = True) -> dict[str, Any]:
+        turns = cls._turns_of(row)
+        # 标题为空时退回首轮问题：旧格式会话没有 title 列，只有问题可认
+        title = str(row.get("title") or (turns[0]["question"] if turns else "") or "")
         record = {
             "sessionId": row.get("session_id", ""),
-            "title": row.get("title", ""),
-            "createdAt": row.get("created_at", ""),
-            "updatedAt": row.get("updated_at", ""),
+            "title": title,
+            "createdAt": row.get("created_at") or "",
+            "updatedAt": row.get("updated_at") or "",
             "turnCount": len(turns),
         }
         if include_turns:

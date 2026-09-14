@@ -1,4 +1,7 @@
 """会话记忆：仓库层的轮次存档，以及控制器把「追问」接到同一个 thread 上。"""
+import csv
+import json
+
 import pytest
 from fastapi import HTTPException
 
@@ -117,3 +120,35 @@ def test_agent_query_accepts_both_session_id_spellings():
     assert AgentQuery(question="问题", sessionId="session-abc").session_id == "session-abc"
     assert AgentQuery(question="问题", session_id="session-abc").session_id == "session-abc"
     assert AgentQuery(question="问题").session_id is None
+
+
+def test_legacy_session_rows_are_migrated_on_read(tmp_path):
+    """旧格式（一问一会话）的行必须能读出标题与轮次，否则会话栏全是「未命名会话」。"""
+    paths = _paths(tmp_path)
+    with open(paths["qa_sessions_csv"], "w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("session_id", "query_info", "final_result"))
+        writer.writeheader()
+        writer.writerow({
+            "session_id": "session-old",
+            "query_info": json.dumps({"question": "15:30 有几艘船？"}, ensure_ascii=False),
+            "final_result": json.dumps({"answerText": "三艘", "state": "completed"}, ensure_ascii=False),
+        })
+    repository = MemoryRepository({"paths": paths})
+
+    session = repository.get_session("session-old")
+    assert session["title"] == "15:30 有几艘船？"
+    assert session["turnCount"] == 1
+    assert session["turns"][0]["answer"] == "三艘"
+    assert repository.list_sessions()[0]["turnCount"] == 1
+
+
+def test_appending_to_a_legacy_session_keeps_the_migrated_turn(tmp_path):
+    paths = _paths(tmp_path)
+    with open(paths["qa_sessions_csv"], "w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("session_id", "query_info", "final_result"))
+        writer.writeheader()
+        writer.writerow({"session_id": "session-old", "query_info": json.dumps({"question": "旧问题"}, ensure_ascii=False), "final_result": "{}"})
+    repository = MemoryRepository({"paths": paths})
+
+    assert repository.append_turn("session-old", "追问", {"answerText": "答", "state": "completed"}) == 2
+    assert [turn["question"] for turn in repository.get_session("session-old")["turns"]] == ["旧问题", "追问"]
