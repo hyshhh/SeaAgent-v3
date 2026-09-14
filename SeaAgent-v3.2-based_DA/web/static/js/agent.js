@@ -6,6 +6,10 @@ let harnessToolCount = 0;
 const harnessToolCards = new Map();
 const harnessSkillNames = new Set();
 let harnessSkillActivityCard = null;
+/* 会话状态：currentSessionId 为 null 表示下一轮问答会开一段新会话，否则在该会话里追问。 */
+let currentSessionId = null;
+let currentSession = null;
+let sessionSummaries = [];
 
 function useQuestion(text) {
   const input = document.getElementById('agentQuestion');
@@ -28,6 +32,14 @@ function compact(value, limit = 600) {
 
 function formatEventTime() {
   return new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+}
+
+/* 会话时间戳由后端给 ISO-8601（带时区），这里统一收成 MM-DD HH:mm。 */
+function formatSessionTime(value) {
+  const date = new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) return '—';
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function setHarnessState(label, state = '') {
@@ -96,6 +108,162 @@ function resetThoughtStream() {
   updateHarnessStats();
   setHarnessState('Running', 'running');
 }
+
+/* ---------------------------------------------------------------- 会话记忆 */
+
+function renderSessionList() {
+  const list = document.getElementById('qaSessionList');
+  if (!list) return;
+  if (!sessionSummaries.length) {
+    list.innerHTML = '<div class="qa-inspector-empty">暂无会话记录</div>';
+    return;
+  }
+  list.innerHTML = sessionSummaries.map((session) => {
+    const active = session.sessionId === currentSessionId ? ' is-active' : '';
+    const turns = Number(session.turnCount || 0);
+    return `<div class="qa-session-item${active}" role="button" tabindex="0" data-session-id="${escapeHtml(session.sessionId)}" onclick="openSession(this.dataset.sessionId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSession(this.dataset.sessionId);}">
+      <strong title="${escapeHtml(session.title || '未命名会话')}">${escapeHtml(session.title || '未命名会话')}</strong>
+      <small>${escapeHtml(formatSessionTime(session.updatedAt))} · ${turns} 轮</small>
+      <button type="button" class="qa-session-delete" title="删除该会话" onclick="event.stopPropagation();deleteSession(this.closest('.qa-session-item').dataset.sessionId)">✕</button>
+    </div>`;
+  }).join('');
+}
+
+async function loadSessions() {
+  try {
+    const response = await fetch('/api/agent/sessions');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
+    sessionSummaries = Array.isArray(data?.sessions) ? data.sessions : [];
+  } catch (_error) {
+    sessionSummaries = [];
+  }
+  renderSessionList();
+  return sessionSummaries;
+}
+
+async function fetchSession(sessionId) {
+  if (!sessionId) return null;
+  const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
+  return data;
+}
+
+/* 已往轮次只展示问答对：工具明细属于当轮实时事件流，历史里保留工具名序列足够定位。 */
+function renderSessionHistory(session) {
+  const node = document.getElementById('qaSessionHistory');
+  if (!node) return;
+  const turns = Array.isArray(session?.turns) ? session.turns : [];
+  const past = turns.slice(0, -1);
+  if (!past.length) {
+    node.hidden = true;
+    node.innerHTML = '';
+    return;
+  }
+  const shown = past.slice(-6);
+  const folded = past.length - shown.length;
+  const head = folded > 0 ? `<div class="qa-history-more">已折叠较早的 ${folded} 轮对话</div>` : '';
+  node.innerHTML = head + shown.map((turn) => `<article class="qa-history-item">
+      <span>You</span>
+      <p>${escapeHtml(turn.question || '')}</p>
+      <span>Harness</span>
+      <p class="qa-history-answer">${escapeHtml(compact(turn.answer || turn.state || '（该轮未留下回答）', 420))}</p>
+    </article>`).join('');
+  node.hidden = false;
+}
+
+/* 把某一轮问答还原到主面板：回答、工具名序列与证据都来自会话存档。 */
+function renderRestoredTurn(turn) {
+  const view = document.getElementById('agentFinalView');
+  const answer = document.getElementById('agentAnswer');
+  if (view) view.hidden = false;
+  if (answer) answer.textContent = turn?.answer || '（该轮未留下回答）';
+  const summary = document.getElementById('agentToolSummary');
+  const tools = document.getElementById('agentResultTools');
+  const chain = Array.isArray(turn?.toolChain) ? turn.toolChain : [];
+  if (summary) summary.textContent = chain.length ? `${chain.length} tool call${chain.length === 1 ? '' : 's'} · from session memory` : 'No tool records.';
+  if (tools) {
+    tools.innerHTML = chain.length
+      ? chain.map((name) => `<article class="qa-trace-record"><strong>${escapeHtml(name)}</strong><span>completed</span></article>`).join('')
+      : '<div class="qa-inspector-empty">这轮没有留下工具调用记录。</div>';
+  }
+  renderEvidence(turn?.evidence || null);
+  setHarnessState(turn?.state === 'error' ? 'Failed' : 'Restored', turn?.state === 'error' ? 'failed' : 'complete');
+}
+
+async function openSession(sessionId) {
+  if (!sessionId) return;
+  try {
+    const session = await fetchSession(sessionId);
+    currentSession = session;
+    currentSessionId = session.sessionId;
+    renderSessionList();
+    resetThoughtStream();
+    const turns = Array.isArray(session.turns) ? session.turns : [];
+    const last = turns[turns.length - 1] || null;
+    renderRestoredTurn(last);
+    renderSessionHistory(session);
+    const questionNode = document.getElementById('qaUserQuestion');
+    if (questionNode) questionNode.textContent = last?.question || '';
+    const welcome = document.getElementById('qaWelcome');
+    if (welcome) welcome.hidden = true;
+    const userTurn = document.getElementById('qaUserTurn');
+    if (userTurn) userTurn.hidden = false;
+    scrollConversation(true);
+    scrollActivity(true);
+  } catch (error) {
+    if (typeof showToast === 'function') showToast(error.message, 'error');
+  }
+}
+
+function startNewSession() {
+  currentSessionId = null;
+  currentSession = null;
+  renderSessionList();
+  resetThoughtStream();
+  const history = document.getElementById('qaSessionHistory');
+  if (history) { history.hidden = true; history.innerHTML = ''; }
+  const welcome = document.getElementById('qaWelcome');
+  if (welcome) welcome.hidden = false;
+  const userTurn = document.getElementById('qaUserTurn');
+  if (userTurn) userTurn.hidden = true;
+  const answer = document.getElementById('agentAnswer');
+  if (answer) answer.textContent = 'The final answer will appear here after execution.';
+  const tools = document.getElementById('agentResultTools');
+  if (tools) tools.innerHTML = '<div class="qa-inspector-empty">No tool records.</div>';
+  setHarnessState('Ready', '');
+}
+
+async function deleteSession(sessionId) {
+  if (!sessionId) return;
+  try {
+    const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, {method: 'DELETE'});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
+    if (currentSessionId === sessionId) startNewSession();
+    await loadSessions();
+    if (typeof showToast === 'function') showToast('会话已删除');
+  } catch (error) {
+    if (typeof showToast === 'function') showToast(error.message, 'error');
+  }
+}
+
+/* 一轮问答结束后刷新会话栏，并把刚结束的那轮挤出历史区（主面板已经在展示它）。 */
+async function refreshCurrentSession() {
+  await loadSessions();
+  if (currentSessionId) {
+    try {
+      currentSession = await fetchSession(currentSessionId);
+      renderSessionHistory(currentSession);
+    } catch (_error) {
+      /* 会话栏刷新失败不影响已经渲染好的本轮回答 */
+    }
+  }
+  renderSessionList();
+}
+
+/* ---------------------------------------------------------------- 事件渲染 */
 
 function appendSkillToInspector(event) {
   const name = String(event.skill || event.name || event.title || '').trim();
@@ -172,6 +340,11 @@ function completeToolEvent(event) {
   }
 }
 
+/* 证据工具一返回就刷新证据面板，不必等整轮结束——中间件保证收尾前一定会调用它。 */
+function isEvidencePayload(result) {
+  return !!result && typeof result === 'object' && ['shownKeyframeIds', 'shownShipSegmentIds', 'shownRegistryReferenceIds'].some((key) => Array.isArray(result[key]));
+}
+
 function appendHarnessEvent(event) {
   if (!event || !event.type) return;
   harnessEventCount += 1;
@@ -185,6 +358,7 @@ function appendHarnessEvent(event) {
     setHarnessState(`Tool · ${event.label || event.tool || 'running'}`, 'running');
   } else if (event.type === 'tool_result') {
     completeToolEvent(event);
+    if (isEvidencePayload(event.result)) renderEvidence(event.result);
     setHarnessState('Tool complete', 'running');
   } else if (event.type === 'model') {
     appendStandardEvent(event, 'model', '◌', 'MODEL', event.message || 'Public model step updated');
@@ -269,11 +443,8 @@ async function clearAgentMemory() {
     const response = await fetch('/api/agent/memory', {method: 'DELETE'});
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
-    resetThoughtStream();
-    const welcome = document.getElementById('qaWelcome');
-    const userTurn = document.getElementById('qaUserTurn');
-    if (welcome) welcome.hidden = false;
-    if (userTurn) userTurn.hidden = true;
+    startNewSession();
+    await loadSessions();
     setHarnessState('Ready', '');
     if (typeof showToast === 'function') showToast('QA memory cleared');
   } catch (error) {
@@ -281,8 +452,10 @@ async function clearAgentMemory() {
   }
 }
 
-async function streamAgentQuery(question) {
-  const response = await fetch('/api/agent/query/stream', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question})});
+async function streamAgentQuery(question, sessionId) {
+  const payload = {question};
+  if (sessionId) payload.sessionId = sessionId;
+  const response = await fetch('/api/agent/query/stream', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `Request failed: ${response.status}`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -323,7 +496,7 @@ async function askAgent() {
   if (button) { button.disabled = true; button.querySelector('span')?.replaceChildren(document.createTextNode('Running…')); }
   setHarnessState('Running', 'running');
   try {
-    harnessResult = await streamAgentQuery(question);
+    harnessResult = await streamAgentQuery(question, currentSessionId);
     renderAgentAnswer(harnessResult);
   } catch (error) {
     if (!error.harnessEventRendered) appendHarnessEvent({type: 'error', title: 'Harness 执行失败', message: error.message});
@@ -331,6 +504,9 @@ async function askAgent() {
     if (typeof showToast === 'function') showToast(error.message, 'error');
   } finally {
     if (button) { button.disabled = false; button.querySelector('span')?.replaceChildren(document.createTextNode('Run Harness')); }
+    // 后端每轮都会把问答写进会话，拿到 sessionId 后即成为当前会话，后续提问就是追问
+    if (harnessResult?.sessionId) currentSessionId = harnessResult.sessionId;
+    await refreshCurrentSession();
   }
 }
 
@@ -348,4 +524,5 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   loadAgentMemorySummary();
+  loadSessions();
 });

@@ -37,7 +37,7 @@ async def _evidence_image_response(request: Request, image_path: Path, scale: fl
 
 @router.post("/api/agent/query")
 async def query_agent(body: AgentQuery, request: Request):
-    return await run_in_threadpool(_controller(request).answer, body.question)
+    return await run_in_threadpool(_controller(request).answer, body.question, body.session_id)
 
 
 @router.post("/api/agent/query/stream")
@@ -56,7 +56,7 @@ async def stream_agent_query(body: AgentQuery, request: Request):
 
         async def execute() -> None:
             try:
-                result = await run_in_threadpool(_controller(request, emit).answer, body.question)
+                result = await run_in_threadpool(_controller(request, emit).answer, body.question, body.session_id)
                 if terminal_seen.is_set():
                     return
                 if result.get("success", False):
@@ -111,6 +111,27 @@ async def stream_agent_query(body: AgentQuery, request: Request):
 async def clear_agent_memory(request: Request):
     result = await run_in_threadpool(request.app.state.memory_manager.clear_qa_memory)
     return {"success": True, "message": "问答记忆已清除", "data": result}
+
+@router.get("/api/agent/sessions")
+async def list_agent_sessions(request: Request, limit: int = 50):
+    """会话摘要列表，最近更新的在前；不含轮次正文。"""
+    sessions = await run_in_threadpool(request.app.state.repository.list_sessions, limit)
+    return {"sessions": sessions, "total": len(sessions)}
+
+@router.get("/api/agent/sessions/{session_id}")
+async def get_agent_session(session_id: str, request: Request):
+    """单个会话的完整记录（含每轮问答），供前端还原对话并继续追问。"""
+    session = await run_in_threadpool(request.app.state.repository.get_session, session_id)
+    if not session:
+        raise HTTPException(404, "会话不存在")
+    return session
+
+@router.delete("/api/agent/sessions/{session_id}")
+async def delete_agent_session(session_id: str, request: Request):
+    removed = await run_in_threadpool(request.app.state.repository.delete_session, session_id)
+    if not removed:
+        raise HTTPException(404, "会话不存在")
+    return {"success": True, "message": "会话已删除", "data": {"sessionId": session_id}}
 
 @router.get("/api/agent/memory-summary")
 async def memory_summary(request: Request):

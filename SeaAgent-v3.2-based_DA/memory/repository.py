@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Iterable
 from config import load_config
 from memory.csv_store import CsvTable
@@ -22,6 +23,15 @@ def _loads(value: str, default: Any) -> Any:
 
 def _bool(value: str | bool) -> bool:
     return value is True or str(value).lower() in {"1", "true", "yes"}
+
+def _now() -> str:
+    """会话时间戳统一用带时区的 ISO-8601，前端可直接交给 Date 解析。"""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+def _title(question: str) -> str:
+    """会话标题取首个问题，过长时截断——列表只用来认人，不承载完整语义。"""
+    text = " ".join(str(question or "").split())
+    return text if len(text) <= 60 else text[:60] + "…"
 
 class MemoryRepository:
     def __init__(self, config: dict[str, Any] | None = None):
@@ -173,19 +183,79 @@ class MemoryRepository:
         self.qa_evidence.replace_all([])
         return summary
 
-    def add_session(self, session_id: str, query_info: dict[str, Any]) -> None:
-        self.qa_sessions.upsert({"session_id": session_id, "query_info": _json(query_info), "final_result": ""}, "session_id")
+    # —— 对话记忆：一个会话一行，turns 里按顺序存每一轮问答 ——
 
-    def finish_session(self, session_id: str, result: dict[str, Any]) -> None:
+    def create_session(self, session_id: str, question: str) -> dict[str, Any]:
+        """新建会话：标题取首个问题，时间戳与轮次列表一并初始化。"""
+        now = _now()
+        self.qa_sessions.upsert({"session_id": session_id, "title": _title(question), "created_at": now, "updated_at": now, "turns": "[]"}, "session_id")
+        return {"sessionId": session_id, "title": _title(question), "createdAt": now, "updatedAt": now, "turnCount": 0}
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        """读会话完整记录（含每轮问答）；不存在返回 None，调用方据此判断是新会话还是追问。"""
         rows = self.qa_sessions.find(lambda row: row["session_id"] == session_id)
-        query_info = rows[0]["query_info"] if rows else "{}"
-        self.qa_sessions.upsert({"session_id": session_id, "query_info": query_info, "final_result": _json(result)}, "session_id")
+        return self._session_record(rows[0]) if rows else None
+
+    def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
+        """会话摘要列表，最近更新的在前；摘要不含 turns 正文，避免列表接口搬运大字段。"""
+        records = [self._session_record(row, include_turns=False) for row in self.qa_sessions.rows()]
+        records.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+        return records[:limit] if limit and limit > 0 else records
+
+    def append_turn(self, session_id: str, question: str, result: dict[str, Any]) -> int:
+        """把一轮问答追加进会话并刷新 updated_at，返回轮次序号（从 1 开始）。"""
+        rows = self.qa_sessions.find(lambda row: row["session_id"] == session_id)
+        now = _now()
+        row = rows[0] if rows else {"session_id": session_id, "title": _title(question), "created_at": now, "updated_at": now, "turns": "[]"}
+        turns = _loads(row.get("turns", ""), [])
+        turns = turns if isinstance(turns, list) else []
+        turns.append(self._turn_record(question, result, now))
+        self.qa_sessions.upsert({"session_id": session_id, "title": row.get("title") or _title(question), "created_at": row.get("created_at") or now, "updated_at": now, "turns": _json(turns)}, "session_id")
+        return len(turns)
+
+    def delete_session(self, session_id: str) -> bool:
+        """删除会话与其轮次、证据明细；返回会话是否真的被删掉。"""
+        removed = self.qa_sessions.delete(lambda row: row["session_id"] == session_id)
+        self.qa_rounds.delete(lambda row: row["session_id"] == session_id)
+        self.qa_evidence.delete(lambda row: str(row.get("round_id", "")).startswith(f"{session_id}-round-"))
+        return bool(removed)
 
     def add_round(self, round_id: str, session_id: str, plan: dict[str, Any], reflection: dict[str, Any]) -> None:
         self.qa_rounds.upsert({"round_id": round_id, "session_id": session_id, "plan": _json(plan), "reflection": _json(reflection)}, "round_id")
 
     def add_evidence(self, evidence_id: str, round_id: str, tool_result: dict[str, Any], evidence_source: dict[str, Any]) -> None:
         self.qa_evidence.upsert({"evidence_id": evidence_id, "round_id": round_id, "tool_result": _json(tool_result), "evidence_source": _json(evidence_source)}, "evidence_id")
+
+    @staticmethod
+    def _turn_record(question: str, result: dict[str, Any], created_at: str) -> dict[str, Any]:
+        """一轮问答的紧凑存档：回答、状态、工具名序列与证据 ID。
+
+        不存工具结果正文——那是 qa_evidence 的职责，会话行只负责把对话拼回原样。
+        """
+        evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+        return {
+            "question": question,
+            "answer": str(result.get("answerText") or result.get("conclusion") or ""),
+            "state": str(result.get("state") or ""),
+            "createdAt": created_at,
+            "toolChain": [str(name) for name in (result.get("toolChain") or [])],
+            "evidence": {key: list(evidence.get(key) or []) for key in ("shownKeyframeIds", "shownShipSegmentIds", "shownRegistryReferenceIds")},
+        }
+
+    @staticmethod
+    def _session_record(row: dict[str, str], include_turns: bool = True) -> dict[str, Any]:
+        turns = _loads(row.get("turns", ""), [])
+        turns = turns if isinstance(turns, list) else []
+        record = {
+            "sessionId": row.get("session_id", ""),
+            "title": row.get("title", ""),
+            "createdAt": row.get("created_at", ""),
+            "updatedAt": row.get("updated_at", ""),
+            "turnCount": len(turns),
+        }
+        if include_turns:
+            record["turns"] = turns
+        return record
 
     @staticmethod
     def _track_record(row: dict[str, str]) -> dict[str, Any]:

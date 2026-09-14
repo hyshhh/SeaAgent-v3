@@ -3,9 +3,10 @@ harness:
   execution_mode: single-agent-harness
   skills_dir: skills
   tools_file: config/tools.yaml
-  model_calls_per_run: 12
-  tool_calls_per_run: 24
-  tool_calls_per_thread: 100
+  # 模型轮次不设上限：由模型自己判断何时收尾，收尾动作由 skills/finalize 与证据中间件共同约束。
+  # 工具调用仍留一道安全阀（run 级管单次问答，thread 级管整段会话），避免失控试探。
+  tool_calls_per_run: 40
+  tool_calls_per_thread: 400
   summarization_trigger_tokens: 12000
   summarization_keep_messages: 12
   retry_attempts: 2
@@ -18,12 +19,17 @@ harness:
     evidence_field: evidence
   event_payload_max_chars: 4000
   evidence_tool: show_evidence
+  # 收尾守卫：模型给出最终回答却还没落地证据时，最多补发几次提醒（见 harness/wrapup.py）。
+  evidence_wrapup_max_nudges: 2
+  # 文件工具的只读白名单：Deep Agents 原生 skills 渐进式披露要求模型能自行 read_file 打开
+  # SKILL.md，因此读取工具必须开放，但读取范围收敛在 skills 目录内（先匹配先生效的权限规则）。
+  readonly_paths:
+  - /skills
+  - /skills/**
+  # 仍然禁用的框架自带工具：写入、shell 与子智能体；主智能体只做 ReAct，不落地文件。
   disabled_deepagent_tools:
-  - ls
-  - read_file
   - write_file
   - edit_file
-  - glob
-  - grep
+  - delete
   - execute
   - task

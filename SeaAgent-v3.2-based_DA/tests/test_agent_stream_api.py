@@ -12,7 +12,7 @@ class _FakeController:
         self.event_handler = event_handler
         self.result = result
 
-    def answer(self, _question):
+    def answer(self, _question, _session_id=None):
         self.event_handler({"type": "status", "title": "Harness 已启动"})
         if self.result["success"]:
             self.event_handler({"type": "complete", "title": "Harness 完成", "result": self.result})

@@ -1,15 +1,21 @@
 # Sea-Video-Harness
 
-Sea-Video-Harness 是面向海域监控视频问答的单主智能体 Harness。Deep Agents 负责运行时编排，Skills 负责渐进式披露领域规则，LangChain Middleware 负责上下文压缩、调用限制与重试，工具服务访问会话、轨迹和视频证据三层记忆。
+Sea-Video-Harness 是面向海域监控视频问答的单主智能体 Harness。Deep Agents 负责运行时编排，Skills 负责渐进式披露领域规则，LangChain Middleware 负责上下文压缩、工具调用上限、重试与回答收尾前的证据守卫，工具服务访问会话、轨迹和视频证据三层记忆。
 
 ## 组件
 
-- `harness/`：Deep Agents runtime、配置驱动工具、模型和官方 middleware。
-- `skills/`：查询、证据、先验库、去重、记忆和回答规范。
-- `memory/`：会话、轨迹、关键帧和证据持久化。
+- `harness/`：Deep Agents runtime、配置驱动工具、模型、官方 middleware 与收尾守卫（`wrapup.py`）。
+- `skills/`：查询、证据、先验库、去重、记忆、回答规范与收尾规范。模型按 description 判断是否读取正文，正文通过 `read_file` 打开 `/skills/<name>/SKILL.md`。
+- `memory/`：会话、轨迹、关键帧和证据持久化。会话以 `session_id` 为键，逐轮存档问答，同一会话复用同一个 thread_id 续接检查点。
 - `tools/`：视频轨迹、关键帧、片段、先验库和视觉核验工具。
 - `pipeline/`：检测、跟踪、关键帧与视频片段生成。
-- `web/`：QA 页面、NDJSON 事件流和证据接口。
+- `web/`：QA 页面、会话记录侧栏、NDJSON 事件流和证据接口。
+
+## 问答链路要点
+
+- **技能渐进式披露**：技能名与 description 随系统提示词注入；`read_file`/`ls`/`glob`/`grep` 由权限规则收敛到 `/skills` 目录内，写入与 shell 工具仍然禁用。
+- **收尾与证据**：`skills/finalize` 规定收尾动作，`EvidenceWrapUpMiddleware` 在模型给出最终回答却没调用证据工具时提醒一次，两者合起来保证前端证据面板有内容。
+- **轮次不设上限**：由模型自己判断何时答完；只保留工具调用上限作为失控试探的安全阀。
 
 ## 安装与启动
 

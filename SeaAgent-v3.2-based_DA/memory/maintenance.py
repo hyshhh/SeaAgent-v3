@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import threading
 from pathlib import Path
 from typing import Any, Iterable
 
+from config import project_root
 from memory.repository import MemoryRepository
 from vector_store import VectorCatalog
+
+logger = logging.getLogger(__name__)
 
 
 class MemorySettingsStore:
@@ -92,7 +96,25 @@ class TrackMemoryManager:
         with self._lock:
             result = self.repository.clear_qa_memory()
             self._clear_directories(("clip_dir",))
+            self._clear_checkpoints()
         return result
+
+    def _clear_checkpoints(self) -> None:
+        """连带清掉对话检查点。
+
+        会话记录删了而检查点还在，下一轮只要复用同一个 thread_id，旧上文就会被悄悄带回，
+        「清除记忆」名不副实。运行中的问答会占住文件，删不掉时记警告而不是让接口失败。
+        """
+        configured = str(self.config.get("harness", {}).get("checkpointer") or "")
+        if not configured:
+            return
+        base = Path(configured).expanduser()
+        checkpoint = base if base.is_absolute() else (project_root() / base)
+        for candidate in (checkpoint, *(checkpoint.with_name(checkpoint.name + suffix) for suffix in ("-wal", "-shm"))):
+            try:
+                candidate.unlink(missing_ok=True)
+            except OSError as error:
+                logger.warning("对话检查点未能删除：%s（%s）", candidate, error)
 
     def prune_expired(self, reference_time: float, protected_track_ids: Iterable[str | int] = ()) -> list[str]:
         retention = self.settings.read()["retentionSeconds"]

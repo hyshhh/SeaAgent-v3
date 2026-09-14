@@ -22,16 +22,21 @@ class AgentController:
         self.llm = llm
         self.event_handler = event_handler
 
-    def answer(self, question: str) -> dict[str, Any]:
-        session_id = f"session-{uuid.uuid4().hex[:12]}"
-        self.repository.add_session(session_id, {"question": question})
+    def answer(self, question: str, session_id: str | None = None) -> dict[str, Any]:
+        """跑一轮问答，并把这轮问答写进会话记忆。
+
+        ``session_id`` 决定这一轮是「新会话」还是「追问」：不传（或会话已不存在）就新建并
+        以本轮问题作标题；传入已存在的会话则沿用同一个 thread_id —— SQLite 检查点会带回
+        该会话的历史消息，模型因此看得到上文，前端也在这条会话下继续追加轮次。
+        """
+        session_id = str(session_id or "").strip() or f"session-{uuid.uuid4().hex[:12]}"
+        if self.repository.get_session(session_id) is None:
+            self.repository.create_session(session_id, question)
         runtime: SeaVideoHarness | None = None
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
             state = runtime.run(question, thread_id=session_id)
             result = self._project(session_id, state)
-            self.repository.finish_session(session_id, result)
-            return result
         except Exception as error:
             logger.exception("Agent controller failed: session_id=%s", session_id)
             message = str(error).strip() or f"{type(error).__name__}: {error!r}"
@@ -49,11 +54,13 @@ class AgentController:
                 "error": message,
                 "errorType": type(error).__name__,
             }
-            self.repository.finish_session(session_id, result)
-            return result
         finally:
             if runtime is not None:
                 runtime.close()
+        # 成功与失败都留档：失败轮次同样属于会话历史，前端据此还原完整对话
+        result["sessionId"] = session_id
+        result["turnIndex"] = self.repository.append_turn(session_id, question, result)
+        return result
 
     def _project(self, session_id: str, state: dict[str, Any]) -> dict[str, Any]:
         records = state.get("tool_records") or []

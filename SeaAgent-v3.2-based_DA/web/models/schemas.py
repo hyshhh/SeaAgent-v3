@@ -1,7 +1,7 @@
 """网页接口数据结构。"""
 from __future__ import annotations
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class ShipCreate(BaseModel):
     hull_number: str = Field(..., min_length=1, max_length=50)
@@ -16,7 +16,12 @@ class ShipBulkCreate(BaseModel):
     ships: dict[str, str]
 
 class AgentQuery(BaseModel):
+    """一轮问答请求；带上 sessionId 即在该会话里追问，不带则开新会话。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
     question: str = Field(..., min_length=1, max_length=1000)
+    session_id: str | None = Field(default=None, alias="sessionId", max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
 
 class ApiResponse(BaseModel):
     success: bool

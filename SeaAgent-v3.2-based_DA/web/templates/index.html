@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
 <link rel="stylesheet" href="/static/css/academic.css?v=36">
-<link rel="stylesheet" href="/static/css/qa.css?v=2">
+<link rel="stylesheet" href="/static/css/qa.css?v=3">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -156,6 +156,14 @@
 <section class="tab-content" id="tab-agent-qa">
   <div class="qa-shell">
     <div class="qa-layout">
+      <aside class="qa-sessions" aria-label="Conversation history">
+        <div class="qa-sessions-head">
+          <div class="qa-sessions-title"><span>会话</span><em>Sessions</em></div>
+          <button type="button" class="qa-sessions-new" id="btnNewSession" onclick="startNewSession()" title="开始新会话">＋</button>
+        </div>
+        <div id="qaSessionList" class="qa-session-list"><div class="qa-inspector-empty">暂无会话记录</div></div>
+      </aside>
+
       <main class="qa-main" aria-label="Video question answering workspace">
         <div class="qa-conversation" id="qaConversationScroll">
           <div class="qa-welcome" id="qaWelcome">
@@ -169,6 +177,8 @@
               <button type="button" onclick="useQuestion('从15:30到15:40一共出现多少艘船？')">Count vessels <span>15:30–15:40</span></button>
             </div>
           </div>
+
+          <div class="qa-session-history" id="qaSessionHistory" hidden></div>
 
           <div class="qa-user-turn" id="qaUserTurn" hidden>
             <div class="qa-user-bubble"><span class="qa-message-label">You</span><p id="qaUserQuestion"></p></div>
@@ -385,7 +395,7 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=21"></script>
   <script src="/static/js/memory.js?v=8"></script>
-<script src="/static/js/agent.js?v=72"></script>
+<script src="/static/js/agent.js?v=73"></script>
 <script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>

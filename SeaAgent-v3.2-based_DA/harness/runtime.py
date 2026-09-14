@@ -334,6 +334,25 @@ class _Trace:
 # ---------------------------------------------------------------------------
 
 
+def _filesystem_permissions(harness: dict[str, Any], permission_type: Any) -> list[Any] | None:
+    """把 ``harness.readonly_paths`` 翻译成文件工具权限规则。
+
+    读取工具（read_file / ls / glob / grep）必须留给模型，否则框架的 skills 渐进式披露会断在
+    第二步——模型看得见技能名与 description，却打不开 SKILL.md 正文。开放的同时把读取面收敛到
+    白名单目录：规则先匹配先生效，白名单内的读取放行，其余读取与全部写入一律拒绝。
+
+    返回 None 表示未配置白名单，此时不做任何限制（保持框架默认行为）。
+    """
+    readonly_paths = [str(path) for path in (harness.get("readonly_paths") or [])]
+    if not readonly_paths:
+        return None
+    return [
+        permission_type(operations=["read"], paths=readonly_paths, mode="allow"),
+        permission_type(operations=["read"], paths=["/**"], mode="deny"),
+        permission_type(operations=["write"], paths=["/**"], mode="deny"),
+    ]
+
+
 class SeaVideoHarness:
     """Build and run one Deep Agents main agent with configured tools and middleware.
 
@@ -358,6 +377,7 @@ class SeaVideoHarness:
         """装配主智能体：注册 harness profile、开检查点、挂 skills，最后交给 create_deep_agent。"""
         try:
             from deepagents import (
+                FilesystemPermission,
                 GeneralPurposeSubagentProfile,
                 HarnessProfile,
                 create_deep_agent,
@@ -379,7 +399,7 @@ class SeaVideoHarness:
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(str(checkpoint), check_same_thread=False)
         saver = SqliteSaver(self._connection)
-        # 「单智能体」在这里固化：禁用框架自带的文件/shell 工具，并关掉通用子智能体，
+        # 「单智能体」在这里固化：禁用写入与 shell 工具、关掉通用子智能体，
         # 使 ReAct 循环只发生在主智能体内部。profile 以 openai:<模型名> 为键注册，
         # 若改了 llm.model 却没同步这个键，上述禁用会静默失效。
         disabled_tools = frozenset(str(item) for item in (harness.get("disabled_deepagent_tools") or []))
@@ -390,7 +410,11 @@ class SeaVideoHarness:
         # FilesystemBackend 把项目根暴露成虚拟文件系统，skills 才能按需读到 SKILL.md
         backend = FilesystemBackend(root_dir=project_root())
         skills_path = "/" + str(harness.get("skills_dir", "skills")).replace("\\", "/").strip("/")
-        # 渐进式披露：只把 skills 目录交给框架，description 随提示词注入、正文按需读取
+        # 读取工具（read_file / ls / glob / grep）必须留给模型，否则框架的 skills 渐进式披露
+        # 断在第二步——它能看见技能名与 description，却打不开 SKILL.md 正文。开放的同时用权限
+        # 规则把读取面收敛到 skills 目录：先匹配先生效，越界读取由 FilesystemMiddleware 直接拒绝。
+        permissions = _filesystem_permissions(harness, FilesystemPermission)
+        # 渐进式披露：只把 skills 目录交给框架，description 随提示词注入、正文由模型自行读取
         try:
             return create_deep_agent(
                 model=self.model,
@@ -398,6 +422,7 @@ class SeaVideoHarness:
                 system_prompt=self.system_prompt,
                 skills=[skills_path],
                 backend=backend,
+                permissions=permissions,
                 middleware=build_middleware(self.config, self.model),
                 checkpointer=saver,
                 name="sea_video_harness",

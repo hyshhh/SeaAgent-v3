@@ -11,6 +11,6 @@ KEYFRAME_FIELDS = (
 )
 REGISTRY_FIELDS = ("registry_id", "hull_number", "aliases", "description", "structured_attributes")
 REGISTRY_IMAGE_FIELDS = ("reference_id", "registry_id", "image_path", "registry_vector_id", "is_embedded")
-QA_SESSION_FIELDS = ("session_id", "query_info", "final_result")
+QA_SESSION_FIELDS = ("session_id", "title", "created_at", "updated_at", "turns")
 QA_ROUND_FIELDS = ("round_id", "session_id", "plan", "reflection")
 QA_EVIDENCE_FIELDS = ("evidence_id", "round_id", "tool_result", "evidence_source")
