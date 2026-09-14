@@ -19,8 +19,9 @@ embedding:
   dimension: 2048
   normalize: true
 paths:
-  registry_csv: data/registry/registry.csv
-  registry_images_csv: data/registry/registry_reference_images.csv
+  # 先验库落在数据盘上（与 video_dir 同一挂载点），绝对路径在 Linux 部署机上原样使用
+  registry_csv: /media/ddc/新加卷/hys/hysnew3/SeaAgent/data/registry/registry.csv
+  registry_images_csv: /media/ddc/新加卷/hys/hysnew3/SeaAgent/data/registry/registry_reference_images.csv
   tracks_csv: data/memory/tracks.csv
   keyframes_csv: data/memory/track_keyframes.csv
   qa_sessions_csv: data/memory/qa_sessions.csv
@@ -30,7 +31,7 @@ paths:
   keyframe_dir: data/memory/keyframes
   trajectory_dir: data/memory/trajectories
   clip_dir: data/memory/clips
-  registry_image_dir: data/registry/reference_images
+  registry_image_dir: /media/ddc/新加卷/hys/hysnew3/SeaAgent/data/registry/reference_images
   video_dir: /media/ddc/新加卷/hys/hysnew3/SQL-boat-v2/demovid/
   keyframe_index: data/indexes/keyframe_index.faiss
   registry_index: data/indexes/registry_index.faiss

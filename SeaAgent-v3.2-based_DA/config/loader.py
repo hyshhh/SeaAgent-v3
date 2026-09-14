@@ -1,12 +1,15 @@
 """读取 SeaAgent 分层配置并生成视频流水线运行参数。"""
 from __future__ import annotations
 
+import logging
 import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _CONFIG_FILES = ("app.yaml", "yolo.yaml", "pipeline.yaml", "prompts.yaml", "harness.yaml", "tools.yaml")
 _ROOT = Path(__file__).resolve().parent.parent
@@ -29,8 +32,17 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 def _resolve_paths(config: dict[str, Any]) -> None:
+    """把相对路径按项目根展开；已经是绝对路径的原样保留。
+
+    注意 ``/media/...`` 这类 POSIX 绝对路径在 Windows 上并不是绝对路径（没有盘符），
+    pathlib 会把它挂到当前盘符下，于是数据盘上的先验库会被解析成 ``<当前盘>:\\media\\...``
+    并被当成空库新建。这里出声提醒，避免换机器调试时对着空先验库找原因。
+    """
     for key, value in list(config.setdefault("paths", {}).items()):
-        path = Path(str(value)).expanduser()
+        raw = str(value)
+        path = Path(raw).expanduser()
+        if os.name == "nt" and raw.startswith("/") and not path.is_absolute():
+            logger.warning("配置项 %s=%s 是 POSIX 绝对路径，Windows 下会被解析到当前盘符：%s", key, raw, (_ROOT / path))
         config["paths"][key] = str(path if path.is_absolute() else (_ROOT / path).resolve())
 
 def _build_runtime_config(config: dict[str, Any]) -> None:
