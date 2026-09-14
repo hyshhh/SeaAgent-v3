@@ -545,6 +545,10 @@
 #tab-agent-qa .qa-trace-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 18px; scrollbar-width: thin; }
 #tab-agent-qa .qa-step { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 10px; align-items: start; padding: 7px 16px; border-bottom: 1px solid #f3f5f7; }
 #tab-agent-qa .qa-step:hover { background: #fafbfc; }
+/* 从智能体做的步骤：整行缩进 + 左侧竖线，主从层级在轨迹里直接看得出来 */
+#tab-agent-qa .qa-step.is-subagent { padding-left: 34px; background: #fcfdfe; box-shadow: inset 2px 0 0 #e3ebf2; }
+#tab-agent-qa .qa-step-agent { margin-right: 6px; padding: 1px 5px; color: #4a6b86; border-radius: 5px; background: #eef4f9; font-size: 9px; font-weight: 700; }
+#tab-agent-qa .qa-step-delegation { margin-left: 6px; color: #6f8ba3; font-size: 10px; }
 #tab-agent-qa .qa-step-kind { display: inline-flex; align-items: center; gap: 5px; padding-top: 1px; color: #7d8a97; font-size: 10px; font-weight: 600; white-space: nowrap; }
 #tab-agent-qa .qa-step-kind i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 2px; }
 #tab-agent-qa .qa-step-body { min-width: 0; }

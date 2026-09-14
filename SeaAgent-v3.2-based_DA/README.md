@@ -5,7 +5,7 @@ Sea-Video-Harness 是面向海域监控视频问答的单主智能体 Harness。
 ## 组件
 
 - `harness/`：Deep Agents runtime、配置驱动工具、模型、官方 middleware 与收尾守卫（`wrapup.py`）。
-- `skills/`：查询、证据、先验库、去重、记忆、回答规范与收尾规范。模型按 description 判断是否读取正文，正文通过 `read_file` 打开 `/skills/<name>/SKILL.md`。
+- `skills/`：按组存放，组目录是容器、其子目录才是技能（`skills/<组>/<技能>/SKILL.md`）——`planning`（规划与记忆规范，主智能体专用）、`track`（查询与去重）、`registry`（先验库）、`visual`（视觉证据）、`answer`（回答与收尾）。模型按 description 判断是否读取正文，正文通过 `read_file` 打开对应 SKILL.md；主从协同时每个智能体只拿到自己那几组。
 - `memory/`：会话、轨迹、关键帧和证据持久化。会话以 `session_id` 为键，逐轮存档问答，同一会话复用同一个 thread_id 续接检查点。
 - `tools/`：视频轨迹、关键帧、片段、先验库和视觉核验工具。
 - `pipeline/`：检测、跟踪、关键帧与视频片段生成。

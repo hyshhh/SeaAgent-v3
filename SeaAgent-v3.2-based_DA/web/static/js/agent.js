@@ -198,21 +198,33 @@ function stepsFromEvents(events) {
   const byCallId = new Map();
   const push = (kind, text, extra = {}) => { steps.push({ kind, text, ...extra }); return steps[steps.length - 1]; };
   for (const event of events) {
+    // 从智能体的步骤带 agent 标记：轨迹里要能看出「这一步是谁做的」
+    const agent = event.agent || '';
     if (event.type === 'status') push('system', event.title || event.message || '状态更新');
-    else if (event.type === 'skill') push('skill', `加载技能 ${event.skill || event.title || ''}`);
+    else if (event.type === 'skill') push('skill', `加载技能 ${event.skill || event.title || ''}`, { agent });
     else if (event.type === 'model') {
       const tools = Array.isArray(event.tools) ? event.tools : [];
-      push('assistant', tools.length ? `选择工具：${tools.join('、')}` : '输出已更新');
+      if (tools.length) push('assistant', `选择工具：${tools.join('、')}`, { agent });
+      // 从智能体的结构化返回：标题点明来源，内容放进结果预览，便于核对它到底交回了什么
+      else if (agent && event.message) push('assistant', '子智能体输出', { agent, result: event.message });
+      else push('assistant', '输出已更新');
     } else if (event.type === 'tool_start') {
-      const step = push('tool', event.label || event.tool || '工具', { tool: event.tool, args: event.arguments, status: 'running' });
+      const delegation = event.tool === 'task' ? String((event.arguments || {}).subagent_type || '') : '';
+      const step = push('tool', event.label || event.tool || '工具', {
+        tool: event.tool,
+        args: event.arguments,
+        status: 'running',
+        agent,
+        delegation,
+      });
       byCallId.set(String(event.callId || ''), step);
     } else if (event.type === 'tool_result') {
       const step = byCallId.get(String(event.callId || ''));
       const failed = event.status === 'error';
       if (step) { step.result = event.result; step.status = failed ? 'error' : 'ok'; }
-      else push('tool', event.label || event.tool || '工具', { tool: event.tool, result: event.result, status: failed ? 'error' : 'ok' });
+      else push('tool', event.label || event.tool || '工具', { tool: event.tool, result: event.result, status: failed ? 'error' : 'ok', agent });
     } else if (event.type === 'complete') push('system', event.message || '本轮结束');
-    else if (event.type === 'error') push('error', event.message || '执行失败');
+    else if (event.type === 'error') push('error', event.message || '执行失败', { agent });
   }
   return steps;
 }
@@ -251,13 +263,16 @@ function renderTrajectory() {
     const badge = step.status === 'running' ? '<span class="qa-step-badge is-running">执行中</span>'
       : step.status === 'error' ? '<span class="qa-step-badge is-error">失败</span>'
       : step.status === 'ok' ? '<span class="qa-step-badge is-ok">完成</span>' : '';
+    // 从智能体做的步骤降一级并挂上名字，主从结构在轨迹里一眼可见
+    const owner = step.agent ? `<span class="qa-step-agent">${escapeHtml(step.agent)}</span>` : '';
+    const delegation = step.delegation ? `<span class="qa-step-delegation">→ ${escapeHtml(step.delegation)}</span>` : '';
     const args = step.args === undefined ? '' : escapeHtml(compact(step.args, 220));
     const result = step.result === undefined ? '' : escapeHtml(compact(step.result, 260));
     const detail = [args ? `参数：${args}` : '', result ? `结果：${result}` : '', step.archived ? '会话存档只保留工具名，参数与结果未留存。' : ''].filter(Boolean).join('\n');
-    return `<article class="qa-step">
+    return `<article class="qa-step${step.agent ? ' is-subagent' : ''}">
       <span class="qa-step-kind"><i class="${kind.dot}"></i>${kind.label}</span>
       <div class="qa-step-body">
-        <div class="qa-step-line"><strong>${escapeHtml(step.text || '')}</strong>${badge}</div>
+        <div class="qa-step-line">${owner}<strong>${escapeHtml(step.text || '')}</strong>${delegation}${badge}</div>
         ${result ? `<div class="qa-step-result">${result}</div>` : ''}
         ${detail ? `<details class="qa-step-detail"><summary>参数与完整结果</summary><pre>${detail}</pre></details>` : ''}
       </div>

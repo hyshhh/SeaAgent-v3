@@ -53,6 +53,7 @@ def _runtime_with_agent(agent):
     runtime.agent = agent
     runtime.event_handler = None
     runtime._connection = None
+    runtime.subagents = []  # 单智能体模式：没有从智能体
     return runtime
 
 
