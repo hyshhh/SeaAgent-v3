@@ -1,0 +1,27 @@
+yolo:
+  model: yolov8n.pt
+  device: ""
+  # 检测器与跟踪器共同使用的最低检测置信度
+  confidence: 0.5
+  # 检测阶段的重叠框抑制阈值，不是轨迹关联阈值
+  iou: 0.5
+  classes: [8]
+  detect_every_n_frames: 1
+  tracker: bytetrack
+  tracker_params:
+    # 达到该分数的检测框进入主要关联；新轨迹另需达到 0.6
+    track_high_thresh: 0.5
+    # 第二阶段补充关联的分数下限；检测置信度需允许这些框进入检测器
+    track_low_thresh: 0.2
+    new_track_thresh: 0.6
+    # 暂时丢失后保留原轨迹编号的帧数
+    track_buffer: 90
+    # 关联距离阈值；0.8 在稳定续接与避免错绑之间更均衡
+    match_thresh: 0.8
+    fuse_score: true
+  appearance_tracking:
+    # 开启后自动切换为支持外观重识别的跟踪器
+    enabled: false
+    appearance_thresh: 0.8
+    proximity_thresh: 0.5
+    model: auto

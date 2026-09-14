@@ -1,0 +1,79 @@
+tools:
+  - name: get_track
+    label: 轨迹记忆
+    method: getTrack
+    description: 查询视频轨迹记忆。可按时间范围、舷号或匹配状态过滤，并支持分页。
+    arguments:
+      time_range: {type: tuple_float, required: false, target: timeRange}
+      hull_number: {type: string, required: false, target: hullNumber}
+      final_match_type: {type: string, required: false, target: finalMatchType}
+      offset: {type: integer, required: false, default: 0}
+      limit: {type: integer, required: false, default: 0}
+  - name: get_frames
+    label: 关键帧
+    method: getFrames
+    description: 读取一组轨迹的可检索关键帧。
+    arguments: {track_ids: {type: string_list, required: true, target: trackIds}}
+  - name: get_clip
+    label: 视频片段
+    method: getClip
+    description: 为指定轨迹生成视频证据片段。
+    arguments:
+      track_id: {type: string, required: true, target: trackId}
+      time_range: {type: tuple_float, required: false, target: timeRange}
+      scale: {type: number, required: false}
+  - name: get_registry
+    label: 先验库
+    method: getRegistry
+    description: 按规范化舷号读取先验库船舶及参考图。
+    arguments: {hull_number: {type: string, required: true, target: hullNumber}}
+  - name: list_registry
+    label: 先验库目录
+    method: listRegistry
+    description: 读取先验库目录。
+    arguments: {}
+  - name: match_hull
+    label: 舷号匹配
+    method: matchHull
+    description: 将一组识别出的舷号与先验库进行精确匹配。
+    arguments: {hull_number_array: {type: string_list, required: true, target: hullNumberArray}}
+  - name: match_text
+    label: 文本检索
+    method: matchText
+    description: 用外观描述检索先验库或关键帧图像。
+    arguments:
+      description: {type: string, required: true}
+      gallery_images: {type: json, required: false, target: galleryImages}
+      top_k: {type: integer, required: false, target: topK}
+  - name: match_image
+    label: 图像检索
+    method: matchImage
+    description: 用先验库参考图匹配视频关键帧。
+    arguments:
+      query_images: {type: json, required: true, target: queryImages}
+      gallery_images: {type: json, required: true, target: galleryImages}
+      top_k: {type: integer, required: false, target: topK}
+  - name: verify_target
+    label: 视觉核验
+    method: verifyTarget
+    description: 用视觉模型核验候选证据是否满足目标描述或先验库身份。
+    arguments:
+      description: {type: string, required: false}
+      registry_reference_ids: {type: string_list, required: false, target: registryReferenceIds}
+      keyframe_ids: {type: string_list, required: false, target: keyframeIds}
+      ship_segment_ids: {type: string_list, required: false, target: shipSegmentIds}
+  - name: show_evidence
+    label: 证据汇总
+    method: showEvidence
+    description: 汇总关键帧、片段和先验库参考图的展示证据。
+    arguments:
+      keyframe_ids: {type: string_list, required: false, target: keyframeIds}
+      ship_segment_ids: {type: string_list, required: false, target: shipSegmentIds}
+      registry_reference_ids: {type: string_list, required: false, target: registryReferenceIds}
+  - name: dedup_tracks
+    label: 轨迹去重
+    method: dedupTracks
+    description: 基于轨迹关键帧外观对跨时段轨迹进行去重估计。
+    arguments: {tracks: {type: json, required: true}, keyframes_by_track: {type: json, required: true, target: keyframesByTrack}}
+
+

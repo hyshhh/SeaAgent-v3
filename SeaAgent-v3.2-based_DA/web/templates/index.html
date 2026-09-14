@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Sea-Video-Harness · Maritime Video QA</title>
+<link rel="stylesheet" href="/static/css/style.css?v=29">
+<link rel="stylesheet" href="/static/css/academic.css?v=36">
+</head>
+<body class="academic-theme">
+<header class="app-header">
+  <div class="brand-mark" aria-hidden="true"><span>SA</span></div>
+  <div class="header-copy"><h1>Sea-Video-Harness</h1></div>
+  <div class="system-badge"><span></span><strong>System Ready</strong></div>
+</header>
+<nav class="tab-nav" aria-label="System navigation">
+  <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">Maritime Monitoring</button>
+  <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">Trajectory Memory</button>
+  <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">Video QA</button>
+  <button class="tab-btn" data-tab="database" onclick="switchTab('database')">Registry</button>
+  <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">Live Camera</button>
+  <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">Settings</button>
+</nav>
+<main class="page-shell">
+<section class="tab-content active" id="tab-monitoring">
+  <div class="monitor-workspace">
+    <div class="monitor-column">
+      <section class="panel monitor-panel" id="pipelineControl">
+        <div class="monitor-control-bar">
+          <div class="monitor-control-title"><span class="eyebrow">Maritime Monitoring</span><h2>Vessel Detection &amp; Trajectory Memory Construction</h2></div>
+          <div class="status-line monitor-processing-status" id="pipelineStatus"><span class="status-dot idle"></span><div><small>Processing Status</small><strong id="pipelineStatusText">Select a monitoring video</strong></div></div>
+          <div class="panel-actions monitor-control-actions">
+            <button class="btn primary" id="btnStartPipeline" onclick="startVideoPipeline()">▶ Start Processing</button>
+            <button class="btn danger" id="btnStopPipeline" onclick="stopVideoPipeline()" style="display:none">■ Stop Processing</button>
+          </div>
+        </div>
+        <div class="result-area">
+          <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
+          <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="实时轨迹字幕流">
+            <div id="activeTrackMonitorRows" class="active-track-monitor-rows" role="log" aria-live="polite" aria-relevant="additions text"><div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong><small>Time · Status · Track<br>Visual description</small></div></div>
+          </aside>
+        </div>
+        <div class="pipeline-log-box" id="pipelineLogBox" style="display:none">
+          <div class="pool-status-grid">
+            <section class="pool-status-panel candidate-pool-panel">
+              <div class="log-head"><div><strong>Candidate Pool</strong><span>Temporary observations</span></div><em>Up to 40 rows</em></div>
+              <div class="pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
+              <div id="candidatePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for candidate frames</div></div>
+            </section>
+            <section class="pool-status-panel keyframe-pool-panel">
+              <div class="log-head"><div><strong>Keyframe Pool</strong><span>Confirmed memory frames</span></div><em>Up to 40 rows</em></div>
+              <div class="pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
+              <div id="keyframePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for confirmed keyframes</div></div>
+            </section>
+          </div>
+        </div>
+      </section>
+      <div class="control-grid">
+        <section class="panel compact-panel video-source-panel">
+          <div class="panel-head source-panel-head">
+            <div><span class="eyebrow">VIDEO SOURCE</span><h3>Directory &amp; Continuous Monitoring</h3></div>
+            <span id="continuousSelectedCount" class="source-selection-count">0 Selected</span>
+          </div>
+          <div class="video-source-console">
+            <div class="source-directory-row">
+              <span class="source-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 6.8h6l1.8 2H21v8.8A2.4 2.4 0 0 1 18.6 20H5.4A2.4 2.4 0 0 1 3 17.6V6.8Z"/><path d="M3 9h18"/></svg></span>
+              <label class="video-directory-picker"><span>Directory</span>
+                <select id="videoDirectorySelect" onchange="changeVideoDirectory(this.value)"><option value="">Root Directory</option></select>
+              </label>
+              <button class="icon-text-button" type="button" onclick="loadVideoList()" title="Refresh video directory">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 16.2A8 8 0 1 1 19.7 9"/></svg><span>Refresh</span>
+              </button>
+              <span id="videoDirectorySummary" class="video-directory-summary">Reading directory...</span>
+            </div>
+            <div class="continuous-monitor-toolbar">
+              <label class="continuous-select-all"><input id="continuousSelectAll" type="checkbox" onchange="toggleAllContinuousVideos(this.checked)"><span>Select All</span></label>
+              <label class="source-control-field"><span>Start Time <em>Optional</em></span><input id="continuousStartTime" type="datetime-local" step="1"></label>
+              <label class="source-control-field compact"><span>Segment Gap</span><div class="field-with-unit"><input id="continuousGapSeconds" type="number" value="0" min="0" max="86400" step="1"><b>s</b></div></label>
+              <label class="source-control-field"><span>On Error</span><select id="continuousFailurePolicy"><option value="skip">Skip &amp; Continue</option><option value="stop">Stop Sequence</option></select></label>
+              <div class="continuous-monitor-actions">
+                <button class="btn secondary sequence-action-button" id="btnStartContinuous" onclick="startContinuousMonitoring()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg><span>Start Sequence</span></button>
+                <button class="btn danger sequence-action-button" id="btnStopContinuous" onclick="stopContinuousMonitoring()" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg><span>Stop Sequence</span></button>
+              </div>
+            </div>
+            <div class="continuous-monitor-status"><span class="status-pulse" aria-hidden="true"></span><span id="continuousProgress">Waiting for video selection</span></div>
+          </div>
+          <div class="video-list" id="videoList"><div class="empty-msg">Loading video list...</div></div>
+        </section>
+        <section class="panel compact-panel monitoring-settings-panel">
+          <div class="panel-head"><div><span class="eyebrow">PIPELINE PARAMETERS</span><h3>Monitoring Settings</h3></div></div>
+          <div class="param-grid monitoring-param-grid">
+            <label title="Minimum confidence passed to both detection and tracking"><span>Detection Confidence</span><input id="optConf" type="number" value="0.5" min="0.01" max="1" step="0.01"></label>
+            <label title="Overlap threshold used by detection-stage suppression"><span>IoU Threshold</span><input id="optIou" type="number" value="0.5" min="0.01" max="1" step="0.01"></label>
+            <label title="Run detection once every N processed frames"><span>Detection Interval</span><input id="optDetectEvery" type="number" value="1" min="1"></label>
+            <div class="monitoring-param-divider"><span>Tracking Parameters</span><i></i></div>
+            <label title="Threshold for the first association stage"><span>Track High Threshold</span><input id="optTrackHigh" type="number" min="0" max="1" step="0.05"></label>
+            <label title="Lower bound for the second association stage"><span>Track Low Threshold</span><input id="optTrackLow" type="number" min="0" max="1" step="0.05"></label>
+            <label title="Minimum confidence required to create a new track"><span>New Track Threshold</span><input id="optNewTrack" type="number" min="0" max="1" step="0.05"></label>
+            <label title="Maximum distance allowed when matching a detection to an existing track"><span>Match Threshold</span><input id="optMatchThresh" type="number" min="0.01" max="1" step="0.01"></label>
+            <label title="Frames for which the tracker keeps a lost track alive"><span>Track Buffer</span><input id="optTrackBuffer" type="number" min="1" max="1000" step="1"></label>
+            <label title="Frames before a missing track is finalized in memory"><span>Max Stale Frames</span><input id="optMaxStale" type="number" min="1" max="1000" step="1"></label>
+            <label><span>Target FPS</span><input id="optTargetFps" type="number" value="0" min="0"></label>
+            <label title="Only scales the encoded stream; detection keeps the original input"><span>Stream Scale</span><input id="optPipeScale" type="number" value="0.25" min="0.05" max="1" step="0.05"></label>
+            <label><span>Maximum Frames</span><input id="optMaxFrames" type="number" value="0" min="0"></label>
+            <label><span>Inference Device</span><input id="optDevice" type="text" placeholder="Auto"></label>
+            <label><span>Detection Model</span><select id="optYoloModel" size="1" aria-label="Detection model"></select></label>
+            <label class="check-line monitoring-save-toggle"><input id="optSaveVideo" type="checkbox"><span>Save Annotated Video</span></label>
+          </div>
+          <div class="monitor-settings-footer">
+            <span id="monitoringSettingsStatus" class="monitor-settings-status"><i></i>Synced with system settings</span>
+            <button class="btn primary apply-monitor-settings" id="applyMonitoringSettingsButton" onclick="saveMonitoringSettings()" disabled>Apply Settings</button>
+          </div>
+          <div class="history-head"><h3>Task History</h3><button class="text-btn" onclick="clearTaskHistory()">Clear</button></div>
+          <div class="task-history" id="taskHistory"><div class="empty-msg">No tasks</div></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="tab-content" id="tab-memory">
+  <div class="memory-workspace">
+    <header class="memory-command-bar">
+      <div class="memory-command-title">
+        <span class="eyebrow">Trajectory Memory</span>
+        <h2>Track Table &amp; Auto Maintenance</h2>
+      </div>
+      <p class="memory-command-note" title="Trajectory memory is retained across videos; time ranges use actual monitoring time, while video time is used only for playback positioning.">Trajectory memory is retained across videos; time ranges use actual monitoring time, while video time is used only for playback positioning.</p>
+      <div class="memory-inline-stats" aria-label="Trajectory memory summary">
+        <article class="memory-stat-card"><span>Active Tracks</span><strong id="memoryTrackCount">-</strong><small>track records</small></article>
+        <article class="memory-stat-card"><span>Keyframes</span><strong id="memoryKeyframeCount">-</strong><small>pooled images</small></article>
+        <article class="memory-stat-card"><span>Searchable</span><strong id="memoryEmbeddedCount">-</strong><small>searchable images</small></article>
+      </div>
+      <section class="memory-retention-control" title="Tracks are removed after the configured idle period; enter 0 to retain them indefinitely.">
+        <span>Retention</span>
+        <div class="memory-setting-row"><label><input id="memoryRetentionHours" type="number" value="0" min="0" max="24" step="0.1" aria-label="Memory retention hours"><em>Hours</em></label><button class="btn primary btn-sm" onclick="saveMemorySettings()">Save</button></div>
+      </section>
+      <button class="btn ghost btn-sm memory-refresh-button" onclick="loadTrackMemory()">Refresh</button>
+    </header>
+    <section class="panel memory-table-panel">
+      <div class="panel-head memory-table-head">
+        <div class="memory-table-title"><span class="eyebrow">Memory Records</span><h3>Track Table</h3></div>
+        <div class="memory-table-actions"><span id="memoryRefreshState">Auto-refresh: 2s</span><button class="btn danger btn-sm" onclick="clearAllMemory()">Clear Memory</button></div>
+      </div>
+      <div class="memory-warning">Clearing removes all tracks, confirmed keyframes, vectors, and QA evidence, but does not delete the registry.</div>
+      <div class="table-wrap memory-table-wrap">
+        <table class="memory-table">
+          <colgroup><col class="memory-col-track"><col class="memory-col-time"><col class="memory-col-hull"><col class="memory-col-match"><col class="memory-col-frames"><col class="memory-col-state"><col class="memory-col-description"></colgroup>
+          <thead><tr><th>Track</th><th>Observed Time</th><th>Hull</th><th>Match</th><th>Keyframes</th><th>Memory</th><th>Appearance Description</th></tr></thead>
+          <tbody id="trackMemoryTable"><tr><td colspan="7" class="empty-msg">Loading trajectory memory…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</section>
+<section class="tab-content" id="tab-agent-qa">
+  <div class="agent-workspace">
+    <div class="agent-query-grid">
+      <section class="panel agent-query-panel">
+        <div class="panel-head agent-query-head">
+          <div class="agent-query-mainline"><h2>Research Query</h2><select class="agent-preset-select" aria-label="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Preset Questions</option><option value="舷号 0857 有没有在视频中出现？">Hull Number Query</option><option value="数据库中有没有黄色的无人艇？">Registry Query</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Out-of-Registry Vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">In-Registry Vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel Count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance Query</option></select></div>
+          <div class="panel-actions agent-query-actions"><span class="round-limit" id="agentRoundLimit">Harness ready</span><button class="btn ghost btn-sm" id="agentMemoryRefreshButton" onclick="loadAgentMemorySummary(true)">Refresh</button><button class="btn danger btn-sm" id="agentMemoryClearButton" onclick="clearAgentMemory()">Clear Memory</button></div>
+        </div>
+        <div class="question-box agent-question-box">
+          <textarea id="agentQuestion" rows="2" placeholder="例如：数据库中有没有黄色的无人艇？">数据库中有没有黄色的无人艇？</textarea>
+          <div class="question-actions agent-question-submit"><button class="btn primary" id="btnAskAgent" onclick="askAgent()">Run Harness</button><span>Ctrl + Enter</span></div>
+        </div>
+
+        <section id="agentResultPanel" class="agent-response-panel agent-result-panel" data-state="idle">
+          <div class="agent-result-head"><div><span>Result</span><em id="agentResultHint">Harness events appear here in real time</em></div><b id="agentIntentState">Waiting</b></div>
+          <div id="agentFinalView" class="agent-final-view agent-result-final" hidden>
+            <details id="agentToolDisclosure" class="agent-result-disclosure agent-tool-disclosure" open><summary><strong>Tool records</strong><em id="agentToolSummary">Waiting for completion</em></summary><div id="agentResultTools" class="agent-result-tool-body"></div></details>
+            <div id="agentAnswer" class="agent-answer empty-state">The final answer will appear here after execution.</div>
+          </div>
+        </section>
+      </section>
+      <section class="panel agent-thinking-panel">
+        <div class="panel-head agent-collab-head"><div class="agent-collab-title"><h2>Harness activity</h2><span id="agentPlanMode">Skills · model · tools · evidence</span></div><div class="thinking-state"><span id="agentThinkingDot"></span><strong id="agentThinkingState">Waiting</strong></div></div>
+        <div id="agentThoughtStream" class="harness-activity-stream" aria-live="polite"><div id="agentActivityStream" class="agent-activity-stack"><div class="agent-result-empty">No activity yet.</div></div></div>
+      </section>
+    </div>
+    <section class="panel evidence-panel evidence-panel-wide">
+      <div class="panel-head evidence-panel-head evidence-toolbar">
+        <div class="evidence-toolbar-title"><span class="eyebrow">Experimental Evidence</span><h3>Multimodal Evidence Records</h3></div>
+        <div id="evidenceDisplaySettings" class="evidence-display-settings evidence-display-inline">
+          <label title="Scale and cache video evidence previews">Video Scale<input id="evidenceVideoScale" type="range" min="0.25" max="1" step="0.05" value="0.25"><output id="evidenceVideoScaleValue">25%</output></label>
+          <label title="Scale keyframe and registry reference previews">Image Scale<input id="evidenceImageScale" type="range" min="0.25" max="1" step="0.05" value="0.5"><output id="evidenceImageScaleValue">50%</output></label>
+          <label title="Enter 0 to display all results">Max Items<input id="evidenceMaxItems" type="number" min="0" max="10000" step="1" value="0"><output id="evidenceMaxItemsValue">All</output></label>
+        </div>
+        <span id="evidenceResultCount" class="round-limit evidence-result-count">Waiting for query</span>
+      </div>
+      <div id="evidenceGallery" class="evidence-track-list"><div class="evidence-track-empty">No evidence available</div></div>
+    </section>
+  </div>
+</section>
+<section class="tab-content" id="tab-database">
+  <div class="registry-head">
+    <div><span class="eyebrow">Prior Knowledge Memory</span><h2>Vessel Registry</h2><p>Each registry item stores up to six multi-view reference images. Updating an item rebuilds the reference-image vector index automatically.</p></div>
+    <div class="stats-bar"><div><strong id="totalCount">-</strong><span>Items</span></div><div><strong id="totalImages">-</strong><span>Reference Images</span></div></div>
+  </div>
+  <section class="panel">
+    <div class="registry-toolbar"><input id="searchInput" type="text" placeholder="Search hull number or description"><button class="btn primary" onclick="openAddModal()">New Registry Item</button><button class="btn secondary" onclick="openUploadModal()">Recognize &amp; Add</button><button class="btn ghost" onclick="openBulkModal()">Bulk Import</button><button class="btn ghost" onclick="loadShips()">Refresh</button></div>
+    <div class="table-wrap"><table><thead><tr><th>Hull Number</th><th>Description</th><th>Reference Images &amp; Search Status</th><th>Actions</th></tr></thead><tbody id="shipTable"><tr><td colspan="4" class="empty-msg">Loading…</td></tr></tbody></table></div>
+  </section>
+</section>
+<section class="tab-content" id="tab-camera-demo">
+  <div class="camera-grid">
+    <section class="panel">
+      <div class="panel-head"><div><span class="eyebrow">实时监控源</span><h2>摄像头输入</h2></div><div class="panel-actions"><button class="btn primary" id="btnStartCamera" onclick="startCameraPipeline()">启动监控</button><button class="btn danger" id="btnStopCamera" onclick="stopCameraPipeline()" style="display:none">停止</button></div></div>
+      <div class="status-line"><span class="status-dot idle"></span><span id="cameraStatusText">等待启动</span></div>
+      <div class="camera-preview-row" id="browserCameraPreviewRow" style="display:none"><div class="video-slot"><video id="browserCameraPreview" autoplay muted playsinline style="display:none"></video><div id="browserCameraPreviewPlaceholder" class="video-placeholder">本地摄像头预览</div></div></div>
+      <div class="single-stream video-slot"><video id="cameraStream" autoplay muted playsinline style="display:none"></video><div id="cameraStreamPlaceholder" class="video-placeholder">模型处理结果</div><span id="cameraStreamFps" class="fps-badge"></span></div>
+    </section>
+    <section class="panel compact-panel">
+      <div class="panel-head"><div><span class="eyebrow">摄像头参数</span><h3>输入与推流设置</h3></div></div>
+      <div class="param-grid">
+        <label>输入来源<select id="cameraSource" onchange="onCameraSourceChange()"><option value="browser">浏览器摄像头</option><option value="0">服务器摄像头</option><option value="rtsp">网络视频流</option><option value="custom">自定义地址</option></select></label>
+        <label>输入地址<input id="cameraUrl" type="text" placeholder="输入视频地址" style="display:none"></label>
+        <label id="camStreamModeRow">推流方式<select id="camStreamMode"><option value="webrtc">低延迟连接</option><option value="h264">压缩视频流</option><option value="mjpeg">逐帧图像流</option></select></label>
+        <span id="camStreamModeHint" class="hint" style="display:none">服务器输入统一使用压缩视频流。</span>
+        <label>检测置信度<input id="camConf" type="number" value="0.5" step="0.05"></label>
+        <label>交并比阈值<input id="camIou" type="number" value="0.5" step="0.05"></label>
+        <label>检测帧间隔<input id="camDetectEvery" type="number" value="2" min="1"></label>
+        <label>目标帧率<input id="camTargetFps" type="number" value="0" min="0"></label>
+        <label>采集帧率<input id="camCaptureFps" type="number" value="15" min="1"></label>
+        <label title="仅降低推流编码分辨率，不缩小网页预览区域">推流分辨率比例<input id="camPipeScale" type="number" value="0.25" min="0.05" max="1" step="0.05"></label>
+        <label>最大处理帧<input id="camMaxFrames" type="number" value="0" min="0"></label>
+        <label>推理设备<input id="camDevice" type="text" placeholder="留空使用配置"></label>
+        <label>检测模型<select id="camYoloModel" size="1"></select></label>
+        <label class="check-line"><input id="camOptSaveVideo" type="checkbox">保存标注视频</label>
+      </div>
+    </section>
+  </div>
+</section>
+<section class="tab-content" id="tab-settings">
+  <div class="settings-workspace">
+    <div class="settings-page-head">
+      <div><span class="eyebrow">系统运行参数</span><h2>检测、记忆与问答设置</h2><p>调整关键阈值与智能体提示词后，新的监控任务和下一轮问答会使用最新配置；正在运行的任务不强制重载。</p></div>
+      <div class="panel-actions"><span class="settings-status" id="settingsStatus">等待读取</span><button class="btn ghost" onclick="loadSystemSettings(true)">重新读取</button><button class="btn ghost" onclick="resetSystemSettings()">恢复默认</button><button class="btn primary" id="saveSettingsButton" onclick="saveSystemSettings()">保存设置</button></div>
+    </div>
+    <div class="settings-grid">
+      <section class="panel settings-card settings-card-wide tracking-settings-card">
+        <div class="panel-head"><div><span class="eyebrow">检测与跟踪</span><h3>目标关联参数</h3></div></div>
+        <div class="settings-fields tracking-settings-fields">
+          <label><span class="setting-name">检测模型</span><select data-setting="yolo.model"></select><small>监控页、摄像头页和后端新任务统一使用该模型；首次使用未缓存模型时会自动获取。</small></label>
+          <label><span class="setting-name">推理设备</span><input data-setting="yolo.device" type="text" placeholder="留空自动选择"><small>留空时由检测框架自动选择；也可填写设备编号或处理器类型。</small></label>
+          <label><span class="setting-name">目标处理帧率</span><input data-setting="pipeline.target_fps" type="number"><small>0 表示不限制；监控页和摄像头页会同步更新。</small></label>
+          <label><span class="setting-name">推流分辨率比例</span><input data-setting="pipeline.pipe_scale" type="number"><small>仅缩放网页推流编码，范围 0.05～1，不改变检测输入分辨率。</small></label>
+          <label><span class="setting-name">最大处理帧</span><input data-setting="pipeline.max_frames" type="number"><small>0 表示不限制；连续监控时限制整个视频序列的累计帧数。</small></label>
+          <label class="settings-toggle-field"><span class="setting-name">保存标注视频</span><span class="setting-switch"><input data-setting="pipeline.save_output_video" type="checkbox"><span>保存新任务的标注结果视频</span></span><small>关闭后仍保留实时推流，不写入结果视频文件。</small></label>
+          <label><span class="setting-name">正式检测置信度</span><input data-setting="yolo.confidence" type="number"><small><strong>默认 0.5。</strong>同时作为检测器和跟踪器的最低输入置信度；低于该分数的检测框不会进入关联，也不会写入轨迹记忆。</small></label>
+          <label><span class="setting-name">检测交并比阈值</span><input data-setting="yolo.iou" type="number"><small><strong>默认 0.5。</strong>仅用于检测阶段的重叠框抑制，不是轨迹关联阈值；越低抑制越强。</small></label>
+          <label><span class="setting-name">检测帧间隔</span><input data-setting="yolo.detect_every_n_frames" type="number"><small><strong>默认 1。</strong>每隔多少个视频帧执行一次检测；1 表示逐帧检测，增大可提速但可能漏掉快速目标。</small></label>
+          <label><span class="setting-name">轨迹最大保持帧</span><input data-setting="pipeline.max_stale_frames" type="number"><small><strong>默认 120。</strong>系统连续未收到某个轨迹编号后，仍保留其关键帧与识别任务的时间；超出后完成轨迹并写入记忆。</small></label>
+          <label><span class="setting-name">跟踪缓冲帧数</span><input data-setting="yolo.tracker_params.track_buffer" type="number"><small><strong>默认 90。</strong>跟踪器对暂时丢失目标保留原轨迹编号的帧数；期间重新匹配成功可继续原编号。</small></label>
+          <label><span class="setting-name">跟踪高分阈值</span><input data-setting="yolo.tracker_params.track_high_thresh" type="number"><small><strong>默认 0.5。</strong>达到该分数的检测框进入主要关联流程，建议与检测置信度保持一致。</small></label>
+          <label><span class="setting-name">跟踪低分阈值</span><input data-setting="yolo.tracker_params.track_low_thresh" type="number"><small><strong>默认 0.2。</strong>第二阶段补充关联的分数下限；只有检测置信度允许这些框进入检测器时，该阶段才会获得对应候选。</small></label>
+          <label><span class="setting-name">新建轨迹阈值</span><input data-setting="yolo.tracker_params.new_track_thresh" type="number"><small><strong>默认 0.6。</strong>未匹配检测框必须达到更高分数才能创建新轨迹编号，可进一步减少误检和碎片轨迹。</small></label>
+          <label><span class="setting-name">跟踪关联阈值</span><input data-setting="yolo.tracker_params.match_thresh" type="number"><small><strong>默认 0.8。</strong>控制检测框与已有轨迹允许的关联距离；越大越宽松，过高可能把相邻船舶错误关联。</small></label>
+          <label class="settings-toggle-field"><span class="setting-name">外观相似度跟踪</span><span class="setting-switch"><input data-setting="yolo.appearance_tracking.enabled" data-appearance-toggle type="checkbox"><span>启用后结合船体外观恢复轨迹身份</span></span><small><strong>默认关闭。</strong>开启后自动切换为支持外观重识别的跟踪器，遮挡与交叉场景更稳定，但会增加计算开销。</small></label>
+          <label data-appearance-dependent><span class="setting-name">外观相似度阈值</span><input data-setting="yolo.appearance_tracking.appearance_thresh" type="number"><small><strong>默认 0.8。</strong>外观特征达到该相似程度才允许关联；越高越严格。</small></label>
+          <label data-appearance-dependent><span class="setting-name">空间接近阈值</span><input data-setting="yolo.appearance_tracking.proximity_thresh" type="number"><small><strong>默认 0.5。</strong>仅对位置足够接近的候选轨迹比较外观，避免远距离目标因外观相似而错绑。</small></label>
+        </div>
+      </section>
+      <section class="panel settings-card">
+        <div class="panel-head"><div><span class="eyebrow">关键帧记忆</span><h3>候选池与正式池</h3></div></div>
+        <div class="settings-fields">
+          <label>候选帧间隔<input data-setting="pipeline.candidate_every_n_frames" type="number"><small>每隔多少帧生成一个候选帧。</small></label>
+          <label>临时池容量<input data-setting="pipeline.candidate_pool_size" type="number"><small>单条轨迹最多保留的候选帧数量。</small></label>
+          <label>正式池容量<input data-setting="pipeline.keyframe_pool_size" type="number"><small>单条轨迹最多保留的已识别关键帧。</small></label>
+          <label>单帧最低质量<input data-setting="pipeline.quality.min_score" type="number"><small>低于该分数的候选帧不进入正式池。</small></label>
+          <label>识别超时秒数<input data-setting="pipeline.recognition_timeout_seconds" type="number"><small>单帧舷号识别的最长等待时间。</small></label>
+          <label>替换分数间隔<input data-setting="pipeline.retention.replace_margin" type="number"><small>新帧超过旧帧多少分数才允许替换。</small></label>
+        </div>
+      </section>
+      <section class="panel settings-card">
+        <div class="panel-head"><div><span class="eyebrow">舷号聚合</span><h3>轨迹级判定阈值</h3></div></div>
+        <div class="settings-fields">
+          <label>无舷号权重<input data-setting="pipeline.aggregation.null_weight" type="number"><small>无舷号类别参与聚合时的权重。</small></label>
+          <label>冲突间隔阈值<input data-setting="pipeline.aggregation.conflict_margin" type="number"><small>第一、第二类别支持度差距不足时判为冲突。</small></label>
+          <label>确认所需支持度<input data-setting="pipeline.aggregation.confirmed_support" type="number"><small>候选舷号达到该支持度才可能确认。</small></label>
+          <label>确认所需帧数<input data-setting="pipeline.aggregation.confirmed_count" type="number"><small>支持同一舷号的最少关键帧数。</small></label>
+          <label>无舷号间隔阈值<input data-setting="pipeline.aggregation.null_margin" type="number"><small>有舷号支持不足且无舷号占优时的判定间隔。</small></label>
+        </div>
+      </section>
+      <section class="panel settings-card">
+        <div class="panel-head"><div><span class="eyebrow">特征检索与问答</span><h3>匹配与闭环参数</h3></div></div>
+        <div class="settings-fields">
+          <label>普通检索候选数量<input data-setting="pipeline.retrieval.top_k" type="number"><small>单目标描述、舷号等普通检索返回的最高候选数量。</small></label>
+          <label>广泛库图匹配数量<input data-setting="pipeline.retrieval.broad_match_top_k" type="number"><small>多库、多轨迹库图匹配的最高返回数量；设置为 0 表示不截断。</small></label>
+          <label>文本匹配阈值<input data-setting="pipeline.retrieval.text_match" type="number"><small>描述与关键帧匹配的直接接受阈值。</small></label>
+          <label>文本排除阈值<input data-setting="pipeline.retrieval.text_exclude" type="number"><small>描述匹配低于该值时直接排除。</small></label>
+          <label>图像匹配阈值<input data-setting="pipeline.retrieval.image_match" type="number"><small>参考图与关键帧匹配的直接接受阈值。</small></label>
+          <label>图像排除阈值<input data-setting="pipeline.retrieval.image_exclude" type="number"><small>参考图匹配低于该值时直接排除。</small></label>
+          <label>去重高阈值<input data-setting="pipeline.retrieval.dedup_high" type="number"><small>跨轨迹相似度达到该值时合并。</small></label>
+          <label>去重低阈值<input data-setting="pipeline.retrieval.dedup_low" type="number"><small>低于该值时不合并。</small></label>
+          <label>问答最大轮数<input data-setting="harness.tool_calls_per_run" type="number"><small>Harness 单次工具调用上限。</small></label>
+          <label class="settings-toggle">模型内部思考
+            <input type="text" value="已强制关闭" disabled>
+            <small>系统仅展示结构化计划、工具调用与最终结论，内部推理不会输出到前端。</small>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel settings-card">
+        <div class="panel-head"><div><span class="eyebrow">证据展示</span><h3>目标船片段压缩</h3></div></div>
+        <div class="settings-fields">
+          <label>片段宽度<input data-setting="pipeline.evidence.clip_width" type="number"><small>目标船片段的固定输出宽度，默认 640。</small></label>
+          <label>片段高度<input data-setting="pipeline.evidence.clip_height" type="number"><small>目标船片段的固定输出高度，默认 360。</small></label>
+          <label>片段帧率<input data-setting="pipeline.evidence.clip_fps" type="number"><small>默认每秒 15 帧；保持 640×360 分辨率，并限制单段自动播放。</small></label>
+          <label>压缩强度<input data-setting="pipeline.evidence.clip_crf" type="number"><small>数值越大文件越小，默认 31。</small></label>
+          <label>封面质量<input data-setting="pipeline.evidence.poster_quality" type="number"><small>证据卡片进入可视区域后自动加载并静音播放。</small></label>
+        </div>
+      </section>
+
+      <section class="panel settings-card settings-card-wide">
+        <div class="panel-head"><div><span class="eyebrow">识别与检索提示词</span><h3>单帧识别、核验与检索指令</h3></div><p class="settings-card-note">领域规则由 Skills 提供；此处仅保留视频识别提示词。</p></div>
+        <div class="settings-prompt-grid">
+          <label class="settings-prompt-item">单帧识别提示词
+            <textarea data-setting="prompts.single_frame_recognition" rows="7" spellcheck="false"></textarea>
+            <small>单帧舷号可读性判断与外观描述提取。</small>
+          </label>
+          <label class="settings-prompt-item">描述核验提示词
+            <textarea data-setting="prompts.verify_description" rows="7" spellcheck="false"></textarea>
+            <small>灰区时核验轨迹图像是否符合文字描述。</small>
+          </label>
+          <label class="settings-prompt-item">库项核验提示词
+            <textarea data-setting="prompts.verify_registry" rows="7" spellcheck="false"></textarea>
+            <small>灰区时比较先验库参考图与轨迹图像，判断是否为同一艘船。</small>
+          </label>
+          <label class="settings-prompt-item">文本检索指令
+            <textarea data-setting="prompts.text_retrieval_instruction" rows="3" spellcheck="false"></textarea>
+            <small>文本向量检索时使用的英文指令，建议保持简短稳定。</small>
+          </label>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</section>
+</main>
+<div class="modal-overlay" id="shipModal"><div class="modal wide-modal"><div class="modal-head"><h3 id="modalTitle">New Registry Item</h3><button onclick="closeModal()">×</button></div><label>Hull Number<input id="modalHullNumber" type="text" placeholder="e.g. 0857"></label><label>Description<textarea id="modalDescription" rows="4" placeholder="船体颜色、结构、类型和稳定外观属性"></textarea></label><label>Reference Images<input id="modalReferenceFiles" type="file" accept="image/*" multiple><span class="hint">Add or append up to six reference images.</span></label><div id="modalReferenceList" class="reference-grid"></div><div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn primary" id="modalSubmitBtn" onclick="submitShip()">Save</button></div></div></div>
+<div class="modal-overlay" id="bulkModal"><div class="modal"><div class="modal-head"><h3>Bulk Import Registry Items</h3><button onclick="closeBulkModal()">×</button></div><label>Enter a hull-number-to-description object<textarea id="bulkInput" rows="9" placeholder='{"0857":"灰色船体，白色上层建筑"}'></textarea></label><div class="modal-actions"><button class="btn ghost" onclick="closeBulkModal()">Cancel</button><button class="btn primary" onclick="submitBulk()">Import</button></div></div></div>
+<div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>Recognize Images &amp; Add to Registry</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>Select one to six reference images</strong><span>The first image is used to recognize the hull number and description.</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>Recognized Hull Number<input id="recHullNumber" type="text"></label><label>Recognized Description<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">Cancel</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">Recognize First Image</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">Confirm Add</button></div></div></div>
+<div class="toast" id="toast"></div>
+<script src="/static/js/app.js?v=8"></script>
+<script src="/static/js/pipeline.js?v=21"></script>
+  <script src="/static/js/memory.js?v=8"></script>
+<script src="/static/js/agent.js?v=71"></script>
+<script src="/static/js/settings.js?v=11"></script>
+</body>
+</html>

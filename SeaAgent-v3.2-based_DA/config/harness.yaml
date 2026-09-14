@@ -1,0 +1,29 @@
+harness:
+  system_prompt_file: harness/system.md
+  execution_mode: single-agent-harness
+  skills_dir: skills
+  tools_file: config/tools.yaml
+  model_calls_per_run: 12
+  tool_calls_per_run: 24
+  tool_calls_per_thread: 100
+  summarization_trigger_tokens: 12000
+  summarization_keep_messages: 12
+  retry_attempts: 2
+  retry_delay_seconds: 1.0
+  checkpointer: data/memory/checkpoints.sqlite
+  stream_mode: updates
+  output:
+    answer_field: answer
+    state_field: state
+    evidence_field: evidence
+  event_payload_max_chars: 4000
+  evidence_tool: show_evidence
+  disabled_deepagent_tools:
+  - ls
+  - read_file
+  - write_file
+  - edit_file
+  - glob
+  - grep
+  - execute
+  - task

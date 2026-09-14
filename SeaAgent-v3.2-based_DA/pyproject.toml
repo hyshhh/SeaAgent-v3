@@ -1,0 +1,23 @@
+[project]
+name = "sea-video-harness"
+version = "0.1.0"
+description = "SeaAgent video QA harness built around skills, middleware, and layered memory"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104.0", "uvicorn[standard]>=0.24.0", "jinja2>=3.1.0",
+    "python-multipart>=0.0.6", "pyyaml>=6.0", "httpx>=0.25.0",
+    "opencv-python>=4.8.0", "numpy>=1.24.0", "pydantic>=2.0", "rich>=13.0", "langchain>=1.0.0", "langchain-openai>=0.2.0", "deepagents>=0.7.0", "langgraph-checkpoint-sqlite>=3.0.0"
+]
+[project.optional-dependencies]
+models = ["faiss-cpu>=1.7.0", "ultralytics>=8.0.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21.0"]
+[project.scripts]
+sea-video-harness = "harness.cli:main"
+seaagent = "web.app:main"
+seaagent-pipeline = "pipeline.cli:main"
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+include = ["agent*", "config*", "harness*", "memory*", "pipeline*", "services*", "skills*", "tools*", "vector_store*", "web*"]
+

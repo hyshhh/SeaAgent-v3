@@ -1,0 +1,34 @@
+app:
+  name: SeaAgent
+web:
+  host: 0.0.0.0
+  port: 8000
+llm:
+  model: Qwen/Qwen3-VL-4B-AWQ
+  api_key: abc123
+  base_url: http://localhost:7890/v1
+  temperature: 0.0
+  timeout_seconds: 90
+embedding:
+  model: Qwen/Qwen3-VL-Embedding-2B
+  api_key: abc123
+  base_url: http://localhost:7891/v1
+  timeout_seconds: 60
+  dimension: 2048
+  normalize: true
+paths:
+  registry_csv: data/registry/registry.csv
+  registry_images_csv: data/registry/registry_reference_images.csv
+  tracks_csv: data/memory/tracks.csv
+  keyframes_csv: data/memory/track_keyframes.csv
+  qa_sessions_csv: data/memory/qa_sessions.csv
+  qa_rounds_csv: data/memory/qa_rounds.csv
+  qa_evidence_csv: data/memory/qa_evidence.csv
+  memory_settings_json: data/memory/settings.json
+  keyframe_dir: data/memory/keyframes
+  trajectory_dir: data/memory/trajectories
+  clip_dir: data/memory/clips
+  registry_image_dir: data/registry/reference_images
+  video_dir: /media/ddc/新加卷/hys/hysnew3/SQL-boat-v2/demovid/
+  keyframe_index: data/indexes/keyframe_index.faiss
+  registry_index: data/indexes/registry_index.faiss

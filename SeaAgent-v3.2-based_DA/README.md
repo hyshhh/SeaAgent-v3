@@ -1,38 +1,28 @@
-# SeaAgent v3.2（DeepAgent 架构）
+# Sea-Video-Harness
 
-本目录是 v3.2 的开发位置，**当前为空**，代码尚未开始写。
+Sea-Video-Harness 是面向海域监控视频问答的单主智能体 Harness。Deep Agents 负责运行时编排，Skills 负责渐进式披露领域规则，LangChain Middleware 负责上下文压缩、调用限制与重试，工具服务访问会话、轨迹和视频证据三层记忆。
 
-## 与 v3.1 的关系
+## 组件
 
-| | v3.1（`../SeaAgent-v3.1-based_LG/`） | v3.2（本目录） |
-| --- | --- | --- |
-| 框架 | LangChain 建 Agent + LangGraph 编排 | **DeepAgent** |
-| 协同结构 | Intent / Plan / Observe / Reflect 四个子 Agent，节点间走图边 | **不再拆成多个子智能体**，ReAct 交给一个智能体完成 |
-| 规则载体 | 大量确定性 Python 代码（节点里 86–92% 是守卫与验收逻辑）+ skills | **全部演化为 skills**，代码只留 harness 与中间件 |
-| 记忆 | 轨迹为中心的闭环记忆 | 三层：对话记忆 / 以轨迹为基准的记忆 / 视频记忆 |
-| 状态 | 已完成 v3.1 全部重构，14 个提交待推送 | 待启动 |
+- `harness/`：Deep Agents runtime、配置驱动工具、模型和官方 middleware。
+- `skills/`：查询、证据、先验库、去重、记忆和回答规范。
+- `memory/`：会话、轨迹、关键帧和证据持久化。
+- `tools/`：视频轨迹、关键帧、片段、先验库和视觉核验工具。
+- `pipeline/`：检测、跟踪、关键帧与视频片段生成。
+- `web/`：QA 页面、NDJSON 事件流和证据接口。
 
-v3.2 是**重写**而非改造：v3.1 的 `agent/` 层（graph.py 的图编排、四个节点、roles.py 的分角色提示词）在新的架构假设下基本不再适用。可考虑复用的只有外围层——`web/`（FastAPI 路由与前端）、`pipeline/`（视频处理与轨迹构建）、`tools/`（时间与目标解析）、`memory/`、`vector_store/`。
+## 安装与启动
 
-## 架构需求
+```powershell
+py -m pip install -e ".[dev]"
+py -m web.app
+# 浏览器访问 http://127.0.0.1:8000
+```
 
-以下五条来自本目录下的 `规范文件.md`，原文照录：
+视频流水线：
 
-1. **目标**：改进项目，不再使用 LangGraph 框架，而使用 DeepAgent 框架，搭建完善的 harness 架构，真正实现面向海域监控的问答系统。
+```powershell
+seaagent-pipeline data/videos/example.mp4 --demo --output output/result.mp4
+```
 
-2. **Skills 渐进披露**：所有 skills 先把 description 与系统提示词一起注入。
-
-3. **取消多子智能体拆分**：不再使用当前的多 Agent ReAct 架构，不把这个过程分为多个子智能体，而应该把 ReAct 交给**一个**智能体完成。
-
-4. **规则全面 skill 化**：v3.1 以硬编码约束 Agent 的若干行为，这样更像 workflow 而非拥有成熟 harness 的 agent；需要把所有需要硬编码约束的部分**全部演化成一个个 skills**。理论上纯代码结构大大缩减，代码逻辑与规则审查可以用**中间件和 skills** 代替。
-
-5. **三层记忆设计**：顶层为对话记忆，中层为以轨迹为基准的记忆，底层为视频记忆。
-
-## 待澄清的设计问题
-
-动手前需要先定下来的几件事：
-
-- **规则 skill 化之后，确定性如何保证？** v3.1 里那些必须确定性执行的守卫（例如「0 轨迹即可否定」这类错误写法要拦下、「纯数据库问题不得越界到视频检索」）如果只写在 skill 正文里，就变成依赖模型遵守，不再可单元测试。是接受这个代价，还是保留一层中间件做硬约束？
-- **单 Agent 的上下文预算**：v3.1 四个 Agent 各自挂 4–6 个技能工具，合并成一个 Agent 后工具数与技能目录都会膨胀，需要确认渐进披露的分层策略。
-- **三层记忆与现有 `memory/` 的对应关系**：哪些是新建、哪些能从 v3.1 迁移。
-- **外围层复用方式**：`web/`、`pipeline/`、`tools/` 是直接拷贝过来改，还是抽成共享包。
+默认依赖包含 LangChain、Deep Agents、OpenAI-compatible Chat Model 和 SQLite checkpoint。需要 FAISS 或 Ultralytics 时安装 `.[models]`。模型地址、工具映射、调用限制和路径均来自 `config/`，业务行为由 Skills 与工具结果驱动。

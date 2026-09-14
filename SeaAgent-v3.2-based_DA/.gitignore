@@ -1,0 +1,16 @@
+# Python and local environments
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Runtime outputs
+*.sqlite
+*.sqlite-*
+data/memory/*.tmp
+
+# Generated media and indexes
+output/
+data/indexes/*.faiss
+data/indexes/*.pkl
