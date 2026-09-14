@@ -21,6 +21,15 @@ let harnessToolCount = 0;
 const harnessToolCards = new Map();
 const harnessSkillNames = new Set();
 let harnessSkillActivityCard = null;
+let qaView = 'chat';           // 主列当前显示的子页：chat（对话）/ trace（轨迹）
+
+const STEP_KINDS = {
+  assistant: { label: '助手', dot: 'qa-dot-assistant' },
+  tool: { label: '工具', dot: 'qa-dot-tool' },
+  skill: { label: '技能', dot: 'qa-dot-skill' },
+  system: { label: '系统', dot: 'qa-dot-system' },
+  error: { label: '错误', dot: 'qa-dot-error' },
+};
 
 function useQuestion(text) {
   const input = document.getElementById('agentQuestion');
@@ -155,6 +164,116 @@ function syncComposer(run) {
     stop.hidden = !running;
     stop.disabled = !running;
   }
+}
+
+/* ── 子页：对话 / 轨迹 ─────────────────────────────────────────────────────── */
+
+function switchQaView(view) {
+  qaView = view === 'trace' ? 'trace' : 'chat';
+  const chat = document.getElementById('qaChatView');
+  const trace = document.getElementById('qaTraceView');
+  const chatTab = document.getElementById('qaSubtabChat');
+  const traceTab = document.getElementById('qaSubtabTrace');
+  if (chat) chat.hidden = qaView !== 'chat';
+  if (trace) trace.hidden = qaView !== 'trace';
+  chatTab?.classList.toggle('is-active', qaView === 'chat');
+  traceTab?.classList.toggle('is-active', qaView === 'trace');
+  chatTab?.setAttribute('aria-selected', String(qaView === 'chat'));
+  traceTab?.setAttribute('aria-selected', String(qaView === 'trace'));
+  if (qaView === 'trace') renderTrajectory();
+  else { scrollConversation(true); autoGrowComposer(); }
+}
+
+/* 轨迹的数据来源：优先当前这一轮的事件缓冲（有参数与结果），退回会话存档（只有工具名）。 */
+function trajectorySteps() {
+  const run = currentSessionId ? sessionRuns.get(currentSessionId) : null;
+  if (run) return { steps: stepsFromEvents(run.events), archived: false };
+  const turns = Array.isArray(currentSession?.turns) ? currentSession.turns : [];
+  const latest = turns[turns.length - 1];
+  return latest ? { steps: stepsFromTurn(latest), archived: true } : { steps: [], archived: false };
+}
+
+function stepsFromEvents(events) {
+  const steps = [];
+  const byCallId = new Map();
+  const push = (kind, text, extra = {}) => { steps.push({ kind, text, ...extra }); return steps[steps.length - 1]; };
+  for (const event of events) {
+    if (event.type === 'status') push('system', event.title || event.message || '状态更新');
+    else if (event.type === 'skill') push('skill', `加载技能 ${event.skill || event.title || ''}`);
+    else if (event.type === 'model') {
+      const tools = Array.isArray(event.tools) ? event.tools : [];
+      push('assistant', tools.length ? `选择工具：${tools.join('、')}` : '输出已更新');
+    } else if (event.type === 'tool_start') {
+      const step = push('tool', event.label || event.tool || '工具', { tool: event.tool, args: event.arguments, status: 'running' });
+      byCallId.set(String(event.callId || ''), step);
+    } else if (event.type === 'tool_result') {
+      const step = byCallId.get(String(event.callId || ''));
+      const failed = event.status === 'error';
+      if (step) { step.result = event.result; step.status = failed ? 'error' : 'ok'; }
+      else push('tool', event.label || event.tool || '工具', { tool: event.tool, result: event.result, status: failed ? 'error' : 'ok' });
+    } else if (event.type === 'complete') push('system', event.message || '本轮结束');
+    else if (event.type === 'error') push('error', event.message || '执行失败');
+  }
+  return steps;
+}
+
+/* 会话存档只留了工具名序列：参数与结果属于当轮事件流，这里如实说明，不假装有细节。 */
+function stepsFromTurn(turn) {
+  const steps = [{ kind: 'assistant', text: turn?.question ? `提问：${turn.question}` : '本轮问答' }];
+  const chain = Array.isArray(turn?.toolChain) ? turn.toolChain : [];
+  chain.forEach((name) => steps.push({ kind: 'tool', text: name, tool: name, status: 'ok', archived: true }));
+  if (!chain.length) steps.push({ kind: 'system', text: '这一轮没有留下工具调用' });
+  return steps;
+}
+
+function renderTrajectory() {
+  const list = document.getElementById('qaTraceList');
+  const ribbon = document.getElementById('qaTraceRibbon');
+  const summary = document.getElementById('qaTraceSummary');
+  if (!list) return;
+  const { steps, archived } = trajectorySteps();
+  const toolCount = steps.filter((step) => step.kind === 'tool').length;
+  const failed = steps.filter((step) => step.status === 'error').length;
+  if (summary) {
+    summary.textContent = steps.length
+      ? `${steps.length} 步 · ${toolCount} 次工具调用${failed ? ` · ${failed} 次失败` : ''}${archived ? ' · 来自会话存档' : ''}`
+      : '这一轮还没有开始';
+  }
+  if (ribbon) {
+    ribbon.innerHTML = steps.map((step) => `<i class="${STEP_KINDS[step.kind]?.dot || 'qa-dot-system'}" title="${escapeHtml(STEP_KINDS[step.kind]?.label || '')}"></i>`).join('');
+  }
+  if (!steps.length) {
+    list.innerHTML = '<div class="qa-empty-state">这一轮开始时，助手与工具的每一步都会记在这里。</div>';
+    return;
+  }
+  list.innerHTML = steps.map((step, index) => {
+    const kind = STEP_KINDS[step.kind] || STEP_KINDS.system;
+    const badge = step.status === 'running' ? '<span class="qa-step-badge is-running">执行中</span>'
+      : step.status === 'error' ? '<span class="qa-step-badge is-error">失败</span>'
+      : step.status === 'ok' ? '<span class="qa-step-badge is-ok">完成</span>' : '';
+    const args = step.args === undefined ? '' : escapeHtml(compact(step.args, 220));
+    const result = step.result === undefined ? '' : escapeHtml(compact(step.result, 260));
+    const detail = [args ? `参数：${args}` : '', result ? `结果：${result}` : '', step.archived ? '会话存档只保留工具名，参数与结果未留存。' : ''].filter(Boolean).join('\n');
+    return `<article class="qa-step">
+      <span class="qa-step-kind"><i class="${kind.dot}"></i>${kind.label}</span>
+      <div class="qa-step-body">
+        <div class="qa-step-line"><strong>${escapeHtml(step.text || '')}</strong>${badge}</div>
+        ${result ? `<div class="qa-step-result">${result}</div>` : ''}
+        ${detail ? `<details class="qa-step-detail"><summary>参数与完整结果</summary><pre>${detail}</pre></details>` : ''}
+      </div>
+    </article>`;
+  }).join('');
+}
+
+function renderViewMeta() {
+  const node = document.getElementById('qaViewMeta');
+  if (!node) return;
+  const session = currentSession;
+  const turns = Array.isArray(session?.turns) ? session.turns.length : 0;
+  const run = currentSessionId ? sessionRuns.get(currentSessionId) : null;
+  const title = session?.title || run?.question || '';
+  const round = turns + (run && run.status === 'running' ? 1 : 0);
+  node.textContent = title ? `${title}${round ? ` · 第 ${round} 轮` : ''}` : '新会话';
 }
 
 /* ── 会话栏 ───────────────────────────────────────────────────────────────── */
@@ -297,6 +416,8 @@ function renderView() {
   resetActivityDom();
   syncComposer(run);
   renderSessionHistory(history);
+  renderViewMeta();
+  if (qaView === 'trace') renderTrajectory();
 
   const welcome = document.getElementById('qaWelcome');
   const userTurn = document.getElementById('qaUserTurn');
@@ -579,7 +700,10 @@ async function clearAgentMemory() {
 function dispatchRunEvent(run, event) {
   run.events.push(event);
   if (run.events.length > 500) run.events.splice(0, run.events.length - 500);
-  if (currentSessionId === run.id) appendHarnessEvent(event);
+  if (currentSessionId !== run.id) return;
+  appendHarnessEvent(event);
+  // 轨迹页正开着就跟着长；没开着等切回去再重画
+  if (qaView === 'trace') renderTrajectory();
 }
 
 async function streamAgentQuery(question, sessionId, run) {

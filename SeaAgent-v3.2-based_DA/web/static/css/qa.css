@@ -17,20 +17,39 @@
 /* 本页多处用 display 覆盖了元素默认样式，hidden 属性会被一并盖掉；这里统一兜住。 */
 #tab-agent-qa [hidden] { display: none !important; }
 #tab-agent-qa .qa-shell {
-  /* 高度 = 视口 − （页眉 58 + 导航 44 + .page-shell 上下内边距 36）。
-     这里曾经用 margin: -26px -32px -48px 去抵消 .page-shell 的内边距，
-     但那套内边距已被 academic.css 改成 12px/0/24px：负值把工作区顶到导航上（上方变形），
-     并让它比视口宽 32px（下方横向截断）。工作区改为自己算高度，不再猜外层内边距。 */
+  /* 整块工作区：顶部一行子页签 + 下面三栏，本身就是一张带边框的完整面板，内部只用 1px 分隔线，
+     不再是一堆各自带阴影的浮层（那种拼盘感就是不「整体」的来源）。
+     高度 = 视口 − （页眉 58 + 导航 44 + .page-shell 上下内边距 36）；这里不再猜外层内边距，
+     否则会重演「负边距把工作区顶到导航上、又横向撑宽 32px」的老问题。 */
   --qa-chrome: 138px;
   width: 100%;
   height: calc(100vh - var(--qa-chrome));
   height: calc(100dvh - var(--qa-chrome));
-  min-height: 0;
   margin: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   color: var(--qa-ink);
-  background: #fbfbfc;
+  border: 1px solid var(--qa-line-strong);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(25, 45, 63, .04);
 }
+/* 子页签：对话 / 轨迹，放在工作区顶部，像同一个应用里的两个视图 */
+#tab-agent-qa .qa-subnav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 44px;
+  padding: 0 12px 0 10px;
+  border-bottom: 1px solid var(--qa-line);
+  background: #fff;
+}
+#tab-agent-qa .qa-subtab { padding: 6px 13px; color: #6a7784; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font-size: 12px; font-weight: 600; transition: color .15s, background .15s; }
+#tab-agent-qa .qa-subtab:hover { color: #24435c; background: #f2f5f8; }
+#tab-agent-qa .qa-subtab.is-active { color: #1f4f74; background: var(--qa-blue-soft); }
+#tab-agent-qa .qa-subnav-meta { min-width: 0; margin-left: auto; padding-right: 4px; overflow: hidden; color: #9aa5b1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 #tab-agent-qa .qa-topbar {
   min-height: 66px;
   padding: 13px 26px;
@@ -116,11 +135,14 @@
 #tab-agent-qa #agentThinkingDot.failed,
 #tab-agent-qa #qaHeaderDot.failed { background: var(--qa-red); }
 #tab-agent-qa .qa-layout {
-  height: 100%;
+  flex: 1 1 auto;
+  height: auto;
   min-height: 0;
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr) 318px;
 }
+/* 主列的两种视图：对话（消息流 + 输入区）与轨迹（执行步骤表），各自铺满主列 */
+#tab-agent-qa .qa-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 /* 会话栏：对话记忆的入口，布局参考主流对话产品的侧栏——新建按钮在最上，
    下面是分区标题 + 会话条目（图标 / 标题 / 时间·轮数，悬停才露出删除）。 */
 #tab-agent-qa .qa-sessions {
@@ -285,7 +307,7 @@
   flex: 1 1 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 34px clamp(22px, 7vw, 118px) 140px;
+  padding: 30px clamp(22px, 7vw, 118px) 26px;
   scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-gutter: stable;
@@ -396,9 +418,9 @@
 #tab-agent-qa .qa-trace-record strong { color: #4f6e5f; font-weight: 650; }
 #tab-agent-qa .qa-trace-record code { overflow: hidden; color: #8a9891; font: 9px/1.35 Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 #tab-agent-qa .qa-trace-record span { color: #9aaa9f; }
-/* 输入区：单个紧凑圆角容器——上面一行输入，下面一行图标按钮与发送键，没有标题行与分隔线。 */
-#tab-agent-qa .qa-composer-wrap { position: absolute; right: 0; bottom: 0; left: 0; z-index: 4; padding: 18px clamp(18px, 6vw, 98px) 20px; pointer-events: none; background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.9) 28%, #fff 52%); }
-#tab-agent-qa .qa-composer { max-width: 860px; margin: 0 auto; padding: 9px 10px 8px 12px; pointer-events: auto; border: 1px solid #dde2e8; border-radius: 14px; background: rgba(255,255,255,.98); box-shadow: 0 6px 20px rgba(25, 45, 63, .09), 0 1px 2px rgba(25, 45, 63, .05); }
+/* 输入区：工作区的底栏，不再浮动在内容之上——这样它和整块面板是一个整体。 */
+#tab-agent-qa .qa-composer-wrap { flex: 0 0 auto; position: static; padding: 10px 18px 12px; border-top: 1px solid var(--qa-line); background: #fcfdfe; }
+#tab-agent-qa .qa-composer { max-width: 860px; margin: 0 auto; padding: 9px 10px 8px 12px; border: 1px solid #dde2e8; border-radius: 12px; background: #fff; box-shadow: none; transition: border-color .16s ease, box-shadow .16s ease; }
 #tab-agent-qa .qa-composer:focus-within { border-color: #c3d2de; box-shadow: 0 6px 22px rgba(25, 45, 63, .12), 0 0 0 3px rgba(47, 111, 159, .06); }
 #tab-agent-qa .agent-preset-select { width: auto; max-width: 116px; height: 28px; padding: 0 20px 0 8px; color: #6b7885; border: 0; border-radius: 8px; outline: 0; background: transparent; font-family: inherit; font-size: 11px; font-weight: 500; cursor: pointer; }
 #tab-agent-qa .agent-preset-select:hover,
@@ -495,7 +517,7 @@
   #tab-agent-qa .qa-sessions { max-height: 196px; border-right: 0; border-bottom: 1px solid var(--qa-line); }
   #tab-agent-qa .qa-inspector { border-top: 1px solid var(--qa-line); border-left: 0; }
   #tab-agent-qa .qa-inspector-card { max-width: none; }
-  #tab-agent-qa .qa-conversation { padding: 24px 16px 145px; }
+  #tab-agent-qa .qa-conversation { padding: 24px 16px 26px; }
   #tab-agent-qa .qa-composer-wrap { padding: 16px 12px 14px; }
 }
 @media (max-width: 560px) {
@@ -505,7 +527,40 @@
   #tab-agent-qa .qa-shortcut { display: none; }
 }
 
-/* Evidence controls apply to the rendered previews without coupling the QA UI to a backend format. */
+/* 轨迹视图：助手/工具/技能/系统四类步骤的密集列表，一行一步，可展开细节。 */
+#tab-agent-qa .qa-trace-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 16px 9px; border-bottom: 1px solid var(--qa-line); }
+#tab-agent-qa .qa-trace-title { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+#tab-agent-qa .qa-trace-title span { color: #33434f; font-size: 12px; font-weight: 700; }
+#tab-agent-qa .qa-trace-title em { min-width: 0; overflow: hidden; color: #9aa5b1; font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+#tab-agent-qa .qa-trace-legend { display: flex; align-items: center; gap: 5px; color: #98a2ad; font-size: 9px; white-space: nowrap; }
+#tab-agent-qa .qa-trace-legend i { width: 7px; height: 7px; display: inline-block; margin-left: 7px; border-radius: 2px; }
+#tab-agent-qa .qa-trace-legend i:first-child { margin-left: 0; }
+#tab-agent-qa .qa-trace-ribbon { flex: 0 0 auto; display: flex; gap: 2px; height: 20px; padding: 7px 16px 0; overflow: hidden; }
+#tab-agent-qa .qa-trace-ribbon i { width: 9px; flex: 0 0 auto; border-radius: 2px; opacity: .85; }
+#tab-agent-qa .qa-trace-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 18px; scrollbar-width: thin; }
+#tab-agent-qa .qa-step { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 10px; align-items: start; padding: 7px 16px; border-bottom: 1px solid #f3f5f7; }
+#tab-agent-qa .qa-step:hover { background: #fafbfc; }
+#tab-agent-qa .qa-step-kind { display: inline-flex; align-items: center; gap: 5px; padding-top: 1px; color: #7d8a97; font-size: 10px; font-weight: 600; white-space: nowrap; }
+#tab-agent-qa .qa-step-kind i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 2px; }
+#tab-agent-qa .qa-step-body { min-width: 0; }
+#tab-agent-qa .qa-step-line { color: #3d4d5c; font-size: 11px; line-height: 1.5; word-break: break-word; }
+#tab-agent-qa .qa-step-line strong { font-weight: 650; }
+#tab-agent-qa .qa-step-line code { color: #24435c; font: 10.5px/1.5 Consolas, monospace; word-break: break-all; }
+#tab-agent-qa .qa-step-badge { margin-left: 6px; padding: 1px 5px; border-radius: 5px; font-size: 9px; font-weight: 700; }
+#tab-agent-qa .qa-step-badge.is-ok { color: #2d7a5d; background: var(--qa-green-soft); }
+#tab-agent-qa .qa-step-badge.is-error { color: var(--qa-red); background: var(--qa-red-soft); }
+#tab-agent-qa .qa-step-badge.is-running { color: #8a6d1f; background: #fdf6e3; }
+#tab-agent-qa .qa-step-result { display: -webkit-box; margin-top: 2px; overflow: hidden; color: #8593a0; font: 10px/1.5 Consolas, monospace; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+#tab-agent-qa .qa-step-detail { margin-top: 4px; }
+#tab-agent-qa .qa-step-detail summary { color: #9aa5b1; cursor: pointer; font-size: 9.5px; }
+#tab-agent-qa .qa-step-detail summary:hover { color: #416a89; }
+#tab-agent-qa .qa-step-detail pre { max-height: 240px; margin: 5px 0 0; padding: 8px 9px; overflow: auto; color: #55707f; border: 1px solid #eaeef1; border-radius: 7px; background: #fafbfc; font: 10px/1.5 Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+#tab-agent-qa .qa-dot-assistant { background: #6b7f95; }
+#tab-agent-qa .qa-dot-tool { background: var(--qa-blue); }
+#tab-agent-qa .qa-dot-skill { background: #7660a5; }
+#tab-agent-qa .qa-dot-system { background: #b6bec7; }
+#tab-agent-qa .qa-dot-error { background: var(--qa-red); }
+
 #tab-agent-qa .qa-evidence-gallery .evidence-card img {
   width: calc(100% * var(--qa-image-scale, .5));
   max-width: 100%;

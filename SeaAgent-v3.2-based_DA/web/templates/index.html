@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
 <link rel="stylesheet" href="/static/css/academic.css?v=36">
-<link rel="stylesheet" href="/static/css/qa.css?v=7">
+<link rel="stylesheet" href="/static/css/qa.css?v=8">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -155,6 +155,11 @@
 </section>
 <section class="tab-content" id="tab-agent-qa">
   <div class="qa-shell">
+    <div class="qa-subnav" role="tablist" aria-label="Video QA views">
+      <button type="button" class="qa-subtab is-active" id="qaSubtabChat" role="tab" aria-selected="true" onclick="switchQaView('chat')">对话</button>
+      <button type="button" class="qa-subtab" id="qaSubtabTrace" role="tab" aria-selected="false" onclick="switchQaView('trace')">轨迹</button>
+      <span class="qa-subnav-meta" id="qaViewMeta"></span>
+    </div>
     <div class="qa-layout">
       <aside class="qa-sessions" aria-label="Conversation history">
         <div class="qa-sessions-head">
@@ -170,6 +175,7 @@
       </aside>
 
       <main class="qa-main" aria-label="Video question answering workspace">
+        <div class="qa-view" id="qaChatView">
         <div class="qa-conversation" id="qaConversationScroll">
           <div class="qa-welcome" id="qaWelcome">
             <div class="qa-welcome-mark" aria-hidden="true">✦</div>
@@ -221,6 +227,16 @@
               <div class="qa-composer-buttons"><span class="qa-shortcut">Ctrl / ⌘ + Enter</span><button type="button" class="qa-stop-button" id="btnStopAgent" onclick="stopAgentRun()" title="停止本轮" aria-label="停止本轮" hidden>■</button><button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()" title="运行（Ctrl / ⌘ + Enter）" aria-label="运行">↑</button></div>
             </div>
           </div>
+        </div>
+        </div>
+
+        <div class="qa-view" id="qaTraceView" hidden>
+          <div class="qa-trace-head">
+            <div class="qa-trace-title"><span>执行轨迹</span><em id="qaTraceSummary">这一轮还没有开始</em></div>
+            <div class="qa-trace-legend"><i class="qa-dot-assistant"></i>助手<i class="qa-dot-tool"></i>工具<i class="qa-dot-skill"></i>技能<i class="qa-dot-system"></i>系统</div>
+          </div>
+          <div class="qa-trace-ribbon" id="qaTraceRibbon" aria-hidden="true"></div>
+          <div class="qa-trace-body" id="qaTraceList"><div class="qa-empty-state">这一轮开始时，助手与工具的每一步都会记在这里。</div></div>
         </div>
       </main>
 
@@ -403,10 +419,11 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=22"></script>
   <script src="/static/js/memory.js?v=8"></script>
-<script src="/static/js/agent.js?v=79"></script>
+<script src="/static/js/agent.js?v=80"></script>
 <script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>
+
 
 
 
