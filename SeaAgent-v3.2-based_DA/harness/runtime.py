@@ -203,7 +203,7 @@ class _Trace:
             sort_keys=True,
         )
 
-    def _consume_skills(self, state: dict[str, Any]) -> None:
+    def consume_skills(self, state: dict[str, Any]) -> None:
         """把框架写进 state 的 skills_metadata 转成 skill 事件。
 
         skills_metadata 是 Deep Agents 的回执，记录了本次注入了哪些 skill 及其 description。
@@ -245,7 +245,7 @@ class _Trace:
         for state in states:
             if not isinstance(state, dict):
                 continue
-            self._consume_skills(state)  # skill 回执可能出现在任一节点的 state 里
+            self.consume_skills(state)  # skill 回执可能出现在任一节点的 state 里
             messages = state.get("messages")
             if not isinstance(messages, list):
                 continue  # 该节点这一帧只更新了别的字段
@@ -332,6 +332,27 @@ class _Trace:
 # ---------------------------------------------------------------------------
 # 三、Harness 装配与执行
 # ---------------------------------------------------------------------------
+
+
+# 框架自带工具的中文标签：工具时间线要能一眼看出「这一轮到底有没有去读技能正文」。
+# read_file 之所以叫「读取技能正文」，是因为读取面已被权限规则收敛到 /skills 目录内。
+_BUILTIN_TOOL_LABELS = {
+    "read_file": "读取技能正文",
+    "ls": "技能目录",
+    "glob": "技能检索",
+    "grep": "技能内容检索",
+    "write_todos": "任务清单",
+}
+
+
+def _tool_labels(config: dict[str, Any]) -> dict[str, str]:
+    """工具名 -> 中文标签：内置文件工具打底，config/tools.yaml 的声明优先。"""
+    labels = dict(_BUILTIN_TOOL_LABELS)
+    for item in config.get("tools", []):
+        if isinstance(item, dict) and item.get("name"):
+            name = str(item["name"])
+            labels[name] = str(item.get("label") or name)
+    return labels
 
 
 def _filesystem_permissions(harness: dict[str, Any], permission_type: Any) -> list[Any] | None:
@@ -447,6 +468,24 @@ class SeaVideoHarness:
     def __exit__(self, _exc_type: type[BaseException] | None, _exc_value: BaseException | None, _traceback: TracebackType | None) -> None:
         self.close()
 
+    def _seed_skills_from_checkpoint(self, trace: _Trace, thread_id: str) -> None:
+        """续接会话时补发技能事件，让每一轮都看得到实际注入的技能目录。
+
+        框架只在**首次**运行时把 skills_metadata 写进 state；续接同一个 thread 时它已经在
+        检查点里，中间件会直接跳过（skills.py 里 `if "skills_metadata" in state: return None`），
+        于是一轮运行下来一条 skill 事件都没有，前端把「技能已注入」显示成 0。
+        技能目录本身仍在每一轮的 system prompt 里（由 modify_request 注入），受影响的只是回执，
+        这里从检查点把它补回事件流。纯展示用途，取不到就跳过。
+        """
+        try:
+            snapshot = self.agent.get_state({"configurable": {"thread_id": thread_id}})
+        except Exception:  # 新会话没有检查点，或 agent 不支持读快照
+            logger.debug("跳过快照技能回执：thread_id=%s", thread_id, exc_info=True)
+            return
+        values = getattr(snapshot, "values", None)
+        if isinstance(values, dict):
+            trace.consume_skills(values)
+
     def run(self, question: str, thread_id: str | None = None, cancel: Any = None, **_: Any) -> dict[str, Any]:
         """跑完一轮问答后一次性返回结果；运行期异常一律降级为 error 结果，不向外抛。
 
@@ -457,19 +496,14 @@ class SeaVideoHarness:
         # thread_id 同时是检查点的会话键：复用同一 id 即续接历史，缺省则视为全新问答
         thread_id = thread_id or uuid.uuid4().hex
         harness = self.config.get("harness", {})
-        # 中文标签来自 tools.yaml，只影响事件展示，不参与工具调用
-        tool_labels = {
-            str(item.get("name")): str(item.get("label") or item.get("name"))
-            for item in self.config.get("tools", [])
-            if isinstance(item, dict) and item.get("name")
-        }
         trace = _Trace(
             self.event_handler,
             int(harness.get("event_payload_max_chars", 4000)),
             str(harness.get("evidence_tool", "")),
-            tool_labels,
+            _tool_labels(self.config),
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
+        self._seed_skills_from_checkpoint(trace, thread_id)
         cancelled = False
         try:
             # updates 模式每次产出一帧增量，交给 _Trace 去重并翻译成事件
@@ -515,11 +549,7 @@ class SeaVideoHarness:
             if self.event_handler:
                 self.event_handler(event)
 
-        tool_labels = {
-            str(item.get("name")): str(item.get("label") or item.get("name"))
-            for item in self.config.get("tools", [])
-            if isinstance(item, dict) and item.get("name")
-        }
+        tool_labels = _tool_labels(self.config)
         trace = _Trace(
             emit,
             int(harness.get("event_payload_max_chars", 4000)),
@@ -527,6 +557,7 @@ class SeaVideoHarness:
             tool_labels,
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
+        self._seed_skills_from_checkpoint(trace, thread_id)
         try:
             while pending:
                 yield pending.pop(0)

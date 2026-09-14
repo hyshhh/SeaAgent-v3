@@ -97,3 +97,33 @@ def test_run_without_cancel_signal_still_completes():
     assert result['state'] == 'completed'
     assert result['answer'] == '回答文本'
 
+
+def test_resumed_thread_re_emits_skill_events_from_the_checkpoint():
+    """续接会话时框架不再发 skills_metadata，运行时要从检查点把技能回执补回事件流。"""
+    events = []
+    trace = _Trace(events.append, event_limit=4000, evidence_tool='show_evidence')
+    runtime = _runtime_with_agent(_FakeAgent([]))
+    runtime.agent = type('_AgentWithState', (), {
+        'stream': lambda self, *_a, **_k: iter(()),
+        'get_state': lambda self, _config: type('_Snapshot', (), {'values': {'skills_metadata': [{'name': 'query', 'description': '查询'}, {'name': 'finalize', 'description': '收尾'}]}})(),
+    })()
+
+    runtime._seed_skills_from_checkpoint(trace, 'thread-resume')
+
+    assert [event['skill'] for event in events] == ['query', 'finalize']
+    assert all(event['type'] == 'skill' for event in events)
+
+
+def test_skill_seeding_tolerates_an_agent_without_state_snapshot():
+    trace = _Trace(None, event_limit=4000, evidence_tool='show_evidence')
+    _runtime_with_agent(_FakeAgent([]))._seed_skills_from_checkpoint(trace, 'thread-fresh')
+
+
+def test_builtin_file_tools_get_chinese_labels():
+    """时间线要能一眼看出这一轮有没有去读技能正文。"""
+    from harness.runtime import _tool_labels
+
+    labels = _tool_labels(load_config())
+    assert labels['read_file'] == '读取技能正文'
+    assert labels['get_track'] == '轨迹记忆'
+

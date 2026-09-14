@@ -25,10 +25,13 @@ def build_middleware(config: dict[str, Any], model: Any) -> list[Any]:
         ToolRetryMiddleware,
     )
 
+    from .disclosure import SkillDisclosureMiddleware
     from .wrapup import EvidenceWrapUpMiddleware
 
     settings = config.get("harness", {})
     return [
+        # 技能披露提醒：整段会话还没读过技能正文时，在模型第一次决策前把规范并进 system 消息
+        SkillDisclosureMiddleware(max_reminders=int(settings.get("skill_reminder_max_per_run", 1))),
         # 上下文压缩：历史超阈值即摘要旧消息，只留最近若干条，保证长会话不撑爆窗口
         SummarizationMiddleware(model, trigger=("tokens", int(settings.get("summarization_trigger_tokens", 12000))), keep=("messages", int(settings.get("summarization_keep_messages", 12)))),
         # 工具调用上限：run 级管单次问答，thread 级管整段会话。轮次不设上限，这一层只拦失控试探；

@@ -13,7 +13,7 @@ Sea-Video-Harness 是面向海域监控视频问答的单主智能体 Harness。
 
 ## 问答链路要点
 
-- **技能渐进式披露**：技能名与 description 随系统提示词注入；`read_file`/`ls`/`glob`/`grep` 由权限规则收敛到 `/skills` 目录内，写入与 shell 工具仍然禁用。
+- **技能渐进式披露**：技能名与 description 随系统提示词注入（每一轮都在）；`read_file`/`ls`/`glob`/`grep` 由权限规则收敛到 `/skills` 目录内，写入与 shell 工具仍然禁用。整段会话还没读过任何技能正文时，`SkillDisclosureMiddleware` 会在模型第一次决策前把「先读正文再动手」并进 system 消息提醒一次。续接会话时框架不再回写技能回执，运行时会从检查点补回，保证事件流每一轮都能看到实际注入的技能目录。
 - **收尾与证据**：`skills/finalize` 规定收尾动作，`EvidenceWrapUpMiddleware` 在模型给出最终回答却没调用证据工具时提醒一次，两者合起来保证前端证据面板有内容。
 - **轮次不设上限**：由模型自己判断何时答完；只保留工具调用上限作为失控试探的安全阀。
 

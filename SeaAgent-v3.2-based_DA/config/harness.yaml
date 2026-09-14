@@ -21,6 +21,8 @@ harness:
   evidence_tool: show_evidence
   # 收尾守卫：模型给出最终回答却还没落地证据时，最多补发几次提醒（见 harness/wrapup.py）。
   evidence_wrapup_max_nudges: 2
+  # 技能披露提醒：整段会话还没读过技能正文时，在模型动手前最多补几句提醒（见 harness/disclosure.py）。
+  skill_reminder_max_per_run: 1
   # 文件工具的只读白名单：Deep Agents 原生 skills 渐进式披露要求模型能自行 read_file 打开
   # SKILL.md，因此读取工具必须开放，但读取范围收敛在 skills 目录内（先匹配先生效的权限规则）。
   readonly_paths:
