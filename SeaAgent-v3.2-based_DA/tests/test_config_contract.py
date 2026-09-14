@@ -22,3 +22,10 @@ def test_model_round_limit_is_gone():
     harness = load_config()["harness"]
     assert "model_calls_per_run" not in harness
     assert int(harness["evidence_wrapup_max_nudges"]) >= 1
+
+
+def test_tool_budget_has_a_stall_guard():
+    """工具预算用完只是驳回调用，还得有「连续失败就收尾」这条，否则模型会一直空转。"""
+    harness = load_config()["harness"]
+    assert 1 <= int(harness["stall_guard_consecutive_errors"]) <= 8
+    assert int(harness["tool_calls_per_run"]) < int(harness["tool_calls_per_thread"])

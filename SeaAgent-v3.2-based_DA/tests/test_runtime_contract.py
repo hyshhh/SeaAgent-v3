@@ -127,3 +127,38 @@ def test_builtin_file_tools_get_chinese_labels():
     assert labels['read_file'] == '读取技能正文'
     assert labels['get_track'] == '轨迹记忆'
 
+
+def _blocked_tool_frame(index):
+    """模拟工具预算用完后框架驳回的一次调用：error 状态的 ToolMessage。"""
+    return {'tools': {'messages': [ToolMessage(content='Tool call limit exceeded. Do not make additional tool calls.', name='get_track', tool_call_id=f'call-{index}', status='error')]}}
+
+
+def test_run_stops_after_consecutive_tool_failures():
+    """模型被驳回后仍继续硬调时，运行时必须收尾，而不是无限刷同一条错误。"""
+    frames = [_blocked_tool_frame(index) for index in range(20)]
+    runtime = _runtime_with_agent(_FakeAgent(frames))
+    result = runtime.run('问题', thread_id='thread-stall')
+    assert result['state'] == 'stalled'
+    assert '收尾' in result['answer']
+    # 20 帧里只消费到阈值就停：不会把后面十几条同样的错误也跑完
+    assert len(result['tool_records']) == 4
+
+
+def test_a_single_failure_does_not_stall_the_run():
+    """偶尔失败一次不算失控：成功一次即清零。"""
+    frames = [
+        _blocked_tool_frame(1),
+        {'tools': {'messages': [ToolMessage(content='{"ok": true}', name='get_track', tool_call_id='call-2')]}},
+        _blocked_tool_frame(3),
+        {'model': {'messages': [AIMessage(content='最终回答', id='answer-final')]}},
+    ]
+    result = _runtime_with_agent(_FakeAgent(frames)).run('问题', thread_id='thread-ok')
+    assert result['state'] == 'completed'
+    assert result['answer'] == '最终回答'
+
+
+def test_failed_tool_records_keep_their_error_status():
+    runtime = _runtime_with_agent(_FakeAgent([_blocked_tool_frame(1)]))
+    result = runtime.run('问题', thread_id='thread-status')
+    assert result['tool_records'][0]['status'] == 'error'
+

@@ -243,6 +243,7 @@ function renderSessionHistory(turns) {
 function turnAnswer(turn) {
   if (turn?.answer) return turn.answer;
   if (turn?.state === 'cancelled') return '（这一轮已停止）';
+  if (turn?.state === 'stalled') return '（这一轮工具调用连续失败，已按现有结果收尾）';
   return turn?.state || '（该轮未留下回答）';
 }
 
@@ -438,10 +439,12 @@ function completeToolEvent(event) {
   }
   const target = harnessToolCards.get(callId);
   if (!target) return;
+  // 失败的工具调用要一眼看得出来：事件带 status，早期事件只有 type
+  const failed = event.type === 'error' || event.status === 'error';
   target.classList.remove('is-running');
-  target.classList.add(event.type === 'error' ? 'is-error' : 'is-complete');
+  target.classList.add(failed ? 'is-error' : 'is-complete');
   const status = target.querySelector('.qa-tool-status');
-  if (status) status.textContent = event.type === 'error' ? 'Failed' : 'Complete';
+  if (status) status.textContent = failed ? 'Failed' : 'Complete';
   const message = target.querySelector('.qa-event-message');
   if (message) message.textContent = event.message || 'Tool call complete';
   const details = target.querySelector('details');
@@ -502,11 +505,13 @@ function renderAgentAnswer(result) {
   const view = document.getElementById('agentFinalView');
   const answer = document.getElementById('agentAnswer');
   const cancelled = result?.state === 'cancelled';
+  const stalled = result?.state === 'stalled';
   if (view) view.hidden = false;
-  if (answer) answer.textContent = result?.answerText || result?.answer || (cancelled ? '本轮已停止。' : '未生成回答。');
+  if (answer) answer.textContent = result?.answerText || result?.answer || (cancelled ? '本轮已停止。' : stalled ? '本轮工具调用连续失败，已按现有结果收尾。' : '未生成回答。');
   renderToolRecords(result?.toolRecords || result?.tool_records);
   renderEvidence(result?.evidence || null);
   if (cancelled) setHarnessState('Stopped', '');
+  else if (stalled) setHarnessState('已收尾', 'complete');
   else setHarnessState(result?.success === false ? 'Failed' : 'Complete', result?.success === false ? 'failed' : 'complete');
   scrollActivity(true);
   scrollConversation(true);

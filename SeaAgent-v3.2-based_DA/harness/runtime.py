@@ -162,6 +162,11 @@ class _Trace:
         # —— 账本三：证据 ——
         self.evidence: dict[str, Any] = {}  # evidence_tool 的返回值，单独留档
 
+        # —— 失控检测：连续失败的工具调用计数 ——
+        # 工具预算用完后，框架会把后续调用一律驳回成 error 结果；模型若继续硬调，
+        # 就会无限刷「Tool call limit exceeded」。连续失败计数是停止这种空转的依据。
+        self.error_streak = 0
+
         # —— 去重游标：抵御 updates 流的重复投递 ——
         self._seen_messages: set[str] = set()  # 已处理过的消息指纹
         self._seen_skills: set[str] = set()  # 已上报过的 skill 名
@@ -291,10 +296,13 @@ class _Trace:
                         self.records.append(record)
                     result = _parse_payload(message)
                     effective_name = name or str(record.get("tool") or "")
-                    record.update({"tool": effective_name, "label": self.tool_labels.get(effective_name, record.get("label", effective_name)), "result": result, "status": "completed"})
-                    if effective_name == self.evidence_tool and isinstance(result, dict):
+                    failed = str(getattr(message, "status", "") or "").lower() == "error"
+                    # 连续失败计数：成功一次就清零，只有「一直失败」才算失控
+                    self.error_streak = self.error_streak + 1 if failed else 0
+                    record.update({"tool": effective_name, "label": self.tool_labels.get(effective_name, record.get("label", effective_name)), "result": result, "status": "error" if failed else "completed"})
+                    if effective_name == self.evidence_tool and isinstance(result, dict) and not failed:
                         self.evidence = result  # 证据工具的结果单独留档，随 result() 一并交出
-                    self.event({"type": "tool_result", "title": record.get("label") or effective_name or "tool", "message": "工具调用完成", "tool": effective_name, "label": record.get("label") or effective_name, "result": _bounded(result, self.event_limit), "callId": call_id})
+                    self.event({"type": "tool_result", "title": record.get("label") or effective_name or "tool", "message": "工具调用失败" if failed else "工具调用完成", "status": "error" if failed else "completed", "tool": effective_name, "label": record.get("label") or effective_name, "result": _bounded(result, self.event_limit), "callId": call_id})
 
     def result(self, thread_id: str, config: dict[str, Any], state: str = "completed") -> dict[str, Any]:
         """汇总本次运行的对外结果，run 与 stream 结束（含异常路径）时都会调用。
@@ -315,8 +323,13 @@ class _Trace:
         answer_field = str(output.get("answer_field", "answer"))
         state_field = str(output.get("state_field", "state"))
         evidence_field = str(output.get("evidence_field", "evidence"))
-        # 模型始终没吐过纯文本时，退化为最后一条消息的文本
-        answer = self.answer or (_text(self.messages[-1]) if self.messages else "")
+        # 模型始终没吐过纯文本时，退化为最后一条**模型消息**的文本。
+        # 不能退回最后一条消息本身：那可能是工具结果（例如被驳回的
+        # 「Tool call limit exceeded」），会把它当成回答展示给用户。
+        answer = self.answer or next(
+            (_text(message) for message in reversed(self.messages) if _message_kind(message) in {"ai", "assistant"} and _text(message).strip()),
+            "",
+        )
         return {
             "session_id": thread_id,
             answer_field: answer,
@@ -505,6 +518,10 @@ class SeaVideoHarness:
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
         self._seed_skills_from_checkpoint(trace, thread_id)
         cancelled = False
+        stalled = False
+        # 失控阈值：工具预算用完后框架会把后续调用一律驳回，模型若继续硬调就会无限刷同一条错误。
+        # 连续失败到这个数就收尾——正常活干到一半偶尔失败一两次不会触发（成功一次即清零）。
+        stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
         try:
             # updates 模式每次产出一帧增量，交给 _Trace 去重并翻译成事件
             for update in self.agent.stream(
@@ -516,6 +533,9 @@ class SeaVideoHarness:
                     cancelled = True
                     break
                 trace.consume(update)
+                if trace.error_streak >= stall_limit:
+                    stalled = True
+                    break
         except Exception as error:
             # 对外只返回安全的短消息，完整 traceback 进入服务日志，便于定位模型/工具/中间件故障。
             logger.exception("Harness run failed: thread_id=%s", thread_id)
@@ -529,6 +549,15 @@ class SeaVideoHarness:
         if cancelled:
             result = trace.result(thread_id, self.config, state="cancelled")
             trace.event({"type": "complete", "title": "Harness 已停止", "message": "本轮已按请求停止", "result": result})
+            return result
+        if stalled:
+            # 工具调用连续失败：不再让模型空转，按已经拿到的结果收尾
+            result = trace.result(thread_id, self.config, state="stalled")
+            answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
+            if not str(result.get(answer_field) or "").strip():
+                result[answer_field] = "本轮工具调用连续失败（多半是已达工具调用上限或参数反复被拒），已按现有结果收尾。"
+            trace.event({"type": "status", "title": "工具调用已收尾", "message": f"连续 {trace.error_streak} 次工具调用失败，已停止继续尝试"})
+            trace.event({"type": "complete", "title": "Harness 已收尾", "message": "工具调用连续失败，已在现有结果上收尾", "result": result})
             return result
         result = trace.result(thread_id, self.config)
         trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成", "result": result})
