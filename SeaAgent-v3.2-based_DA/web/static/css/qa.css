@@ -15,7 +15,7 @@
   background: #fbfbfc;
 }
 #tab-agent-qa .qa-shell {
-  width: calc(100% + 64px);
+  width: auto;
   min-height: calc(100vh - 188px);
   margin: -26px -32px -48px;
   color: var(--qa-ink);
@@ -313,13 +313,13 @@
 @keyframes qaPulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 @keyframes qaToolPulse { 0%,100% { box-shadow: none; } 50% { box-shadow: 0 0 0 4px rgba(226,163,60,.12); } }
 @media (max-width: 1120px) {
-  #tab-agent-qa .qa-shell { width: calc(100% + 48px); margin-inline: -24px; }
+  #tab-agent-qa .qa-shell { width: auto; margin-inline: -24px; }
   #tab-agent-qa .qa-layout { grid-template-columns: minmax(0,1fr) 282px; }
   #tab-agent-qa .qa-conversation { padding-inline: 34px; }
   #tab-agent-qa .qa-composer-wrap { padding-inline: 28px; }
 }
 @media (max-width: 820px) {
-  #tab-agent-qa .qa-shell { width: calc(100% + 28px); margin-inline: -14px; }
+  #tab-agent-qa .qa-shell { width: auto; margin-inline: -14px; }
   #tab-agent-qa .qa-layout { display: block; }
   #tab-agent-qa .qa-inspector { border-top: 1px solid var(--qa-line); border-left: 0; }
   #tab-agent-qa .qa-inspector-card { max-width: none; }
@@ -344,4 +344,70 @@
 }
 #tab-agent-qa .qa-evidence-gallery .evidence-group:nth-child(2) .evidence-card img {
   width: calc(100% * var(--qa-video-scale, .25));
+}
+
+/* Final QA polish: keep the composer centered in the main column and use a restrained monochrome Codex palette. */
+#tab-agent-qa .qa-main { position: relative; }
+#tab-agent-qa .qa-composer-wrap { padding-inline: 18px; }
+#tab-agent-qa .qa-composer { max-width: 760px; }
+#tab-agent-qa .qa-composer textarea { color: #202124; }
+#tab-agent-qa .qa-tool-button,
+#tab-agent-qa .qa-composer-label,
+#tab-agent-qa .qa-section-title,
+#tab-agent-qa .qa-event-title,
+#tab-agent-qa .qa-status-card > strong,
+#tab-agent-qa .qa-inspector-heading,
+#tab-agent-qa .qa-stat-grid b { color: #202124; }
+#tab-agent-qa .qa-muted,
+#tab-agent-qa .qa-section-head span:not(.qa-section-title),
+#tab-agent-qa .qa-event-label,
+#tab-agent-qa .qa-event-message,
+#tab-agent-qa .qa-event-meta,
+#tab-agent-qa .qa-status-card > p,
+#tab-agent-qa .qa-stat-grid span,
+#tab-agent-qa .qa-skill-item strong,
+#tab-agent-qa .qa-skill-item span { color: #737373; }
+#tab-agent-qa .qa-live-indicator,
+#tab-agent-qa .qa-inspector-heading > i,
+#tab-agent-qa .qa-runtime-badge i,
+#tab-agent-qa #agentThinkingDot,
+#tab-agent-qa #qaHeaderDot { background: #202124; box-shadow: none; }
+#tab-agent-qa .qa-activity[data-state="running"] .qa-live-indicator,
+#tab-agent-qa .qa-runtime-badge i.running,
+#tab-agent-qa #agentThinkingDot.running,
+#tab-agent-qa #qaHeaderDot.running { background: #202124; box-shadow: 0 0 0 4px rgba(32,33,36,.1); }
+#tab-agent-qa .qa-event-icon,
+#tab-agent-qa .qa-tool-event .qa-event-icon { color: #202124; border-color: #e1e1e1; background: #f7f7f7; }
+#tab-agent-qa .qa-event-row.qa-status .qa-event-icon,
+#tab-agent-qa .qa-event-row.qa-skill .qa-event-icon,
+#tab-agent-qa .qa-event-row.qa-model .qa-event-icon,
+#tab-agent-qa .qa-event-row.qa-complete .qa-event-icon,
+#tab-agent-qa .qa-event-row.qa-error .qa-event-icon { color: #202124; border-color: #e1e1e1; background: #f7f7f7; }
+#tab-agent-qa .qa-tool-event,
+#tab-agent-qa .qa-tool-event.is-complete,
+#tab-agent-qa .qa-tool-event.is-error { border-color: #e4e4e4; background: #fff; }
+#tab-agent-qa .qa-tool-event.is-running .qa-event-icon { color: #202124; border-color: #d8d8d8; background: #f4f4f4; }
+#tab-agent-qa .qa-tool-status,
+#tab-agent-qa .qa-tool-event.is-complete .qa-tool-status,
+#tab-agent-qa .qa-tool-event.is-error .qa-tool-status { color: #606060; }
+#tab-agent-qa .qa-answer-card { border-color: #dedede; box-shadow: 0 8px 20px rgba(0,0,0,.04); }
+#tab-agent-qa .qa-answer-badge { color: #202124; background: #f1f1f1; }
+#tab-agent-qa .qa-answer-head > strong { color: #202124; }
+#tab-agent-qa .qa-skill-item i { color: #202124; background: #f1f1f1; }
+#tab-agent-qa .qa-stat-grid > div { background: #f5f5f5; }
+#tab-agent-qa .qa-send-button { background: #202124; }
+#tab-agent-qa .qa-send-button:hover { background: #000; }
+#tab-agent-qa .qa-tool-button:hover { color: #202124; background: #f1f1f1; }
+#tab-agent-qa .qa-tool-button-danger:hover { color: #202124; background: #f1f1f1; }
+#tab-agent-qa .qa-user-bubble { border-color: #dedede; background: #f5f5f5; }
+#tab-agent-qa .qa-user-bubble p,
+#tab-agent-qa .qa-answer-text { color: #303030; }
+#tab-agent-qa .qa-composer { border-color: #cfcfcf; box-shadow: 0 9px 28px rgba(0,0,0,.09), 0 1px 3px rgba(0,0,0,.06); }
+@media (max-width: 1120px) {
+  #tab-agent-qa .qa-composer-wrap { padding-inline: 18px; }
+  #tab-agent-qa .qa-composer { max-width: 720px; }
+}
+@media (max-width: 820px) {
+  #tab-agent-qa .qa-composer-wrap { padding-inline: 12px; }
+  #tab-agent-qa .qa-composer { max-width: none; }
 }
