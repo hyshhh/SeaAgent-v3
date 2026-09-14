@@ -587,6 +587,9 @@ class SeaVideoHarness:
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
         self._seed_skills_from_checkpoint(trace, thread_id)
+        # 与 run 用同一套失控阈值：工具预算用完后模型若继续硬调，这里也要收尾而不是无限刷错误
+        stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
+        stalled = False
         try:
             while pending:
                 yield pending.pop(0)
@@ -598,6 +601,19 @@ class SeaVideoHarness:
                 trace.consume(update)
                 while pending:  # 帧内产生的多条事件在同一个 yield 点按序交付
                     yield pending.pop(0)
+                if trace.error_streak >= stall_limit:
+                    stalled = True
+                    break
+            if stalled:
+                result = trace.result(thread_id, self.config, state="stalled")
+                answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
+                if not str(result.get(answer_field) or "").strip():
+                    result[answer_field] = "本轮工具调用连续失败（多半是已达工具调用上限或参数反复被拒），已按现有结果收尾。"
+                trace.event({"type": "status", "title": "工具调用已收尾", "message": f"连续 {trace.error_streak} 次工具调用失败，已停止继续尝试"})
+                trace.event({"type": "complete", "title": "Harness 已收尾", "message": "工具调用连续失败，已在现有结果上收尾", "result": result})
+                while pending:
+                    yield pending.pop(0)
+                return
             result = trace.result(thread_id, self.config)
             trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成", "result": result})
             while pending:

@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=29">
 <link rel="stylesheet" href="/static/css/academic.css?v=36">
-<link rel="stylesheet" href="/static/css/qa.css?v=8">
+<link rel="stylesheet" href="/static/css/qa.css?v=9">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -158,6 +158,7 @@
     <div class="qa-subnav" role="tablist" aria-label="Video QA views">
       <button type="button" class="qa-subtab is-active" id="qaSubtabChat" role="tab" aria-selected="true" onclick="switchQaView('chat')">对话</button>
       <button type="button" class="qa-subtab" id="qaSubtabTrace" role="tab" aria-selected="false" onclick="switchQaView('trace')">轨迹</button>
+      <span class="qa-subnav-status"><i id="qaHeaderDot"></i><strong id="qaHeaderStatus">Ready</strong></span>
       <span class="qa-subnav-meta" id="qaViewMeta"></span>
     </div>
     <div class="qa-layout">
@@ -246,6 +247,7 @@
           <strong id="qaInspectorState">Ready to inspect</strong>
           <p>Skills, tools and evidence are kept visible without exposing hidden chain-of-thought.</p>
           <div class="qa-stat-grid"><div><b id="qaEventCount">0</b><span>events</span></div><div><b id="qaSkillCount">0</b><span>skills</span></div><div><b id="qaToolCount">0</b><span>tools</span></div></div>
+          <div class="qa-status-memory" id="agentRoundLimit">记忆概览读取中…</div>
         </section>
 
         <section class="qa-inspector-card">
@@ -423,6 +425,7 @@
 <script src="/static/js/settings.js?v=11"></script>
 </body>
 </html>
+
 
 
 

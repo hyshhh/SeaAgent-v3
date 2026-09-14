@@ -33,13 +33,17 @@ class AgentController:
         问题仍会作为一轮记录留在会话里，只是没有回答——用户停掉的那一轮不该凭空消失。
         """
         session_id = str(session_id or "").strip() or f"session-{uuid.uuid4().hex[:12]}"
-        if self.repository.get_session(session_id) is None:
+        session = self.repository.get_session(session_id)
+        if session is None:
             self.repository.create_session(session_id, question)
+            turn_index = 1
+        else:
+            turn_index = len(session.get("turns") or []) + 1
         runtime: SeaVideoHarness | None = None
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
             state = runtime.run(question, thread_id=session_id, cancel=cancel)
-            result = self._project(session_id, state)
+            result = self._project(session_id, state, turn_index)
         except Exception as error:
             logger.exception("Agent controller failed: session_id=%s", session_id)
             message = str(error).strip() or f"{type(error).__name__}: {error!r}"
@@ -65,7 +69,12 @@ class AgentController:
         result["turnIndex"] = self.repository.append_turn(session_id, question, result)
         return result
 
-    def _project(self, session_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    def _project(self, session_id: str, state: dict[str, Any], turn_index: int = 1) -> dict[str, Any]:
+        """把一轮的内部状态投成对外结果，并把工具调用落进 qa_rounds / qa_evidence。
+
+        ``turn_index`` 必须进主键：runtime 的轮次编号是**单轮内**计数（1..N），只按它拼 id 的话，
+        会话第二轮的 `-round-1` 会把第一轮的同一行覆盖掉——审计表就只剩最后一轮了。
+        """
         records = state.get("tool_records") or []
         rounds = state.get("rounds") or []
         persisted_rounds = {
@@ -75,7 +84,7 @@ class AgentController:
         }
         for index, record in enumerate(records):
             round_number = int(record.get("round") or 0) or index + 1
-            round_id = f"{session_id}-round-{round_number}"
+            round_id = f"{session_id}-round-{turn_index}-{round_number}"
             round_info = persisted_rounds.get(round_number, {})
             self.repository.add_round(
                 round_id,
