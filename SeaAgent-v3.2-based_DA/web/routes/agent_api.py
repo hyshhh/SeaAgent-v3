@@ -70,8 +70,15 @@ async def stream_agent_query(body: AgentQuery, request: Request):
             loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
         async def execute() -> None:
+            # 预算读取也要在 try 内：任何异常都必须变成一条终止事件，
+            # 否则事件队列永远不出队，整条 NDJSON 流会永久等待（这个坑刚踩过）
+            budget = 0.0
             try:
-                result = await run_in_threadpool(_controller(request, emit).answer, body.question, session_id, cancel)
+                budget = float(request.app.state.config.get("harness", {}).get("run_timeout_seconds", 600) or 0)
+                # 整轮墙钟预算：运行时只能"收到下一帧"才看得到东西，如果某次工具调用（或子智能体
+                # 内部的循环）长时间不返回，前端会彻底静止。这里给它一个上限，超时就收尾。
+                call = run_in_threadpool(_controller(request, emit).answer, body.question, session_id, cancel)
+                result = await (asyncio.wait_for(call, timeout=budget) if budget > 0 else call)
                 if terminal_seen.is_set():
                     return
                 if result.get("success", False):
@@ -99,6 +106,20 @@ async def stream_agent_query(body: AgentQuery, request: Request):
                         "errorType": result.get("errorType"),
                         "result": result,
                     })
+            except asyncio.TimeoutError:
+                # 超时：置位中断信号（它会在下一个超步边界收尾），并立刻把这一轮结束掉。
+                # worker 线程可能还卡在某个工具里，这里不等它——前端先拿到可读的结论。
+                cancel.set()
+                if terminal_seen.is_set():
+                    return
+                terminal_seen.set()
+                logger.warning("Agent run timed out: session_id=%s budget=%ss", session_id, budget)
+                await event_queue.put({
+                    "type": "error",
+                    "title": "Harness 已超时",
+                    "message": f"本轮超过 {int(budget)} 秒仍未返回（多半是某次全量扫描或子智能体内部循环），已中止等待。可缩小时间范围或减少轨迹条数后重试。",
+                    "errorType": "TimeoutError",
+                })
             except Exception as error:
                 logger.exception("Agent stream task failed")
                 if terminal_seen.is_set():
@@ -123,7 +144,9 @@ async def stream_agent_query(body: AgentQuery, request: Request):
                     break
         finally:
             request.app.state.agent_runs.pop(session_id, None)
-            await task
+            # 超时后 worker 线程可能仍在跑，await 它会再次卡住这条流；只在已结束时收尾
+            if task.done():
+                await task
 
     return StreamingResponse(
         events(),

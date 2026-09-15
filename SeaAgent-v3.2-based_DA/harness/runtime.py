@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import uuid
 from collections.abc import Callable, Iterator
 from types import TracebackType
@@ -660,6 +661,28 @@ class SeaVideoHarness:
             self.close()
             raise
 
+    def _start_heartbeat(self, trace: _Trace, question: str) -> Any:
+        """跑起来之后每隔一段时间报一次「还在跑」。
+
+        为什么需要：一轮里最慢的往往是子智能体内部的某次工具调用（全量扫描、算嵌入），
+        运行时的循环只有在**收到下一帧**时才看得到东西——期间前端是彻底静止的，用户以为卡死了。
+        心跳线程只是定期往外发一条 status，不碰 agent，也不影响取消与守卫。
+        """
+        interval = float(self.config.get("harness", {}).get("heartbeat_seconds", 15) or 0)
+        if interval <= 0:
+            return None
+        stop = threading.Event()
+
+        def beat() -> None:
+            waited = 0.0
+            while not stop.wait(interval):
+                waited += interval
+                trace.event({"type": "status", "title": "仍在执行", "message": f"已等待 {int(waited)} 秒（模型或工具仍在工作）"})
+
+        thread = threading.Thread(target=beat, name="harness-heartbeat", daemon=True)
+        thread.start()
+        return stop
+
     def _subagent_tool_owners(self) -> dict[str, str]:
         """工具名 -> 从智能体名。工具面按任务切开时，用它认领子智能体的流式帧。"""
         return {str(getattr(tool, "name", "")): str(spec["name"]) for spec in self.subagents for tool in spec["tools"]}
@@ -723,6 +746,7 @@ class SeaVideoHarness:
         stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
         repeat_limit = max(1, int(harness.get("stall_guard_repeat_calls", 3)))
         stall_reason = ""
+        heartbeat = self._start_heartbeat(trace, question)
         try:
             # updates 模式每次产出一帧增量，交给 _Trace 去重并翻译成事件。
             # subgraphs=True：主从协同时子智能体的每一步也会带命名空间吐出来，
@@ -755,6 +779,8 @@ class SeaVideoHarness:
             trace.event({"type": "error", "title": "Harness 执行失败", "message": message, "errorType": type(error).__name__, "result": result})
             return result
         finally:
+            if heartbeat is not None:
+                heartbeat.set()
             self.close()
         if cancelled:
             result = trace.result(thread_id, self.config, state="cancelled")
@@ -803,6 +829,7 @@ class SeaVideoHarness:
         repeat_limit = max(1, int(harness.get("stall_guard_repeat_calls", 3)))
         stalled = False
         stall_reason = ""
+        heartbeat = self._start_heartbeat(trace, question)
         try:
             while pending:
                 yield pending.pop(0)
@@ -847,6 +874,8 @@ class SeaVideoHarness:
             while pending:
                 yield pending.pop(0)
         finally:
+            if heartbeat is not None:
+                heartbeat.set()
             self.close()
 
 

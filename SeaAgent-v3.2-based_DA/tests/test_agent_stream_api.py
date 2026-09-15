@@ -29,9 +29,10 @@ class _FakeController:
         return self.result
 
 
-def _request():
-    """最小请求桩：流式接口要往 app.state.agent_runs 登记进行中的运行。"""
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(agent_runs={})))
+def _request(config=None):
+    """最小请求桩：流式接口要往 app.state.agent_runs 登记运行，也要读 harness 配置。"""
+    state = SimpleNamespace(agent_runs={}, config=config or {"harness": {"run_timeout_seconds": 600}})
+    return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
 async def _read_events(response):

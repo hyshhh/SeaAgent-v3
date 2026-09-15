@@ -3,7 +3,8 @@ tools:
     label: 轨迹记忆
     method: getTrack
     description: >-
-      查询视频轨迹记忆。可按时间范围、舷号或匹配状态过滤，并支持分页。
+      查询视频轨迹记忆。可按时间范围、舷号或匹配状态过滤，并支持分页；limit=0 表示不分页返回全部。
+      全量扫描代价很高（轨迹多时下游取关键帧、做去重会成倍放大），务必带上时间范围或分页。
       注意 hull_number 只筛「已识别出舷号且与之一致」的轨迹：识别失败的轨迹不会被它匹配到，
       因此返回空**不代表这艘船没有出现**。要确认某个舷号是否出现，正确顺序是先用先验库工具
       （match_hull / get_registry）确认该舷号在库，再按时间范围列出轨迹并用图像匹配核对；
@@ -17,7 +18,9 @@ tools:
   - name: get_frames
     label: 关键帧
     method: getFrames
-    description: 读取一组轨迹的可检索关键帧。
+    description: >-
+      读取一组轨迹的可检索关键帧。只对已经筛过的少量轨迹调用（建议一次不超过 20 条），
+      传入成百上千条轨迹会让这一步变成分钟级的重活。
     arguments: {track_ids: {type: string_list, required: true, target: trackIds}}
   - name: get_clip
     label: 视频片段
@@ -78,7 +81,9 @@ tools:
   - name: dedup_tracks
     label: 轨迹去重
     method: dedupTracks
-    description: 基于轨迹关键帧外观对跨时段轨迹进行去重估计。
+    description: >-
+      基于轨迹关键帧外观对跨时段轨迹进行去重估计。输入是「已筛过」的轨迹与其关键帧，
+      建议一次不超过 20 条轨迹；它需要为关键帧算嵌入向量，规模一大就是分钟级甚至更久。
     arguments: {tracks: {type: json, required: true}, keyframes_by_track: {type: json, required: true, target: keyframesByTrack}}
 
 
