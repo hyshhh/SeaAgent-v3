@@ -26,10 +26,14 @@ def build_middleware(config: dict[str, Any], model: Any) -> list[Any]:
     )
 
     from .disclosure import SkillDisclosureMiddleware
+    from .tool_guard import RepeatToolCallMiddleware
     from .wrapup import EvidenceWrapUpMiddleware
 
     settings = config.get("harness", {})
     return [
+        # 重复调用守卫：同一个「工具 + 参数」重复出现时跳过执行并提示模型，
+        # 放在最外层，这样后面的重试/限流都看不到这次调用（它压根不该被执行）
+        RepeatToolCallMiddleware(),
         # 技能披露提醒：整段会话还没读过技能正文时，在模型第一次决策前把规范并进 system 消息
         SkillDisclosureMiddleware(max_reminders=int(settings.get("skill_reminder_max_per_run", 1))),
         # 上下文压缩：历史超阈值即摘要旧消息，只留最近若干条，保证长会话不撑爆窗口

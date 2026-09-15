@@ -81,17 +81,19 @@ def _parse_payload(value: Any) -> Any:
 def _bounded(value: Any, limit: int) -> Any:
     """Bound public payloads while retaining structured data whenever it fits.
 
-    递归裁剪：装得下就保留原本结构，装不下整体降级为截断的 JSON 字符串。
-    目的是让任何单条事件都不会撑爆前端负载（上限见 harness.event_payload_max_chars）。
+    逐字段裁剪、**只截字符串**：字典还是字典、列表还是列表。
+    早先这里还有一条「装不下就整体降级为截断的 JSON 字符串」的兜底，看似安全，实则把结构毁了——
+    终局事件的 result 一旦超限就变成字符串，前端读不到 answerText / state / toolRecords，
+    界面显示成「未生成回答、0 tool records」（技能正文一多必然触发）。
+    代价是超限时载荷会变大，但结构完整、可解析，这才是对外契约该有的行为。
     """
     if isinstance(value, str):
         return value if len(value) <= limit else value[:limit] + "…"
     if isinstance(value, dict):
-        value = {str(key): _bounded(item, limit) for key, item in value.items()}
-    elif isinstance(value, (list, tuple)):
-        value = [_bounded(item, limit) for item in value]
-    encoded = json.dumps(value, ensure_ascii=False, default=str)
-    return value if len(encoded) <= limit else encoded[:limit] + "…"
+        return {str(key): _bounded(item, limit) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_bounded(item, limit) for item in value]
+    return value
 
 
 
@@ -735,7 +737,7 @@ class SeaVideoHarness:
             result = trace.result(thread_id, self.config, state="stalled")
             answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
             if not str(result.get(answer_field) or "").strip():
-                result[answer_field] = "本轮工具调用连续失败（多半是已达工具调用上限或参数反复被拒），已按现有结果收尾。"
+                result[answer_field] = f"{stall_reason}，已按现有结果收尾。" if stall_reason else "本轮未能继续推进，已按现有结果收尾。"
             trace.event({"type": "status", "title": "工具调用已收尾", "message": f"{stall_reason}，已停止继续尝试"})
             trace.event({"type": "complete", "title": "Harness 已收尾", "message": "工具调用连续失败，已在现有结果上收尾", "result": result})
             return result
@@ -798,7 +800,7 @@ class SeaVideoHarness:
                 result = trace.result(thread_id, self.config, state="stalled")
                 answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
                 if not str(result.get(answer_field) or "").strip():
-                    result[answer_field] = "本轮工具调用连续失败（多半是已达工具调用上限或参数反复被拒），已按现有结果收尾。"
+                    result[answer_field] = f"{stall_reason}，已按现有结果收尾。" if stall_reason else "本轮未能继续推进，已按现有结果收尾。"
                 trace.event({"type": "status", "title": "工具调用已收尾", "message": f"{stall_reason}，已停止继续尝试"})
                 trace.event({"type": "complete", "title": "Harness 已收尾", "message": "工具调用连续失败，已在现有结果上收尾", "result": result})
                 while pending:
@@ -828,4 +830,5 @@ class SeaVideoHarness:
 def run_harness(config: dict[str, Any], tools: Any, llm: Any = None, event_handler: Callable[[dict[str, Any]], None] | None = None, **kwargs: Any) -> dict[str, Any]:
     """一次性问答入口：装配即运行、用完即释放；要事件流或复用实例时直接用 SeaVideoHarness。"""
     return SeaVideoHarness(config, tools, model=llm, event_handler=event_handler).run(kwargs.get("question", ""), kwargs.get("thread_id"))
+
 

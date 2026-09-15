@@ -640,15 +640,26 @@ function renderToolRecords(records) {
 function renderAgentAnswer(result) {
   const view = document.getElementById('agentFinalView');
   const answer = document.getElementById('agentAnswer');
-  const cancelled = result?.state === 'cancelled';
-  const stalled = result?.state === 'stalled';
+  // 兜底：终局载荷必须是对象。曾经它会被服务端裁剪成字符串，
+  // 前端于是显示「未生成回答 / 0 tool records」，看不出任何原因。
+  const payload = result && typeof result === 'object' ? result : {};
+  const malformed = result !== undefined && result !== null && typeof result !== 'object';
+  const cancelled = payload.state === 'cancelled';
+  const stalled = payload.state === 'stalled';
   if (view) view.hidden = false;
-  if (answer) answer.textContent = result?.answerText || result?.answer || (cancelled ? '本轮已停止。' : stalled ? '本轮工具调用连续失败，已按现有结果收尾。' : '未生成回答。');
-  renderToolRecords(result?.toolRecords || result?.tool_records);
-  renderEvidence(result?.evidence || null);
+  if (answer) {
+    const text = payload.answerText || payload.answer;
+    if (text) answer.textContent = text;
+    else if (cancelled) answer.textContent = '本轮已停止。';
+    else if (stalled) answer.textContent = '本轮工具调用没有推进（重复或连续失败），已按现有结果收尾。';
+    else if (malformed) answer.textContent = '本轮结果载荷异常，未能显示回答；请在「轨迹」页查看执行过程。';
+    else answer.textContent = '未生成回答。';
+  }
+  renderToolRecords(payload.toolRecords || payload.tool_records);
+  renderEvidence(payload.evidence || null);
   if (cancelled) setHarnessState('Stopped', '');
   else if (stalled) setHarnessState('已收尾', 'complete');
-  else setHarnessState(result?.success === false ? 'Failed' : 'Complete', result?.success === false ? 'failed' : 'complete');
+  else setHarnessState(payload.success === false ? 'Failed' : 'Complete', payload.success === false ? 'failed' : 'complete');
   scrollActivity(true);
   scrollConversation(true);
 }
