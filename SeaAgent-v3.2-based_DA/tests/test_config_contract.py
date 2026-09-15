@@ -18,6 +18,12 @@ def test_skills_read_channel_is_open_but_scoped():
     assert "/skills/**" in harness["readonly_paths"]
 
 
+def test_directory_exploration_tools_are_disabled():
+    """ls/glob/grep 会诱使模型拿它们去找数据（实测试过 /data、glob /），技能路径本来就由提示词给出。"""
+    disabled = set(load_config()["harness"]["disabled_deepagent_tools"])
+    assert {"ls", "glob", "grep"} <= disabled
+
+
 def test_delegation_is_switched_by_config_not_by_disabling_task():
     """task 不再靠禁用名单关闭（关掉它主从协同就没法委派）。
 

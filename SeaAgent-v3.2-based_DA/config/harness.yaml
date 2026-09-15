@@ -2,6 +2,9 @@ harness:
   system_prompt_file: harness/system.md
   # 主从协同时主智能体改读这份「规划者」提示词（见 harness/planner.md）
   planner_prompt_file: harness/planner.md
+  # 上下文压缩用的摘要提示词（见 harness/summary_prompt.md）：要求摘要逐字保留
+  # 时间范围 / 各类 ID / 用户口径 / 待办，否则续接会话时"刚才"就没有所指
+  summary_prompt_file: harness/summary_prompt.md
   # 主从协同开关：开启后按 subagents.yaml 装配从智能体，主智能体只保留 master_tools 里的工具。
   # 关掉即退回单智能体（官方语义：禁用 general-purpose 且不传 subagents ⇒ 根本没有 task 工具）。
   subagents_enabled: true
@@ -17,8 +20,11 @@ harness:
   stall_guard_consecutive_errors: 4
   # 原地打转保护：同一个「工具 + 参数」重复调用超过这个次数就收尾（见 harness/runtime.py）。
   # 主守卫在中间件层（harness/tool_guard.py）——重复调用会被跳过并提示模型；
-  # 这里是兜底：模型拿着提示仍不肯换招时，才停掉整轮。
+  # 这里是兜底：模型拿着提示仍不肯换招时，才停掉整轮。从智能体也挂同一套守卫。
   stall_guard_repeat_calls: 5
+  # 单个从智能体的工具调用预算：一次委派就是一段完整的 ReAct，必须自带上限，
+  # 否则一个从智能体可以在里面无限循环（主智能体的预算管不到它）。
+  subagent_tool_calls: 12
   summarization_trigger_tokens: 12000
   summarization_keep_messages: 12
   retry_attempts: 2
@@ -40,11 +46,17 @@ harness:
   readonly_paths:
   - /skills
   - /skills/**
-  # 仍然禁用的框架自带工具：写入、shell 与子智能体；主智能体只做 ReAct，不落地文件。
-  # 注意这里不再列 task：官方的做法是「关掉 general-purpose 且不传 subagents」⇒ 根本不会挂
+  # 仍然禁用的框架自带工具：写入、shell、目录探索与子智能体。
+  # ls/glob/grep 一并禁用是事故驱动的：模型拿到探索工具后会拿它去找**数据**（试过 /data、glob /），
+  # 而不是去委派——技能目录本来就由提示词给出完整路径，探索工具只剩副作用。
+  # read_file 必须留着：原生 skills 渐进式披露要靠它打开 SKILL.md 正文。
+  # 这里不列 task：官方的做法是「关掉 general-purpose 且不传 subagents」⇒ 根本不会挂
   # SubAgentMiddleware，也就没有 task 工具；开启主从协同时 task 必须是可用的。
   disabled_deepagent_tools:
   - write_file
   - edit_file
   - delete
   - execute
+  - ls
+  - glob
+  - grep

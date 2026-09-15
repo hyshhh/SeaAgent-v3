@@ -36,3 +36,14 @@ def test_disclosure_guard_reads_its_settings_from_config():
     config = load_config()
     guard = build_middleware(config, FakeListChatModel(responses=["ok"]))[1]
     assert guard.max_reminders == int(config["harness"]["skill_reminder_max_per_run"])
+
+
+def test_summarization_uses_the_domain_prompt_from_file():
+    """默认摘要会把时间范围与 ID 压没，续接会话时模型自己都说"不知道刚才指哪一段"。"""
+    from langchain.agents.middleware import SummarizationMiddleware
+
+    config = load_config()
+    stack = build_middleware(config, FakeListChatModel(responses=["ok"]))
+    summarization = next(item for item in stack if isinstance(item, SummarizationMiddleware))
+    assert "逐字保留" in summarization.summary_prompt
+    assert "时间范围" in summarization.summary_prompt

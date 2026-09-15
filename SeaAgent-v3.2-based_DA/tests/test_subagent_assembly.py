@@ -38,6 +38,26 @@ def test_subagents_are_built_from_config_with_narrow_tool_sets():
     assert master_skills == ["coordination", "answer"]
 
 
+def test_every_subagent_carries_its_own_guards():
+    """从智能体不继承主智能体的中间件：缺了守卫，一次委派就是一段无人管的 ReAct。
+
+    真实事故：track_scout 用同一份参数把 get_track 调到天荒地老（返回空也不换招），
+    因为主智能体的限流与重复守卫根本没有下发到子图里。
+    """
+    from langchain.agents.middleware import ToolCallLimitMiddleware
+
+    from harness.tool_guard import RepeatToolCallMiddleware
+
+    subagents, _, _ = _specs()
+    for spec in subagents:
+        kinds = [type(item) for item in spec["middleware"]]
+        assert RepeatToolCallMiddleware in kinds, f"{spec['name']} 缺少重复调用守卫"
+        assert ToolCallLimitMiddleware in kinds, f"{spec['name']} 缺少工具调用上限"
+
+    limit = next(item for item in subagents[0]["middleware"] if isinstance(item, ToolCallLimitMiddleware))
+    assert limit.run_limit == int(load_config()["harness"]["subagent_tool_calls"])
+
+
 def test_each_subagent_can_only_read_its_own_skill_group():
     """读取面也按组收口：否则模型会顺着 ls /skills 逛进别人的规范里出不来。"""
     subagents, _, _ = _specs()

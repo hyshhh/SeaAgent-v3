@@ -2,7 +2,12 @@ tools:
   - name: get_track
     label: 轨迹记忆
     method: getTrack
-    description: 查询视频轨迹记忆。可按时间范围、舷号或匹配状态过滤，并支持分页。
+    description: >-
+      查询视频轨迹记忆。可按时间范围、舷号或匹配状态过滤，并支持分页。
+      注意 hull_number 只筛「已识别出舷号且与之一致」的轨迹：识别失败的轨迹不会被它匹配到，
+      因此返回空**不代表这艘船没有出现**。要确认某个舷号是否出现，正确顺序是先用先验库工具
+      （match_hull / get_registry）确认该舷号在库，再按时间范围列出轨迹并用图像匹配核对；
+      按舷号过滤返回空时不要重复调用，改按时间范围全量筛查。
     arguments:
       time_range: {type: tuple_float, required: false, target: timeRange}
       hull_number: {type: string, required: false, target: hullNumber}

@@ -496,7 +496,10 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
     """
     import yaml
 
+    from langchain.agents.middleware import ToolCallLimitMiddleware
+
     from .subagent_schemas import resolve_response_format
+    from .tool_guard import RepeatToolCallMiddleware
 
     harness = config.get("harness", {})
     spec_path = project_root() / str(harness.get("subagents_file", "config/subagents.yaml"))
@@ -526,6 +529,13 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
         permissions = _readonly_permissions(scope, permission_type)
         if permissions is not None:
             built["permissions"] = permissions
+        # 从智能体必须自带守卫：框架只给它们 summarization + filesystem + patch_tool_calls，
+        # 主智能体的限流/重复守卫**不会**继承下去。实测缺了这两样时，
+        # track_scout 会用同一份参数把 get_track 调到天荒地老（一次委派就是一段无人管的 ReAct）。
+        built["middleware"] = [
+            RepeatToolCallMiddleware(),
+            ToolCallLimitMiddleware(run_limit=max(1, int(harness.get("subagent_tool_calls", 12)))),
+        ]
         response_format = resolve_response_format(spec.get("response_format"))
         if response_format is not None:
             built["response_format"] = response_format
