@@ -11,11 +11,16 @@ master_tools:
   # 若把证据工具也下放，前端证据面板会永远是空的（收尾守卫也会一直提醒）。
   - show_evidence
 master_skills:
-  # 主智能体只读这两组：协调规范（规划+记忆）+ 回答规范（收尾在 answer 里）。
-  # 组名不要和技能同名：曾用 planning 作组名时路径是 /skills/planning/planning/SKILL.md，
-  # 模型会猜成 /skills/planning/SKILL.md 然后 not found，白烧一轮。
-  - coordination
-  - answer
+  # ⚠️ 默认**不**给主智能体挂技能，这是三次事故换来的结论：
+  #   ① 把同一个 SKILL.md 读了 8 遍；② 拿 ls/glob/grep 去找数据（试 /data、glob /）；
+  #   ③ 读完全部 4 个技能后开始猜 `/skills/<组>/SKILL.md`（组目录不是技能），失败后原地重试十几次。
+  # 4B 模型看到技能目录就会把"把技能读完"当成任务本身，而主智能体的职责只是规划与汇总——
+  # 它的规则已经写在 harness/planner.md 里（那份提示词每轮都在，不会被摘要掉）。
+  # 技能真正起作用的地方在从智能体：它们各自挂自己那组，并在干活时读正文。
+  # 想让主智能体重新拥有技能目录：把下面两行放回来即可（组名：coordination / answer）。
+  #   - coordination
+  #   - answer
+  []
 
 subagents:
   - name: track_scout

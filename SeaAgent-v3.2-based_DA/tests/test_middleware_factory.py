@@ -38,6 +38,18 @@ def test_disclosure_guard_reads_its_settings_from_config():
     assert guard.max_reminders == int(config["harness"]["skill_reminder_max_per_run"])
 
 
+def test_disclosure_guard_is_skipped_when_no_skills_are_attached():
+    """没有技能目录还提醒"先读技能"，只会把模型推向读一个不存在的文件。"""
+    from harness.disclosure import SkillDisclosureMiddleware
+
+    config = load_config()
+    with_skills = build_middleware(config, FakeListChatModel(responses=["ok"]), skills_attached=True)
+    without_skills = build_middleware(config, FakeListChatModel(responses=["ok"]), skills_attached=False)
+
+    assert any(isinstance(item, SkillDisclosureMiddleware) for item in with_skills)
+    assert not any(isinstance(item, SkillDisclosureMiddleware) for item in without_skills)
+
+
 def test_summarization_uses_the_domain_prompt_from_file():
     """默认摘要会把时间范围与 ID 压没，续接会话时模型自己都说"不知道刚才指哪一段"。"""
     from langchain.agents.middleware import SummarizationMiddleware

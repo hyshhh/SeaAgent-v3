@@ -11,11 +11,14 @@ from __future__ import annotations
 from typing import Any
 
 
-def build_middleware(config: dict[str, Any], model: Any) -> list[Any]:
+def build_middleware(config: dict[str, Any], model: Any, *, skills_attached: bool = True) -> list[Any]:
     """按 harness 配置装配中间件。
 
     返回值顺序即执行顺序：``wrap_*`` 类中间件是洋葱嵌套（排在前面的在外层），
     ``before_model`` / ``after_model`` 类按同向顺序串行。
+
+    ``skills_attached=False``（主从协同时主智能体没挂技能）会跳过披露提醒：
+    没有技能目录还提醒"先读技能"，只会把模型推向读一个不存在的文件。
     """
     from langchain.agents.middleware import (
         ModelRetryMiddleware,
@@ -40,12 +43,15 @@ def build_middleware(config: dict[str, Any], model: Any) -> list[Any]:
     summarization_kwargs = {}
     if summary_prompt:
         summarization_kwargs["summary_prompt"] = summary_prompt
-    return [
+    stack: list[Any] = [
         # 重复调用守卫：同一个「工具 + 参数」重复出现时跳过执行并提示模型，
         # 放在最外层，这样后面的重试/限流都看不到这次调用（它压根不该被执行）
         RepeatToolCallMiddleware(),
+    ]
+    if skills_attached:
         # 技能披露提醒：整段会话还没读过技能正文时，在模型第一次决策前把规范并进 system 消息
-        SkillDisclosureMiddleware(max_reminders=int(settings.get("skill_reminder_max_per_run", 1))),
+        stack.append(SkillDisclosureMiddleware(max_reminders=int(settings.get("skill_reminder_max_per_run", 1))))
+    stack += [
         # 上下文压缩：历史超阈值即摘要旧消息，只留最近若干条，保证长会话不撑爆窗口。
         # 摘要提示词来自文件——默认摘要会把时间范围与各类 ID 压没，续接会话就"不知道刚才指哪一段"
         SummarizationMiddleware(model, trigger=("tokens", int(settings.get("summarization_trigger_tokens", 12000))), keep=("messages", int(settings.get("summarization_keep_messages", 12))), **summarization_kwargs),
@@ -61,3 +67,4 @@ def build_middleware(config: dict[str, Any], model: Any) -> list[Any]:
         # 收尾守卫：模型给出最终回答却没落地证据时提醒一次，与 skills/finalize 合成完整收尾约束
         EvidenceWrapUpMiddleware(evidence_tool=str(settings.get("evidence_tool", "")), max_nudges=int(settings.get("evidence_wrapup_max_nudges", 1))),
     ]
+    return stack

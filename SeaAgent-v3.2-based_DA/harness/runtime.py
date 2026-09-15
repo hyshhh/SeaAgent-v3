@@ -466,16 +466,24 @@ def _read_scope_paths(sources: list[str]) -> list[str]:
     return [path for source in sources for path in (source, f"{source}/**")]
 
 
-def _readonly_permissions(scope_paths: list[str], permission_type: Any, *, allow_write: bool = False) -> list[Any] | None:
-    """按读取白名单生成权限规则；列表为空则不限（保持框架默认）。"""
+def _readonly_permissions(scope_paths: list[str], permission_type: Any, *, deny_when_empty: bool = False) -> list[Any] | None:
+    """按读取白名单生成权限规则。
+
+    ``deny_when_empty=True`` 时，白名单为空表示「什么都不许读」而不是「不做限制」——
+    主智能体没挂技能就是这种情况：它不需要读任何文件，若返回 None 反而会放开整个项目。
+    """
     if not scope_paths:
-        return None
+        if not deny_when_empty:
+            return None
+        return [
+            permission_type(operations=["read"], paths=["/**"], mode="deny"),
+            permission_type(operations=["write"], paths=["/**"], mode="deny"),
+        ]
     rules = [
         permission_type(operations=["read"], paths=scope_paths, mode="allow"),
         permission_type(operations=["read"], paths=["/**"], mode="deny"),
+        permission_type(operations=["write"], paths=["/**"], mode="deny"),
     ]
-    if not allow_write:
-        rules.append(permission_type(operations=["write"], paths=["/**"], mode="deny"))
     return rules
 
 
@@ -576,8 +584,13 @@ class SeaVideoHarness:
         prompt_path = project_root() / prompt_file
         self.system_prompt = prompt_path.read_text(encoding="utf-8")  # 系统提示词是文件而非配置项
         self.agent_tools = agent_tools
-        # 技能分组：单智能体读全部组，主从协同时主智能体只读 master_skills 指定的组
-        groups = master_skills or [path.name for path in sorted((project_root() / str(harness.get("skills_dir", "skills"))).iterdir()) if path.is_dir()]
+        # 技能分组：单智能体读全部组；主从协同时只读 master_skills 指定的组，
+        # 且**空列表就是"不挂技能"**——不能再 or 一个兜底，否则空配置会被当成未配置，
+        # 主智能体又把 5 组技能全挂回去（这正是"技能读不完"屡修不止的原因）。
+        if self.subagents:
+            groups = master_skills
+        else:
+            groups = [path.name for path in sorted((project_root() / str(harness.get("skills_dir", "skills"))).iterdir()) if path.is_dir()]
         self.skill_sources = _skill_sources(harness, groups)
         self._connection: sqlite3.Connection | None = None
         self.agent = self._build_agent()  # 构造即装配，后续多次调用共用同一 agent
@@ -618,22 +631,27 @@ class SeaVideoHarness:
             register_harness_profile(f"openai:{model_name}", profile)
         # FilesystemBackend 把项目根暴露成虚拟文件系统，skills 才能按需读到 SKILL.md
         backend = FilesystemBackend(root_dir=project_root())
-        # 读取工具（read_file / ls / glob / grep）必须留给模型，否则框架的 skills 渐进式披露
+        # 读取工具（read_file / ls / glob / grep）留给模型，否则框架的 skills 渐进式披露
         # 断在第二步——它能看见技能名与 description，却打不开 SKILL.md 正文。开放的同时用权限
-        # 规则把读取面收敛到白名单：单智能体放开整个 skills 目录，主从协同时只放开主智能体自己那几组。
-        scope = _read_scope_paths(self.skill_sources) if self.subagents else [str(path) for path in (harness.get("readonly_paths") or [])]
-        permissions = _readonly_permissions(scope, FilesystemPermission)
-        # 渐进式披露：技能源按组交给框架，description 随提示词注入、正文由模型自行读取
+        # 规则把读取面收敛到白名单：单智能体放开整个 skills 目录；主从协同时按主智能体自己的技能组；
+        # 主智能体没挂技能（默认）就一律拒绝——它没有需要读的文件。
+        if self.subagents:
+            permissions = _readonly_permissions(_read_scope_paths(self.skill_sources), FilesystemPermission, deny_when_empty=True)
+        else:
+            permissions = _filesystem_permissions(harness, FilesystemPermission)
+        # 渐进式披露：技能源按组交给框架；主从协同时主智能体默认**不挂**技能（master_skills 为空），
+        # 它的规则全在 planner.md 里——4B 模型看到技能目录会把"把技能读完"当成任务本身
+        skills_attached = bool(self.skill_sources)
         try:
             return create_deep_agent(
                 model=self.model,
                 tools=self.agent_tools,
                 system_prompt=self.system_prompt,
-                skills=self.skill_sources,
+                skills=self.skill_sources or None,
                 backend=backend,
                 permissions=permissions,
                 subagents=self.subagents or None,
-                middleware=build_middleware(self.config, self.model),
+                middleware=build_middleware(self.config, self.model, skills_attached=skills_attached),
                 checkpointer=saver,
                 name="sea_video_harness",
             )

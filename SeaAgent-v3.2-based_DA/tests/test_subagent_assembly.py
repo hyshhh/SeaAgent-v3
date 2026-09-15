@@ -35,7 +35,8 @@ def test_subagents_are_built_from_config_with_narrow_tool_sets():
     assert [tool.name for tool in by_name["track_scout"]["tools"]] == ["get_track", "get_frames", "dedup_tracks"]
     assert [tool.name for tool in by_name["visual_prover"]["tools"]] == ["match_image", "verify_target", "get_clip"]
     assert master_tools == ["show_evidence"]
-    assert master_skills == ["coordination", "answer"]
+    # 主智能体默认不挂技能：它的规则在 planner.md；技能只挂在真正干活的从智能体上
+    assert master_skills == []
 
 
 def test_every_subagent_carries_its_own_guards():
@@ -56,6 +57,45 @@ def test_every_subagent_carries_its_own_guards():
 
     limit = next(item for item in subagents[0]["middleware"] if isinstance(item, ToolCallLimitMiddleware))
     assert limit.run_limit == int(load_config()["harness"]["subagent_tool_calls"])
+
+
+def test_master_gets_no_skills_and_no_read_access_by_default():
+    """空 master_skills 是「不挂技能」，不是「未配置」。
+
+    回归点：曾经写成 `groups = master_skills or [全部组]`，于是空配置被当成未配置，
+    主智能体又把 5 组技能全挂回去——「技能读不完」屡修不止就是这个原因。
+    顺带：白名单为空时必须表达成「一律拒绝」，否则 None 会放开整个项目。
+    """
+    import os
+    import tempfile
+
+    from deepagents.middleware.filesystem import _check_fs_permission
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    from harness.runtime import SeaVideoHarness, _read_scope_paths, _readonly_permissions
+
+    class _Model(GenericFakeChatModel):
+        model_name: str = load_config()["llm"]["model"]
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "openai", "ls_model_name": self.model_name}
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    config = load_config()
+    config["harness"]["checkpointer"] = os.path.join(tempfile.mkdtemp(), "c.sqlite")
+    runtime = SeaVideoHarness(config, _Service(), model=_Model(messages=iter([AIMessage(content="ok")])))
+    try:
+        assert runtime.skill_sources == [], "主智能体默认不挂技能"
+        assert [tool.name for tool in runtime.agent_tools] == ["show_evidence"]
+    finally:
+        runtime.close()
+
+    rules = _readonly_permissions(_read_scope_paths([]), FilesystemPermission, deny_when_empty=True)
+    assert _check_fs_permission(rules, "read", "/skills/coordination/planning/SKILL.md") == "deny"
+    assert _check_fs_permission(rules, "read", "/config/app.yaml") == "deny"
 
 
 def test_each_subagent_can_only_read_its_own_skill_group():

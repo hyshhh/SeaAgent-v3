@@ -17,9 +17,10 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 REPEAT_HINT = (
-    "Skipped: you already made this exact call earlier in this turn and its result is in the "
-    "conversation above. Do not repeat it — use the result you already have and continue with "
-    "the next step."
+    "Skipped: this exact call was already made in this turn. If it returned a result, use that "
+    "result — it is in the conversation above. If it FAILED (file not found, permission denied), "
+    "the same call will fail again: do not retry it and do not guess nearby paths. Use a path "
+    "taken from the list you were given, or move on to the next step of the task."
 )
 
 
