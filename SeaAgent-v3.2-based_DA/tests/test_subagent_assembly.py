@@ -7,7 +7,9 @@ import yaml
 from langchain_core.messages import AIMessage, ToolMessage
 
 from config import load_config
-from harness.runtime import _load_subagents, _Trace
+from deepagents import FilesystemPermission
+
+from harness.runtime import _load_subagents, _Trace, _read_scope_paths, _readonly_permissions
 from harness.subagent_schemas import RegistryCheckFindings, TrackScoutFindings, VisualProofFindings
 from harness.tools import build_tools
 
@@ -22,7 +24,7 @@ def _tools():
 
 
 def _specs():
-    return _load_subagents(load_config(), _tools())
+    return _load_subagents(load_config(), _tools(), FilesystemPermission)
 
 
 def test_subagents_are_built_from_config_with_narrow_tool_sets():
@@ -33,7 +35,27 @@ def test_subagents_are_built_from_config_with_narrow_tool_sets():
     assert [tool.name for tool in by_name["track_scout"]["tools"]] == ["get_track", "get_frames", "dedup_tracks"]
     assert [tool.name for tool in by_name["visual_prover"]["tools"]] == ["match_image", "verify_target", "get_clip"]
     assert master_tools == ["show_evidence"]
-    assert master_skills == ["planning", "answer"]
+    assert master_skills == ["coordination", "answer"]
+
+
+def test_each_subagent_can_only_read_its_own_skill_group():
+    """读取面也按组收口：否则模型会顺着 ls /skills 逛进别人的规范里出不来。"""
+    subagents, _, _ = _specs()
+    by_name = {spec["name"]: spec for spec in subagents}
+
+    rules = by_name["track_scout"]["permissions"]
+    allowed = next(rule for rule in rules if rule.mode == "allow")
+    assert sorted(allowed.paths) == ["/skills/track", "/skills/track/**"]
+    denied = [rule for rule in rules if rule.mode == "deny"]
+    assert any("/**" in rule.paths for rule in denied), "组外读取必须被拒"
+    assert any("write" in rule.operations for rule in denied), "写入必须被拒"
+
+
+def test_read_scope_expands_container_and_contents():
+    assert _read_scope_paths(["/skills/track", "/skills/answer"]) == ["/skills/track", "/skills/track/**", "/skills/answer", "/skills/answer/**"]
+    rules = _readonly_permissions(["/skills/track"], FilesystemPermission)
+    assert [rule.mode for rule in rules] == ["allow", "deny", "deny"]
+    assert _readonly_permissions([], FilesystemPermission) is None
 
 
 def test_each_subagent_has_its_own_skill_group_and_return_contract():
@@ -76,13 +98,13 @@ def _write_broken(config, spec):
 def test_unknown_tool_name_fails_loudly():
     config = _write_broken(load_config(), {"subagents": [{"name": "x", "description": "d", "system_prompt": "s", "tools": ["no_such_tool"]}]})
     with pytest.raises(ValueError, match="no_such_tool"):
-        _load_subagents(config, _tools())
+        _load_subagents(config, _tools(), FilesystemPermission)
 
 
 def test_unknown_response_format_fails_loudly():
     config = _write_broken(load_config(), {"subagents": [{"name": "x", "description": "d", "system_prompt": "s", "tools": [], "response_format": "NoSuchSchema"}]})
     with pytest.raises(ValueError, match="NoSuchSchema"):
-        _load_subagents(config, _tools())
+        _load_subagents(config, _tools(), FilesystemPermission)
 
 
 def _trace():
@@ -124,3 +146,4 @@ def test_unnamed_subagent_frames_are_tagged_generically():
     trace.consume({"model": {"messages": [AIMessage(content="", tool_calls=[{"name": "task", "args": {"description": "b", "subagent_type": "visual_prover"}, "id": "t2"}])]}})
     trace.consume({"model": {"messages": [AIMessage(content="", tool_calls=[{"name": "unknown_tool", "args": {}, "id": "u1"}])]}}, ("tools:another-id",))
     assert any(event.get("agent") == "子智能体" for event in events)
+

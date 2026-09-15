@@ -11,8 +11,10 @@ master_tools:
   # 若把证据工具也下放，前端证据面板会永远是空的（收尾守卫也会一直提醒）。
   - show_evidence
 master_skills:
-  # 主智能体只读这两组：规划规范 + 回答规范（收尾也在里面）
-  - planning
+  # 主智能体只读这两组：协调规范（规划+记忆）+ 回答规范（收尾在 answer 里）。
+  # 组名不要和技能同名：曾用 planning 作组名时路径是 /skills/planning/planning/SKILL.md，
+  # 模型会猜成 /skills/planning/SKILL.md 然后 not found，白烧一轮。
+  - coordination
   - answer
 
 subagents:

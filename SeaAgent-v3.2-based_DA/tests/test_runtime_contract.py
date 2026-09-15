@@ -163,3 +163,45 @@ def test_failed_tool_records_keep_their_error_status():
     result = runtime.run('问题', thread_id='thread-status')
     assert result['tool_records'][0]['status'] == 'error'
 
+
+def _repeated_read_frame(index):
+    """模拟原地打转：反复调用同一个工具、同一份参数，而且每次都成功。"""
+    return {'model': {'messages': [AIMessage(content='', tool_calls=[{'name': 'read_file', 'args': {'file_path': '/skills/track/query/SKILL.md', 'limit': 1000}, 'id': f'read-{index}'}])]}}
+
+
+def test_run_stops_when_the_same_call_repeats():
+    """连续失败计数抓不到「一直成功但没进展」，重复调用必须另有一条守卫。"""
+    frames = []
+    for index in range(12):
+        frames.append(_repeated_read_frame(index))
+        frames.append({'tools': {'messages': [ToolMessage(content='1  --- name: query', name='read_file', tool_call_id=f'read-{index}')]}})
+    runtime = _runtime_with_agent(_FakeAgent(frames))
+    result = runtime.run('问题', thread_id='thread-repeat')
+    assert result['state'] == 'stalled'
+    # 阈值 3：第 4 次同样的调用就收尾，不会把 12 组都跑完
+    reads = [record for record in result['tool_records'] if record['tool'] == 'read_file']
+    assert len(reads) == 4
+
+
+def test_different_arguments_do_not_trigger_the_repeat_guard():
+    """参数不同就是不同的调用，不能误判成打转。"""
+    frames = []
+    for index in range(6):
+        frames.append({'model': {'messages': [AIMessage(content='', tool_calls=[{'name': 'read_file', 'args': {'file_path': f'/skills/track/{index}/SKILL.md'}, 'id': f'read-{index}'}])]}})
+        frames.append({'tools': {'messages': [ToolMessage(content='ok', name='read_file', tool_call_id=f'read-{index}')]}})
+    frames.append({'model': {'messages': [AIMessage(content='最终回答', id='answer-done')]}})
+    result = _runtime_with_agent(_FakeAgent(frames)).run('问题', thread_id='thread-distinct')
+    assert result['state'] == 'completed'
+    assert result['answer'] == '最终回答'
+
+
+def test_delegation_calls_are_exempt_from_the_repeat_guard():
+    """委派不进重复守卫：同一 scope 派两次该由提示词约束，不该被守卫直接掐断。"""
+    frames = []
+    for index in range(5):
+        frames.append({'model': {'messages': [AIMessage(content='', tool_calls=[{'name': 'task', 'args': {'description': '同样的任务', 'subagent_type': 'track_scout'}, 'id': f'task-{index}'}])]}})
+        frames.append({'tools': {'messages': [ToolMessage(content='报告', name='task', tool_call_id=f'task-{index}')]}})
+    frames.append({'model': {'messages': [AIMessage(content='最终回答', id='answer-task')]}})
+    result = _runtime_with_agent(_FakeAgent(frames)).run('问题', thread_id='thread-task')
+    assert result['state'] == 'completed'
+

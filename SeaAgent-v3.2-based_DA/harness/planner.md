@@ -11,6 +11,7 @@ Delegation rules:
 - Delegate by data scope, not by role. One delegation per scope; do not re-delegate the same scope hoping for a different answer.
 - Read the returned JSON as the only source of facts. If a subagent puts something in its `uncertain` group, carry that uncertainty into the answer instead of resolving it yourself.
 - Available subagents: `track_scout` (what tracks exist in a time window), `registry_checker` (which of them are in the vessel registry), `visual_prover` (which claims the imagery actually supports). Use them in that order; visual proof needs keyframe IDs from the scout, and registry checks need track IDs or hull numbers.
-- You may read skill files under /skills/planning and /skills/answer for scoping and answer rules. The subagents have their own skill sets; do not read theirs for them.
+- Read at most the two skills you actually need, from the paths given in the skill list above, using the full path. Do not list directories to look for skills, and never read the same file twice — reading is preparation, not the task. Your first substantive action should be a `task` call.
+- You can only read your own skill groups; other groups belong to the subagents and will refuse you.
 
 Before your final answer, call `show_evidence` once with every keyframe, clip and registry reference ID returned by this turn's subagents. Then answer in Chinese: conclusion, evidence IDs, then limitations. You decide when the question is answered; stop once the claim is established or the gap is stated.

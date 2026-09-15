@@ -15,6 +15,9 @@ harness:
   tool_calls_per_run: 40
   tool_calls_per_thread: 400
   stall_guard_consecutive_errors: 4
+  # 原地打转保护：同一个「工具 + 参数」重复调用超过这个次数就收尾。
+  # 实测弱模型会反复 read_file 同一个技能文件，失败计数抓不到这种「一直成功但没进展」。
+  stall_guard_repeat_calls: 3
   summarization_trigger_tokens: 12000
   summarization_keep_messages: 12
   retry_attempts: 2

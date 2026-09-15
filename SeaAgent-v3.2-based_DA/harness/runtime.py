@@ -163,10 +163,14 @@ class _Trace:
         # —— 账本三：证据 ——
         self.evidence: dict[str, Any] = {}  # evidence_tool 的返回值，单独留档
 
-        # —— 失控检测：连续失败的工具调用计数 ——
+        # —— 失控检测：连续失败 + 原地打转 ——
         # 工具预算用完后，框架会把后续调用一律驳回成 error 结果；模型若继续硬调，
         # 就会无限刷「Tool call limit exceeded」。连续失败计数是停止这种空转的依据。
         self.error_streak = 0
+        # 另一种空转：同一个工具 + 同一份参数反复成功调用（实测弱模型会反复读同一个技能文件），
+        # 失败计数抓不到它，所以另记一份调用签名次数。
+        self.repeat_streak = 0
+        self._call_signatures: dict[str, int] = {}
 
         # —— 去重游标：抵御 updates 流的重复投递 ——
         self._seen_messages: set[str] = set()  # 已处理过的消息指纹
@@ -302,6 +306,7 @@ class _Trace:
                         self.records.append(record)
                         self.by_call_id[call_id] = record
                         round_tools.append(name)
+                        self._note_repeat(name, arguments)
                         self.event({"type": "tool_start", "title": record["label"], "message": "工具调用已提交", "tool": name, "label": record["label"], "arguments": _bounded(record["arguments"], self.event_limit), "callId": call_id, "agent": subagent})
                     self.rounds.append({"round": round_no, "toolChain": round_tools})
                     self.event({"type": "model", "title": "模型决策", "message": "已选择工具", "tools": round_tools, "agent": subagent})
@@ -337,6 +342,22 @@ class _Trace:
                     if effective_name == self.evidence_tool and isinstance(result, dict) and not failed:
                         self.evidence = result  # 证据工具的结果单独留档，随 result() 一并交出
                     self.event({"type": "tool_result", "title": record.get("label") or effective_name or "tool", "message": "工具调用失败" if failed else "工具调用完成", "status": "error" if failed else "completed", "tool": effective_name, "label": record.get("label") or effective_name, "result": _bounded(result, self.event_limit), "callId": call_id, "agent": subagent})
+
+    def _note_repeat(self, name: str, arguments: Any) -> None:
+        """记一次调用签名，并在同一个「工具 + 参数」被反复调用时给出停止信号。
+
+        为什么需要它：连续失败计数只能抓「一直报错」，抓不到「一直成功但毫无进展」。
+        实测弱模型会陷在反复 read_file 同一个技能文件上，工具预算耗尽前一直在原地打转。
+        """
+        if not name or name == "task":
+            return  # 委派不参与：同一 scope 派两次由提示词约束，不该让守卫直接掐断
+        try:
+            signature = f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)}"
+        except (TypeError, ValueError):
+            signature = f"{name}:{arguments!r}"
+        count = self._call_signatures.get(signature, 0) + 1
+        self._call_signatures[signature] = count
+        self.repeat_streak = max(self.repeat_streak, count)
 
     def _resolve_subagent(self, namespace: tuple[str, ...], frames: list[dict[str, Any]]) -> str:
         """判断这一帧属于哪个从智能体；主智能体自己返回空串。"""
@@ -438,7 +459,25 @@ def _skill_sources(harness: dict[str, Any], groups: list[str]) -> list[str]:
     return [f"{root}/{str(group).strip('/')}" for group in groups]
 
 
-def _load_subagents(config: dict[str, Any], tools: list[Any]) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+def _read_scope_paths(sources: list[str]) -> list[str]:
+    """把技能源路径展开成「读取白名单」：容器目录本身 + 其下所有文件。"""
+    return [path for source in sources for path in (source, f"{source}/**")]
+
+
+def _readonly_permissions(scope_paths: list[str], permission_type: Any, *, allow_write: bool = False) -> list[Any] | None:
+    """按读取白名单生成权限规则；列表为空则不限（保持框架默认）。"""
+    if not scope_paths:
+        return None
+    rules = [
+        permission_type(operations=["read"], paths=scope_paths, mode="allow"),
+        permission_type(operations=["read"], paths=["/**"], mode="deny"),
+    ]
+    if not allow_write:
+        rules.append(permission_type(operations=["write"], paths=["/**"], mode="deny"))
+    return rules
+
+
+def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: Any) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """按 ``config/subagents.yaml`` 装配从智能体。
 
     返回（从智能体规格, 主智能体工具白名单, 主智能体技能组）。
@@ -479,6 +518,12 @@ def _load_subagents(config: dict[str, Any], tools: list[Any]) -> tuple[list[dict
             "tools": [by_name[item] for item in wanted],
             "skills": _skill_sources(harness, [str(group) for group in (spec.get("skills") or [])]),
         }
+        # 读取面也按组收口：从智能体只能读自己那几组技能，
+        # 否则模型会顺着 ls /skills 逛到别人的规范里（实测会陷在反复读同一个文件上出不来）。
+        scope = _read_scope_paths(built["skills"])
+        permissions = _readonly_permissions(scope, permission_type)
+        if permissions is not None:
+            built["permissions"] = permissions
         response_format = resolve_response_format(spec.get("response_format"))
         if response_format is not None:
             built["response_format"] = response_format
@@ -489,22 +534,8 @@ def _load_subagents(config: dict[str, Any], tools: list[Any]) -> tuple[list[dict
 
 
 def _filesystem_permissions(harness: dict[str, Any], permission_type: Any) -> list[Any] | None:
-    """把 ``harness.readonly_paths`` 翻译成文件工具权限规则。
-
-    读取工具（read_file / ls / glob / grep）必须留给模型，否则框架的 skills 渐进式披露会断在
-    第二步——模型看得见技能名与 description，却打不开 SKILL.md 正文。开放的同时把读取面收敛到
-    白名单目录：规则先匹配先生效，白名单内的读取放行，其余读取与全部写入一律拒绝。
-
-    返回 None 表示未配置白名单，此时不做任何限制（保持框架默认行为）。
-    """
-    readonly_paths = [str(path) for path in (harness.get("readonly_paths") or [])]
-    if not readonly_paths:
-        return None
-    return [
-        permission_type(operations=["read"], paths=readonly_paths, mode="allow"),
-        permission_type(operations=["read"], paths=["/**"], mode="deny"),
-        permission_type(operations=["write"], paths=["/**"], mode="deny"),
-    ]
+    """（保留给单智能体模式的配置化白名单）把 ``harness.readonly_paths`` 翻译成权限规则。"""
+    return _readonly_permissions([str(path) for path in (harness.get("readonly_paths") or [])], permission_type)
 
 
 class SeaVideoHarness:
@@ -525,7 +556,9 @@ class SeaVideoHarness:
         # 主从协同：装配从智能体，并把主智能体的领域工具收窄到白名单（主只规划与汇总）
         self.subagents, master_tools, master_skills = ([], [], [])
         if harness.get("subagents_enabled"):
-            self.subagents, master_tools, master_skills = _load_subagents(config, self.tools)
+            from deepagents import FilesystemPermission
+
+            self.subagents, master_tools, master_skills = _load_subagents(config, self.tools, FilesystemPermission)
         agent_tools = [tool for tool in self.tools if str(getattr(tool, "name", "")) in master_tools] if self.subagents else self.tools
         prompt_file = str(harness.get("planner_prompt_file", "harness/planner.md")) if self.subagents else str(harness.get("system_prompt_file", "harness/system.md"))
         prompt_path = project_root() / prompt_file
@@ -575,8 +608,9 @@ class SeaVideoHarness:
         backend = FilesystemBackend(root_dir=project_root())
         # 读取工具（read_file / ls / glob / grep）必须留给模型，否则框架的 skills 渐进式披露
         # 断在第二步——它能看见技能名与 description，却打不开 SKILL.md 正文。开放的同时用权限
-        # 规则把读取面收敛到 skills 目录：先匹配先生效，越界读取由 FilesystemMiddleware 直接拒绝。
-        permissions = _filesystem_permissions(harness, FilesystemPermission)
+        # 规则把读取面收敛到白名单：单智能体放开整个 skills 目录，主从协同时只放开主智能体自己那几组。
+        scope = _read_scope_paths(self.skill_sources) if self.subagents else [str(path) for path in (harness.get("readonly_paths") or [])]
+        permissions = _readonly_permissions(scope, FilesystemPermission)
         # 渐进式披露：技能源按组交给框架，description 随提示词注入、正文由模型自行读取
         try:
             return create_deep_agent(
@@ -657,6 +691,8 @@ class SeaVideoHarness:
         # 失控阈值：工具预算用完后框架会把后续调用一律驳回，模型若继续硬调就会无限刷同一条错误。
         # 连续失败到这个数就收尾——正常活干到一半偶尔失败一两次不会触发（成功一次即清零）。
         stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
+        repeat_limit = max(1, int(harness.get("stall_guard_repeat_calls", 3)))
+        stall_reason = ""
         try:
             # updates 模式每次产出一帧增量，交给 _Trace 去重并翻译成事件。
             # subgraphs=True：主从协同时子智能体的每一步也会带命名空间吐出来，
@@ -674,6 +710,11 @@ class SeaVideoHarness:
                 trace.consume(update, namespace)
                 if trace.error_streak >= stall_limit:
                     stalled = True
+                    stall_reason = f"连续 {trace.error_streak} 次工具调用失败"
+                    break
+                if trace.repeat_streak > repeat_limit:
+                    stalled = True
+                    stall_reason = f"同一个工具调用重复了 {trace.repeat_streak} 次"
                     break
         except Exception as error:
             # 对外只返回安全的短消息，完整 traceback 进入服务日志，便于定位模型/工具/中间件故障。
@@ -690,12 +731,12 @@ class SeaVideoHarness:
             trace.event({"type": "complete", "title": "Harness 已停止", "message": "本轮已按请求停止", "result": result})
             return result
         if stalled:
-            # 工具调用连续失败：不再让模型空转，按已经拿到的结果收尾
+            # 空转（连续失败或原地重复）：不再让模型转下去，按已经拿到的结果收尾
             result = trace.result(thread_id, self.config, state="stalled")
             answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
             if not str(result.get(answer_field) or "").strip():
                 result[answer_field] = "本轮工具调用连续失败（多半是已达工具调用上限或参数反复被拒），已按现有结果收尾。"
-            trace.event({"type": "status", "title": "工具调用已收尾", "message": f"连续 {trace.error_streak} 次工具调用失败，已停止继续尝试"})
+            trace.event({"type": "status", "title": "工具调用已收尾", "message": f"{stall_reason}，已停止继续尝试"})
             trace.event({"type": "complete", "title": "Harness 已收尾", "message": "工具调用连续失败，已在现有结果上收尾", "result": result})
             return result
         result = trace.result(thread_id, self.config)
@@ -727,9 +768,11 @@ class SeaVideoHarness:
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
         self._seed_skills_from_checkpoint(trace, thread_id)
-        # 与 run 用同一套失控阈值：工具预算用完后模型若继续硬调，这里也要收尾而不是无限刷错误
+        # 与 run 用同一套空转阈值：连续失败、或同一个调用原地重复，都要收尾
         stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
+        repeat_limit = max(1, int(harness.get("stall_guard_repeat_calls", 3)))
         stalled = False
+        stall_reason = ""
         try:
             while pending:
                 yield pending.pop(0)
@@ -745,13 +788,18 @@ class SeaVideoHarness:
                     yield pending.pop(0)
                 if trace.error_streak >= stall_limit:
                     stalled = True
+                    stall_reason = f"连续 {trace.error_streak} 次工具调用失败"
+                    break
+                if trace.repeat_streak > repeat_limit:
+                    stalled = True
+                    stall_reason = f"同一个工具调用重复了 {trace.repeat_streak} 次"
                     break
             if stalled:
                 result = trace.result(thread_id, self.config, state="stalled")
                 answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
                 if not str(result.get(answer_field) or "").strip():
                     result[answer_field] = "本轮工具调用连续失败（多半是已达工具调用上限或参数反复被拒），已按现有结果收尾。"
-                trace.event({"type": "status", "title": "工具调用已收尾", "message": f"连续 {trace.error_streak} 次工具调用失败，已停止继续尝试"})
+                trace.event({"type": "status", "title": "工具调用已收尾", "message": f"{stall_reason}，已停止继续尝试"})
                 trace.event({"type": "complete", "title": "Harness 已收尾", "message": "工具调用连续失败，已在现有结果上收尾", "result": result})
                 while pending:
                     yield pending.pop(0)
