@@ -1,12 +1,12 @@
 """Deep Agents runtime for Sea-Video-Harness.
 
-本模块是 v3.2 单智能体 harness 的运行核心，自上而下分四节：
+本模块是 v3.2 三阶段协同 harness 的运行核心，自上而下分四节：
 
 1. 消息与载荷工具：把 LangChain 消息对象归一为裸值，并裁剪对外事件负载。
 2. ``_Trace``：消费 ``agent.stream`` 的每一帧，产出对外事件契约（status / skill /
    model / tool_start / tool_result / complete / error），并汇总答案、证据与调用链。
-3. ``SeaVideoHarness``：按配置装配模型、工具、skills、中间件与 SQLite 检查点，
-   再以 ``run``（一次性）或 ``stream``（增量）两种方式驱动同一个 agent。
+3. ``SeaVideoHarness``：按配置装配模型、工具、skills、三阶段从智能体（规划 / 执行 / 反思）、
+   中间件与 SQLite 检查点，再以 ``run``（一次性）或 ``stream``（增量）两种方式驱动同一个 agent。
 4. ``run_harness``：单函数便捷入口。
 
 约定：原始 agent state 不出模块，对外只暴露裁剪后的事件与 result 字典。
@@ -24,6 +24,7 @@ from typing import Any, Self
 
 from config import project_root
 
+from .evidence import build_evidence_payload
 from .middleware import build_middleware
 from .model import build_model
 from .tools import build_tools
@@ -178,14 +179,15 @@ class _Trace:
         # —— 去重游标：抵御 updates 流的重复投递 ——
         self._seen_messages: set[str] = set()  # 已处理过的消息指纹
         self._seen_skills: set[str] = set()  # 已上报过的 skill 名
+        self._plan_signature = ""  # 上一次广播过的待办清单指纹，清单没变就不重复发
 
-        # —— 主从协同：委派 → 子智能体名的映射 ——
-        # subgraphs=True 时子智能体的每一帧都带命名空间 ('tools:<LangGraph 任务 id>',)，
+        # —— 三阶段协同：委派 → 从智能体名的映射 ——
+        # subgraphs=True 时从智能体的每一帧都带命名空间 ('tools:<LangGraph 任务 id>',)，
         # 那个 id 不是模型给的 tool_call_id，所以认领顺序是：
         #   ① 该命名空间之前已认领过 → 沿用；
-        #   ② 这一帧调用的工具只属于某一个从智能体（我们的工具面是按任务切开的）→ 就是它；
+        #   ② 这一帧调用的工具只属于某一个从智能体（工具面按阶段切开）→ 就是它；
         #   ③ 只剩一个未结束的委派 → 归它；
-        #   ④ 仍认不出（并发委派且工具面有重叠）→ 记成「子智能体」，如实标注而不是猜错人。
+        #   ④ 仍认不出（并发委派且工具面有重叠）→ 记成「从智能体」，如实标注而不是猜错人。
         self._subagent_of_namespace: dict[str, str] = {}
         self._pending_delegations: list[str] = []
 
@@ -250,18 +252,52 @@ class _Trace:
                 "skill": name,
             })
 
+    def consume_todos(self, state: dict[str, Any]) -> None:
+        """把待办清单转成 plan 事件，让前端画出「计划执行到哪一步」。
+
+        清单由框架的 ``TodoListMiddleware`` 写在 ``state["todos"]``，每次 ``write_todos``
+        都是**全量回写**，所以这里按内容指纹去重：清单没变就不重复发事件，
+        变了才广播一次完整快照（前端按快照重画，不做增量合并）。
+
+        与 ``consume_skills`` 同构：续接会话时框架不重发，运行时从检查点把它补回事件流。
+        """
+        todos = state.get("todos")
+        if not isinstance(todos, list):
+            return
+        items = []
+        for item in todos:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            items.append({"content": content, "status": str(item.get("status") or "pending")})
+        if not items:
+            return
+        signature = json.dumps(items, ensure_ascii=False, sort_keys=True)
+        if signature == self._plan_signature:
+            return
+        self._plan_signature = signature
+        done = sum(1 for item in items if item["status"] == "completed")
+        self.event({
+            "type": "plan",
+            "title": "任务清单",
+            "message": f"{done}/{len(items)} 步已完成",
+            "todos": items,
+            "total": len(items),
+            "completed": done,
+        })
+
     def consume(self, update: Any, namespace: tuple[str, ...] = ()) -> None:
         """消费一帧 stream 输出，这是本类唯一的入口。
 
         帧有两种形态：裸 state（顶层就有 messages），或 {节点名: state}。这里统一展开成
         state 列表走同一条路径，框架调整节点命名不会波及此处。
 
-        ``namespace`` 是 ``subgraphs=True`` 带来的命名空间：空元组代表主智能体自己，
-        非空（形如 ``('tools:<task 调用 id>',)``）代表某个从智能体的内部步骤。区分二者很重要——
-
-            · 从智能体的文本**不能**成为最终回答（那是它的中间稿，回答只能由主智能体写）；
-            · 但它的工具调用要照常记账并打上 ``agent`` 标记，前端轨迹页才能把
-              「委派 track_scout → 它做了什么 → 交回什么」如实画出来。
+        ``namespace`` 是 ``subgraphs=True`` 带来的命名空间：空元组是主智能体自己，非空（形如
+        ``('tools:<任务 id>',)``）是某个从智能体的内部步骤。三阶段协同时靠它把每个从智能体
+        的步骤如实标到轨迹上；参数保留也兼容了 stream 的二元组帧形，
+        也让将来若再引入子图时不必改动逐帧分派逻辑。
 
         每条新消息按类型分派，三条分支互不排斥：
             带 tool_calls 的模型消息 → 开一轮（round）、逐条登记调用、广播 tool_start
@@ -276,6 +312,7 @@ class _Trace:
         subagent = self._resolve_subagent(namespace, frames)
         for state in frames:
             self.consume_skills(state)  # skill 回执可能出现在任一节点的 state 里
+            self.consume_todos(state)  # 待办清单同理，可能出现在任一节点的 state 里
             messages = state.get("messages")
             if not isinstance(messages, list):
                 continue  # 该节点这一帧只更新了别的字段
@@ -410,6 +447,7 @@ class _Trace:
         answer_field = str(output.get("answer_field", "answer"))
         state_field = str(output.get("state_field", "state"))
         evidence_field = str(output.get("evidence_field", "evidence"))
+        enriched_field = str(output.get("enriched_evidence_field", "enrichedEvidence"))
         # 模型始终没吐过纯文本时，退化为最后一条**模型消息**的文本。
         # 不能退回最后一条消息本身：那可能是工具结果（例如被驳回的
         # 「Tool call limit exceeded」），会把它当成回答展示给用户。
@@ -426,6 +464,9 @@ class _Trace:
             "tool_records": self.records,
             "rounds": self.rounds,
             "evidence": self.evidence,
+            # 证据富化：本轮散落在各次工具结果里的关键帧 / 片段 / 参考图 ID 汇总成一份载荷，
+            # 前端证据面板按它一次渲染完（见 harness/evidence.py 的说明）。
+            enriched_field: build_evidence_payload(self.records),
         }
 
 
@@ -462,16 +503,12 @@ def _skill_sources(harness: dict[str, Any], groups: list[str]) -> list[str]:
     return [f"{root}/{str(group).strip('/')}" for group in groups]
 
 
-def _read_scope_paths(sources: list[str]) -> list[str]:
-    """把技能源路径展开成「读取白名单」：容器目录本身 + 其下所有文件。"""
-    return [path for source in sources for path in (source, f"{source}/**")]
-
-
 def _readonly_permissions(scope_paths: list[str], permission_type: Any, *, deny_when_empty: bool = False) -> list[Any] | None:
     """按读取白名单生成权限规则。
 
-    ``deny_when_empty=True`` 时，白名单为空表示「什么都不许读」而不是「不做限制」——
-    主智能体没挂技能就是这种情况：它不需要读任何文件，若返回 None 反而会放开整个项目。
+    ``deny_when_empty=True`` 时，白名单为空表示「什么都不许读」而不是「不做限制」。
+    三阶段单智能体走 ``harness.readonly_paths``（默认 /skills），用不到这条分支；
+    保留它是给「临时收紧到某个目录」的调用方一个明确的空集语义。
     """
     if not scope_paths:
         if not deny_when_empty:
@@ -488,8 +525,13 @@ def _readonly_permissions(scope_paths: list[str], permission_type: Any, *, deny_
     return rules
 
 
+def _read_scope_paths(sources: list[str]) -> list[str]:
+    """把技能源路径展开成「读取白名单」：容器目录本身 + 其下所有文件。"""
+    return [path for source in sources for path in (source, f"{source}/**")]
+
+
 def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: Any) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    """按 ``config/subagents.yaml`` 装配从智能体。
+    """按 ``config/subagents.yaml`` 装配三阶段从智能体：规划 / 执行 / 反思。
 
     返回（从智能体规格, 主智能体工具白名单, 主智能体技能组）。
 
@@ -499,9 +541,12 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
       · 从智能体默认隔离（只看得到 task 里那段描述），所以 system_prompt 必须自带输出契约，
         再叠一个 ``response_format`` 让父方直接收到 JSON。
 
-    主智能体的工具白名单（``master_tools``）是「主不查数据」的落地方式：只留它必须亲自调的工具，
-    其余全部下放。``show_evidence`` 必须留在主智能体——从智能体的内部调用不会回到主事件流，
-    下放它会让前端证据面板永远是空的。
+    与旧版主从协同的关键区别：**按阶段切，不按数据切**。执行智能体一个人拿全部领域工具
+    与四个技能组（轨迹 / 先验库 / 视觉 / 执行），不再拆成三个数据分身；规划与反思只拿
+    各自阶段需要的窄工具面。
+
+    主智能体工具白名单（``master_tools``）只留 ``show_evidence``：证据必须回到主事件流，
+    否则前端证据面板永远是空的。
     """
     import yaml
 
@@ -513,7 +558,7 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
     harness = config.get("harness", {})
     spec_path = project_root() / str(harness.get("subagents_file", "config/subagents.yaml"))
     if not spec_path.is_file():
-        raise RuntimeError(f"开启了主从协同但找不到从智能体配置：{spec_path}")
+        raise RuntimeError(f"开启了三阶段协同但找不到从智能体配置：{spec_path}")
     raw = yaml.safe_load(spec_path.read_text(encoding="utf-8")) or {}
     by_name = {str(getattr(tool, "name", "")): tool for tool in tools}
     subagents: list[dict[str, Any]] = []
@@ -532,15 +577,15 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
             "tools": [by_name[item] for item in wanted],
             "skills": _skill_sources(harness, [str(group) for group in (spec.get("skills") or [])]),
         }
-        # 读取面也按组收口：从智能体只能读自己那几组技能，
+        # 读取面按组收口：从智能体只能读自己那几组技能，
         # 否则模型会顺着 ls /skills 逛到别人的规范里（实测会陷在反复读同一个文件上出不来）。
         scope = _read_scope_paths(built["skills"])
-        permissions = _readonly_permissions(scope, permission_type)
+        permissions = _readonly_permissions(scope, permission_type, deny_when_empty=not scope)
         if permissions is not None:
             built["permissions"] = permissions
         # 从智能体必须自带守卫：框架只给它们 summarization + filesystem + patch_tool_calls，
-        # 主智能体的限流/重复守卫**不会**继承下去。实测缺了这两样时，
-        # track_scout 会用同一份参数把 get_track 调到天荒地老（一次委派就是一段无人管的 ReAct）。
+        # 主智能体的限流/重复守卫**不会**继承下去。实测缺了这两样时，一个从智能体会用同一份
+        # 参数把同一个工具调到天荒地老（一次委派就是一段无人管的 ReAct）。
         built["middleware"] = [
             RepeatToolCallMiddleware(),
             ToolCallLimitMiddleware(run_limit=max(1, int(harness.get("subagent_tool_calls", 12)))),
@@ -550,7 +595,7 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
             built["response_format"] = response_format
         subagents.append(built)
     if not subagents:
-        raise ValueError(f"开启了主从协同但 {spec_path} 里没有 subagents")
+        raise ValueError(f"开启了三阶段协同但 {spec_path} 里没有 subagents")
     return subagents, [str(item) for item in (raw.get("master_tools") or [])], [str(item) for item in (raw.get("master_skills") or [])]
 
 
@@ -574,20 +619,21 @@ class SeaVideoHarness:
         self.model = model if model is not None and callable(getattr(model, "bind_tools", None)) else build_model(config)
         self.tools = build_tools(config, service)
         harness = config.get("harness", {})
-        # 主从协同：装配从智能体，并把主智能体的领域工具收窄到白名单（主只规划与汇总）
+        # 三阶段协同：规划 / 执行 / 反思各挂一个从智能体，主智能体只规划、委派与落证据。
+        # 关掉开关即退回单智能体（不传 subagents ⇒ 根本没有 task 工具），三阶段由主智能体自己跑。
         self.subagents, master_tools, master_skills = ([], [], [])
         if harness.get("subagents_enabled"):
             from deepagents import FilesystemPermission
 
             self.subagents, master_tools, master_skills = _load_subagents(config, self.tools, FilesystemPermission)
-        agent_tools = [tool for tool in self.tools if str(getattr(tool, "name", "")) in master_tools] if self.subagents else self.tools
+        self.agent_tools = [tool for tool in self.tools if str(getattr(tool, "name", "")) in master_tools] if self.subagents else self.tools
+        # 协同时主智能体改读「规划者」提示词：它只规划、委派与汇总，不亲自查数据。
         prompt_file = str(harness.get("planner_prompt_file", "harness/planner.md")) if self.subagents else str(harness.get("system_prompt_file", "harness/system.md"))
         prompt_path = project_root() / prompt_file
         self.system_prompt = prompt_path.read_text(encoding="utf-8")  # 系统提示词是文件而非配置项
-        self.agent_tools = agent_tools
-        # 技能分组：单智能体读全部组；主从协同时只读 master_skills 指定的组，
+        # 技能分组：单智能体读全部组；三阶段协同时只读 master_skills 指定的组，
         # 且**空列表就是"不挂技能"**——不能再 or 一个兜底，否则空配置会被当成未配置，
-        # 主智能体又把 5 组技能全挂回去（这正是"技能读不完"屡修不止的原因）。
+        # 主智能体又把所有技能组挂回去（这正是"技能读不完"屡修不止的原因）。
         if self.subagents:
             groups = master_skills
         else:
@@ -634,14 +680,14 @@ class SeaVideoHarness:
         backend = FilesystemBackend(root_dir=project_root())
         # 读取工具（read_file / ls / glob / grep）留给模型，否则框架的 skills 渐进式披露
         # 断在第二步——它能看见技能名与 description，却打不开 SKILL.md 正文。开放的同时用权限
-        # 规则把读取面收敛到白名单：单智能体放开整个 skills 目录；主从协同时按主智能体自己的技能组；
-        # 主智能体没挂技能（默认）就一律拒绝——它没有需要读的文件。
+        # 规则把读取面收敛到白名单：协同模式下主智能体没挂技能 ⇒ 一律拒绝（它没有要读的文件）；
+        # 单智能体模式走 harness.readonly_paths（默认只放 /skills）。
         if self.subagents:
             permissions = _readonly_permissions(_read_scope_paths(self.skill_sources), FilesystemPermission, deny_when_empty=True)
         else:
             permissions = _filesystem_permissions(harness, FilesystemPermission)
-        # 渐进式披露：技能源按组交给框架；主从协同时主智能体默认**不挂**技能（master_skills 为空），
-        # 它的规则全在 planner.md 里——4B 模型看到技能目录会把"把技能读完"当成任务本身
+        # 渐进式披露：技能源按组交给框架。协同时主智能体默认**不挂**技能（master_skills 为空），
+        # 它的规则全在 planner.md 里——4B 模型看到技能目录会把"把技能读完"当成任务本身。
         skills_attached = bool(self.skill_sources)
         try:
             return create_deep_agent(
@@ -684,7 +730,7 @@ class SeaVideoHarness:
         return stop
 
     def _subagent_tool_owners(self) -> dict[str, str]:
-        """工具名 -> 从智能体名。工具面按任务切开时，用它认领子智能体的流式帧。"""
+        """工具名 -> 从智能体名。工具面按阶段切开时，用它认领子智能体的流式帧。"""
         return {str(getattr(tool, "name", "")): str(spec["name"]) for spec in self.subagents for tool in spec["tools"]}
 
     def close(self) -> None:
@@ -719,6 +765,7 @@ class SeaVideoHarness:
         values = getattr(snapshot, "values", None)
         if isinstance(values, dict):
             trace.consume_skills(values)
+            trace.consume_todos(values)
 
     def run(self, question: str, thread_id: str | None = None, cancel: Any = None, **_: Any) -> dict[str, Any]:
         """跑完一轮问答后一次性返回结果；运行期异常一律降级为 error 结果，不向外抛。
@@ -749,8 +796,8 @@ class SeaVideoHarness:
         heartbeat = self._start_heartbeat(trace, question)
         try:
             # updates 模式每次产出一帧增量，交给 _Trace 去重并翻译成事件。
-            # subgraphs=True：主从协同时子智能体的每一步也会带命名空间吐出来，
-            # 上下文依然是隔离的（它的消息不进主 state），但过程对前端可见。
+            # subgraphs=True：保留二元组帧形（namespace, update）；单智能体下命名空间恒为空，
+            # 但开着它以后若再引入子图，逐帧分派不必改。
             for frame in self.agent.stream(
                 {"messages": [{"role": "user", "content": question}]},
                 config={"configurable": {"thread_id": thread_id}},
@@ -887,5 +934,8 @@ class SeaVideoHarness:
 def run_harness(config: dict[str, Any], tools: Any, llm: Any = None, event_handler: Callable[[dict[str, Any]], None] | None = None, **kwargs: Any) -> dict[str, Any]:
     """一次性问答入口：装配即运行、用完即释放；要事件流或复用实例时直接用 SeaVideoHarness。"""
     return SeaVideoHarness(config, tools, model=llm, event_handler=event_handler).run(kwargs.get("question", ""), kwargs.get("thread_id"))
+
+
+
 
 

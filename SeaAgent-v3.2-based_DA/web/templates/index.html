@@ -196,7 +196,16 @@
             <div class="qa-user-bubble"><span class="qa-message-label">You</span><p id="qaUserQuestion"></p></div>
           </div>
 
-          <section id="agentResultPanel" class="qa-activity" data-state="idle" aria-label="Harness activity">
+          <section id="agentPlanPanel" class="qa-plan" data-state="idle" hidden aria-label="Plan checklist">
+<div class="qa-plan-head">
+<span class="qa-plan-title">Plan</span>
+<span id="agentPlanProgress" class="qa-plan-progress">Waiting for the plan</span>
+</div>
+<div class="qa-plan-meter" aria-hidden="true"><i id="agentPlanMeterFill"></i></div>
+<ol id="agentPlanList" class="qa-plan-list"></ol>
+</section>
+
+<section id="agentResultPanel" class="qa-activity" data-state="idle" aria-label="Harness activity">
             <div class="qa-section-head">
               <div><span class="qa-section-title"><i class="qa-live-indicator"></i>Harness activity</span><span id="agentResultHint">Public execution events only</span></div>
               <strong id="agentThinkingState">Waiting</strong>

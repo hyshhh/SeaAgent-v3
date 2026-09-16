@@ -53,7 +53,7 @@ def _runtime_with_agent(agent):
     runtime.agent = agent
     runtime.event_handler = None
     runtime._connection = None
-    runtime.subagents = []  # 单智能体模式：没有从智能体
+    runtime.subagents = []  # 三阶段协同的从智能体；手工桩里没有委派
     return runtime
 
 
@@ -193,15 +193,4 @@ def test_different_arguments_do_not_trigger_the_repeat_guard():
     result = _runtime_with_agent(_FakeAgent(frames)).run('问题', thread_id='thread-distinct')
     assert result['state'] == 'completed'
     assert result['answer'] == '最终回答'
-
-
-def test_delegation_calls_are_exempt_from_the_repeat_guard():
-    """委派不进重复守卫：同一 scope 派两次该由提示词约束，不该被守卫直接掐断。"""
-    frames = []
-    for index in range(5):
-        frames.append({'model': {'messages': [AIMessage(content='', tool_calls=[{'name': 'task', 'args': {'description': '同样的任务', 'subagent_type': 'track_scout'}, 'id': f'task-{index}'}])]}})
-        frames.append({'tools': {'messages': [ToolMessage(content='报告', name='task', tool_call_id=f'task-{index}')]}})
-    frames.append({'model': {'messages': [AIMessage(content='最终回答', id='answer-task')]}})
-    result = _runtime_with_agent(_FakeAgent(frames)).run('问题', thread_id='thread-task')
-    assert result['state'] == 'completed'
 

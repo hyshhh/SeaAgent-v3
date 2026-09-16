@@ -644,3 +644,99 @@
   #tab-agent-qa .qa-composer-wrap { padding-inline: 12px; }
   #tab-agent-qa .qa-composer { max-width: none; }
 }
+
+/* ---------------------------------------------------------------- 计划清单 */
+.qa-plan {
+  border: 1px solid var(--qa-line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.qa-plan-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.qa-plan-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--qa-ink);
+}
+
+.qa-plan-progress {
+  font-size: 12px;
+  color: var(--qa-muted);
+}
+
+.qa-plan-meter {
+  height: 4px;
+  margin: 8px 0 10px;
+  border-radius: 999px;
+  background: var(--qa-subtle);
+  overflow: hidden;
+}
+
+.qa-plan-meter i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--qa-blue);
+  transition: width 0.25s ease;
+}
+
+.qa-plan[data-state='done'] .qa-plan-meter i {
+  background: var(--qa-green);
+}
+
+.qa-plan-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.qa-plan-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--qa-ink);
+}
+
+.qa-plan-item[data-status='completed'] .qa-plan-text {
+  color: var(--qa-muted);
+  text-decoration: line-through;
+}
+
+.qa-plan-item[data-status='in_progress'] .qa-plan-text {
+  font-weight: 600;
+}
+
+.qa-plan-mark {
+  width: 12px;
+  text-align: center;
+  color: var(--qa-muted);
+}
+
+.qa-plan-item[data-status='completed'] .qa-plan-mark {
+  color: var(--qa-green);
+}
+
+.qa-plan-item[data-status='in_progress'] .qa-plan-mark {
+  color: var(--qa-blue);
+}
+
+.qa-plan-status {
+  margin-left: auto;
+  font-size: 11px;
+  font-style: normal;
+  color: var(--qa-muted);
+}

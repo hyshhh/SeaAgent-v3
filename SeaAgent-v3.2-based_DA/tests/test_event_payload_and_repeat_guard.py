@@ -43,11 +43,12 @@ def test_different_arguments_are_not_skipped():
     assert other.content == "executed:read_file"
 
 
-def test_delegation_is_exempt_from_the_repeat_guard():
-    guard = RepeatToolCallMiddleware()
+def test_exempt_tool_names_are_never_skipped():
+    """豁免名单里的工具即使同名同参也照常执行——守卫的豁免口子仍然有效。"""
+    guard = RepeatToolCallMiddleware(exempt=("list_registry",))
     for index in range(3):
-        result = guard.wrap_tool_call(_Request("task", {"description": "同样的任务", "subagent_type": "track_scout"}, f"t{index}"), _handler)
-        assert result.content == "executed:task"
+        result = guard.wrap_tool_call(_Request("list_registry", {}, f"t{index}"), _handler)
+        assert result.content == "executed:list_registry"
 
 
 def test_bounded_payload_keeps_its_structure_when_it_exceeds_the_limit():

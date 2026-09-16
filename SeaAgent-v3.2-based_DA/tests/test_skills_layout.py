@@ -8,7 +8,7 @@
 import re
 from pathlib import Path
 
-EXPECTED_GROUPS = {"coordination", "track", "registry", "visual", "answer"}
+EXPECTED_GROUPS = {"coordination", "planning", "execution", "reflection", "track", "registry", "visual", "answer"}
 
 
 def _skill_files():

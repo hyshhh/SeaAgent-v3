@@ -24,17 +24,17 @@ def test_directory_exploration_tools_are_disabled():
     assert {"ls", "glob", "grep"} <= disabled
 
 
-def test_delegation_is_switched_by_config_not_by_disabling_task():
-    """task 不再靠禁用名单关闭（关掉它主从协同就没法委派）。
+def test_three_phase_mode_is_switched_by_config_not_by_editing_prompts():
+    """三阶段协同是配置事实：规划 / 执行 / 反思各一个从智能体，规格写在 subagents.yaml。
 
-    官方语义：不挂 SubAgentMiddleware 的唯一办法是「禁用 general-purpose 且不传 subagents」，
-    本项目的 general_purpose_subagent 一直是关的，所以 subagents_enabled 就是那个开关。
+    钉住的是「换形态必须改配置」——不能靠往禁用名单里塞 task 来假装没有委派。
     """
     harness = load_config()["harness"]
-    assert "task" not in harness["disabled_deepagent_tools"]
-    assert isinstance(harness["subagents_enabled"], bool)
+    assert harness["execution_mode"] == "three-phase-subagents"
+    assert harness["subagents_enabled"] is True
     assert str(harness["subagents_file"]).endswith("subagents.yaml")
     assert str(harness["planner_prompt_file"]).endswith("planner.md")
+    assert "task" not in harness["disabled_deepagent_tools"]
 
 
 def test_model_round_limit_is_gone():

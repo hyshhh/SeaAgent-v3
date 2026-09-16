@@ -187,10 +187,47 @@ function switchQaView(view) {
 /* 轨迹的数据来源：优先当前这一轮的事件缓冲（有参数与结果），退回会话存档（只有工具名）。 */
 function trajectorySteps() {
   const run = currentSessionId ? sessionRuns.get(currentSessionId) : null;
-  if (run) return { steps: stepsFromEvents(run.events), archived: false };
+  if (run) {
+    // 打开历史轮次时把最后的计划快照重画出来：事件缓冲里有本轮全部 plan 事件
+    const plans = run.events.filter((event) => event.type === 'plan');
+    if (plans.length) renderAgentPlan(plans[plans.length - 1]);
+    return { steps: stepsFromEvents(run.events), archived: false };
+  }
   const turns = Array.isArray(currentSession?.turns) ? currentSession.turns : [];
   const latest = turns[turns.length - 1];
   return latest ? { steps: stepsFromTurn(latest), archived: true } : { steps: [], archived: false };
+}
+
+/* ---------------------------------------------------------------------------
+ * 计划清单：TodoListMiddleware 把待办写在主智能体的 state 里，运行时按内容指纹去重后
+ * 以 plan 事件广播完整快照。这里按快照整体重画——清单可能被模型改写，不做增量合并。
+ * ------------------------------------------------------------------------- */
+const PLAN_STATUS_LABEL = {
+  pending: '待办',
+  in_progress: '进行中',
+  completed: '已完成',
+};
+
+function renderAgentPlan(event) {
+  const panel = document.getElementById('agentPlanPanel');
+  const list = document.getElementById('agentPlanList');
+  const progress = document.getElementById('agentPlanProgress');
+  const fill = document.getElementById('agentPlanMeterFill');
+  if (!panel || !list) return;
+  const todos = Array.isArray(event.todos) ? event.todos : [];
+  if (!todos.length) return;
+  panel.hidden = false;
+  list.innerHTML = todos.map((item) => {
+    const status = String(item.status || 'pending');
+    const label = PLAN_STATUS_LABEL[status] || status;
+    const mark = status === 'completed' ? '✓' : status === 'in_progress' ? '▸' : '·';
+    return `<li class="qa-plan-item" data-status="${escapeHtml(status)}"><span class="qa-plan-mark" aria-hidden="true">${mark}</span><span class="qa-plan-text">${escapeHtml(item.content || '')}</span><em class="qa-plan-status">${escapeHtml(label)}</em></li>`;
+  }).join('');
+  const total = Number(event.total ?? todos.length);
+  const done = Number(event.completed ?? todos.filter((item) => item.status === 'completed').length);
+  if (progress) progress.textContent = `${done}/${total} 步已完成`;
+  if (fill) fill.style.width = total ? `${Math.round((done / total) * 100)}%` : '0%';
+  panel.dataset.state = done === total ? 'done' : 'running';
 }
 
 function stepsFromEvents(events) {
@@ -200,6 +237,7 @@ function stepsFromEvents(events) {
   for (const event of events) {
     // 从智能体的步骤带 agent 标记：轨迹里要能看出「这一步是谁做的」
     const agent = event.agent || '';
+    if (event.type === 'plan') renderAgentPlan(event);
     if (event.type === 'status') push('system', event.title || event.message || '状态更新');
     else if (event.type === 'skill') push('skill', `加载技能 ${event.skill || event.title || ''}`, { agent });
     else if (event.type === 'model') {
