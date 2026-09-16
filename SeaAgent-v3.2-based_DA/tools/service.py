@@ -697,6 +697,32 @@ class ToolService:
         return {"ok": True, "targetType": "description" if has_description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": result["decision"], "facts": result["facts"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
 
 
+    def _registry_writer(self):
+        """惰性构造写入工具：它要 ShipService 的完整事务（写档案 → 存图 → 重建索引）。
+
+        放在这里而不是模块顶层 import，是为了不让 tools 层反向依赖 web 层；
+        真正被调用的时机只有一个——模型决定调用 add_registry_vessel 的时候。
+        """
+        writer = getattr(self, "_registry_writer_instance", None)
+        if writer is None:
+            from harness.registry_write import RegistryWriteTool
+            from web.services import ShipService
+
+            service = ShipService(self.config, self.repository, self.embedder, self.llm, self.vectors)
+            writer = RegistryWriteTool(service)
+            self._registry_writer_instance = writer
+        return writer
+
+    def addRegistryVessel(self, hullNumber: str, description: str | None = None, imagePaths: Any = None, aliases: Any = None, userIntent: str | None = None) -> dict[str, Any]:
+        """新增一条先验库记录（写前会被人工确认中断拦下）。"""
+        return self._registry_writer().addRegistryVessel(
+            hull_number=hullNumber,
+            description=description,
+            image_paths=imagePaths,
+            aliases=aliases,
+            user_intent=userIntent,
+        )
+
     def showEvidence(self, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None, registryReferenceIds: list[str] | None = None) -> dict[str, Any]:
         return {
             "ok": True,

@@ -196,7 +196,21 @@
             <div class="qa-user-bubble"><span class="qa-message-label">You</span><p id="qaUserQuestion"></p></div>
           </div>
 
-          <section id="agentPlanPanel" class="qa-plan" data-state="idle" hidden aria-label="Plan checklist">
+          <section id="agentConfirmPanel" class="qa-confirm" data-state="idle" hidden aria-label="Write confirmation">
+<div class="qa-confirm-head">
+<span class="qa-confirm-title">待确认 · 写入先验库</span>
+<span id="agentConfirmHint" class="qa-confirm-hint"></span>
+</div>
+<dl id="agentConfirmBody" class="qa-confirm-body"></dl>
+<div class="qa-confirm-actions">
+<button type="button" id="btnConfirmApprove" class="qa-confirm-approve">批准写入</button>
+<button type="button" id="btnConfirmReject" class="qa-confirm-reject">拒绝</button>
+</div>
+<label class="qa-confirm-feedback"><span>拒绝理由（会交回模型，让它换个做法）</span>
+<textarea id="agentConfirmFeedback" rows="2" placeholder="例如：这条不该入库，先查它在不在库里"></textarea></label>
+</section>
+
+<section id="agentPlanPanel" class="qa-plan" data-state="idle" hidden aria-label="Plan checklist">
 <div class="qa-plan-head">
 <span class="qa-plan-title">Plan</span>
 <span id="agentPlanProgress" class="qa-plan-progress">Waiting for the plan</span>

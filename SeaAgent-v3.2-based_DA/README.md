@@ -14,6 +14,10 @@ Sea-Video-Harness 是面向海域监控视频问答的三阶段协同 Harness：
 ## 问答链路要点
 
 - **三阶段协同（可开关）**：`harness.subagents_enabled` 打开后，主智能体改读 `harness/planner.md`，只做规划、委派与汇总，领域工具收窄到 `config/subagents.yaml` 的 `master_tools`（默认只留 `show_evidence`）。三个从智能体**按阶段**分工，不按数据切：`planner`（意图 + 验收清单 + 时间范围，不带业务工具，只用框架自带的 `read_file` 读自己的规划技能组）、`executor`（主力执行者，拿全部 10 个领域工具与 track/registry/visual/execution 四组技能）、`reflector`（按清单验收、判定能否退出、汇总证据）。三者各自挂自己的技能组、守卫与结构化返回契约。关掉开关即退回单智能体（官方语义：禁用 general-purpose 且不传 subagents ⇒ 根本没有 `task` 工具）。
+- **写入先验库要人工确认**：`executor` 手里有第 12 个工具 `add_registry_vessel`（唯一会改进知识库的操作），它配了 `interrupt_on` ——
+  模型一调用，框架的 `HumanInTheLoopMiddleware` 就把整轮**中断**在写之前，前端弹确认卡；批准才真正落库（走 `ShipService` 的完整事务：
+  写档案 → 存参考图 → 编码向量 → 重建 FAISS 索引，失败整体回滚），拒绝则把理由作为工具结果交回模型，让它换个做法继续这一轮。
+  三道闸：工具描述写明"只在用户明确要求入库时调用"、`user_intent` 必填（要填用户原话）、以及这次人工确认。
 - **计划清单上前端**：`write_todos` 由 `TodoListMiddleware` 注入主智能体，清单写在它的 state 里；运行时按内容指纹去重后广播 `plan` 事件（完整快照），前端在问答页渲染成带进度条的待办清单，展开历史轮次时从事件缓冲重建。
 - **技能渐进式披露**：技能名与 description 随系统提示词注入（每一轮都在）；`read_file`/`ls`/`glob`/`grep` 由权限规则收敛到 `/skills` 目录内，写入与 shell 工具仍然禁用。整段会话还没读过任何技能正文时，`SkillDisclosureMiddleware` 会在模型第一次决策前把「先读正文再动手」并进 system 消息提醒一次。续接会话时框架不再回写技能回执，运行时会从检查点补回，保证事件流每一轮都能看到实际注入的技能目录。
 - **收尾与证据**：`skills/finalize` 规定收尾动作，`EvidenceWrapUpMiddleware` 在模型给出最终回答却没调用证据工具时提醒一次，两者合起来保证前端证据面板有内容。⚠️ `show_evidence` 必须留在主智能体：从智能体的内部调用不进主事件流，下放它会让证据面板永远为空。

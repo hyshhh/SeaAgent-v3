@@ -11,6 +11,8 @@ def test_tools_are_config_driven():
     assert [tool.name for tool in tools] == [
         "get_track", "get_frames", "get_clip", "get_registry", "list_registry",
         "match_hull", "match_text", "match_image", "verify_target", "show_evidence", "dedup_tracks",
+        # 唯一会改进知识库的工具：写前由人工确认中断拦下（见 config/subagents.yaml 的 interrupt_on）
+        "add_registry_vessel",
     ]
     result = tools[0].invoke({"time_range": [1.0, 2.0], "hull_number": "0857"})
     assert result["kwargs"] == {"timeRange": (1.0, 2.0), "hullNumber": "0857", "offset": 0, "limit": 0}

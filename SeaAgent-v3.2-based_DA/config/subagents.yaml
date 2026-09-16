@@ -66,7 +66,12 @@ subagents:
 
   - name: executor
     description: 按计划那一步去查数据：筛轨迹、取关键帧、去重、查先验库、做图像匹配与视觉核验、切视频片段。返回带证据 ID 的结构化结果。
-    tools: [get_track, get_frames, get_clip, get_registry, list_registry, match_hull, match_text, match_image, verify_target, dedup_tracks]
+    tools: [get_track, get_frames, get_clip, get_registry, list_registry, match_hull, match_text, match_image, verify_target, dedup_tracks, add_registry_vessel]
+    # 写入前人工确认：框架的 HumanInTheLoopMiddleware 会在这里中断整轮，
+    # 前端弹确认卡；用户批准才执行，拒绝则把理由作为工具结果交回给执行智能体换个做法。
+    interrupt_on:
+      add_registry_vessel:
+        allowed_decisions: [approve, reject]
     skills: [track, registry, visual, execution]
     response_format: ExecutionFindings
     system_prompt: |
@@ -81,6 +86,11 @@ subagents:
       2. **关键帧与去重都按"已筛过的少量轨迹"调用**（一次别超过 20 条）。全量轨迹直接丢进去会让这一步变成分钟级重活。
       3. **视觉结论要分清参照物**：先验库参考图是"已知身份"，视频关键帧是"待证事实"，两者不要混为一谈；
          图像分数落在灰色区间就如实报 uncertain，不要挑一个好看的分数当结论。
+      4. **不要主动写先验库。** 只有用户在问题里明确要求入库（"把 003 加进库里""这条船入库"）时才调用
+         add_registry_vessel，并把用户的原话填进 user_intent。你自己推断"这看起来像 003"不构成理由——
+         那种情况在返回结果里说明，由主智能体去问用户。写入前会有人工确认打断：用户批准才真正落库，
+         拒绝时你会收到一条带理由的工具结果，请按那个理由换个做法（例如改成先查库、或改舷号重试），
+         不要重复同一个调用。
 
       返回字段见 schema：findings 每条给 track_id / keyframe_ids / registry_ids / reference_ids / segment_ids /
       score / band / reason；这一步没做成的部分进 unresolved，并写清缺什么；summary 一句话说这步拿到了什么。

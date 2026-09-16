@@ -497,6 +497,56 @@ def _tool_labels(config: dict[str, Any]) -> dict[str, str]:
     return labels
 
 
+def _resume_command(decision: str, feedback: str) -> Any:
+    """把人工决定翻成 LangGraph 的恢复命令。
+
+    批准 → 中间件放行那个工具，由它自己执行（写事务在工具内部，见 harness/registry_write.py）。
+    拒绝 → 工具**不执行**，拒绝理由作为工具结果交回模型，让它换个做法继续这一轮。
+    """
+    from langgraph.types import Command
+
+    if decision == "approve":
+        decisions = [{"type": "approve"}]
+    else:
+        decisions = [{"type": "reject", "message": str(feedback or "用户拒绝了这次写入，请换一种做法。")}]
+    return Command(resume={"decisions": decisions})
+
+
+def _interrupt_payload(update: Any) -> list[Any]:
+    """一帧里若带中断，取出中断载荷列表；没有则返回空列表。
+
+    LangGraph 的人工确认以 ``{"__interrupt__": (Interrupt(...),)}`` 这种帧出现，
+    和普通 state 更新混在同一条流里。中断不是错误——它是「等人拍板」的正常状态，
+    所以必须在这一层认出来，否则会被下面的通用异常处理当成运行失败吞掉。
+    """
+    if not isinstance(update, dict):
+        return []
+    pending = update.get("__interrupt__")
+    if isinstance(pending, (list, tuple)):
+        return list(pending)
+    return [pending] if pending is not None else []
+
+
+def _confirmation_from(interrupts: list[Any]) -> dict[str, Any]:
+    """把中断载荷整理成前端确认卡需要的最小字段。"""
+    first = interrupts[0]
+    value = getattr(first, "value", first)
+    value = value if isinstance(value, dict) else {}
+    requests = value.get("action_requests") or []
+    configs = value.get("review_configs") or []
+    actions = []
+    for index, request in enumerate(requests):
+        request = request if isinstance(request, dict) else {}
+        config = configs[index] if index < len(configs) and isinstance(configs[index], dict) else {}
+        actions.append({
+            "tool": str(request.get("name") or ""),
+            "arguments": request.get("args") if isinstance(request.get("args"), dict) else {},
+            "description": str(request.get("description") or ""),
+            "allowedDecisions": list(config.get("allowed_decisions") or ["approve", "reject"]),
+        })
+    return {"interruptId": str(getattr(first, "id", "") or ""), "actions": actions}
+
+
 def _skill_sources(harness: dict[str, Any], groups: list[str]) -> list[str]:
     """把技能组名展开成官方 skills 源路径（``/skills/<组>``，组目录的子目录才是技能）。"""
     root = "/" + str(harness.get("skills_dir", "skills")).replace("\\", "/").strip("/")
@@ -593,6 +643,12 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
         response_format = resolve_response_format(spec.get("response_format"))
         if response_format is not None:
             built["response_format"] = response_format
+        # 人工确认：把 YAML 的 interrupt_on 原样交给框架，它会在编译这个从智能体时
+        # 自动加上 HumanInTheLoopMiddleware（见 deepagents graph.py 的 interrupt_on 处理）。
+        # 漏搬这一个字段的表现是「配了也不中断」——写库会直接执行，没有任何确认。
+        interrupt_on = spec.get("interrupt_on")
+        if isinstance(interrupt_on, dict) and interrupt_on:
+            built["interrupt_on"] = interrupt_on
         subagents.append(built)
     if not subagents:
         raise ValueError(f"开启了三阶段协同但 {spec_path} 里没有 subagents")
@@ -640,6 +696,7 @@ class SeaVideoHarness:
             groups = [path.name for path in sorted((project_root() / str(harness.get("skills_dir", "skills"))).iterdir()) if path.is_dir()]
         self.skill_sources = _skill_sources(harness, groups)
         self._connection: sqlite3.Connection | None = None
+        self._released = False  # 跑完一轮后连接已释放，恢复时要重新装配 agent
         self.agent = self._build_agent()  # 构造即装配，后续多次调用共用同一 agent
 
     def _build_agent(self) -> Any:
@@ -741,6 +798,8 @@ class SeaVideoHarness:
         connection, self._connection = self._connection, None
         if connection is not None:
             connection.close()
+            # 跑完这轮连接就没了；下次（例如人工确认后恢复）要先重新装配 agent
+            self._released = True
 
     def __enter__(self) -> Self:
         return self
@@ -767,6 +826,45 @@ class SeaVideoHarness:
             trace.consume_skills(values)
             trace.consume_todos(values)
 
+    def _drive(self, payload: Any, thread_id: str, trace: _Trace, cancel: Any = None) -> dict[str, Any]:
+        """把一次 agent.stream 跑完：消费帧、发事件、按失控阈值收尾。
+
+        ``payload`` 有两种：首次运行是 ``{"messages": [...]}``，人工确认后恢复是
+        ``Command(resume=...)``。两条路径共用本方法，所以事件的产生方式完全一致。
+
+        返回值里的 ``interrupted`` 为真时，本轮停在「等人确认」——这不是失败，
+        调用方应当把确认载荷交给前端，等人拍板后再调 ``resume``。
+        """
+        harness = self.config.get("harness", {})
+        stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
+        repeat_limit = max(1, int(harness.get("stall_guard_repeat_calls", 3)))
+        state = "completed"
+        confirmation: dict[str, Any] | None = None
+        try:
+            for frame in self.agent.stream(
+                payload,
+                config={"configurable": {"thread_id": thread_id}},
+                stream_mode=harness.get("stream_mode", "updates"),
+                subgraphs=True,
+            ):
+                namespace, update = frame if isinstance(frame, tuple) and len(frame) == 2 else ((), frame)
+                if cancel is not None and cancel.is_set():
+                    return {"state": "cancelled", "confirmation": None}
+                interrupts = _interrupt_payload(update)
+                if interrupts:
+                    confirmation = _confirmation_from(interrupts)
+                    self._awaiting_user = True
+                    return {"state": "awaiting_confirmation", "confirmation": confirmation}
+                trace.consume(update, namespace)
+                if trace.error_streak >= stall_limit:
+                    return {"state": "stalled", "confirmation": None, "reason": f"连续 {trace.error_streak} 次工具调用失败"}
+                if trace.repeat_streak > repeat_limit:
+                    return {"state": "stalled", "confirmation": None, "reason": f"同一个工具调用重复了 {trace.repeat_streak} 次"}
+        except Exception as error:
+            logger.exception("Harness drive failed: thread_id=%s", thread_id)
+            return {"state": "error", "confirmation": None, "error": error}
+        return {"state": state, "confirmation": confirmation}
+
     def run(self, question: str, thread_id: str | None = None, cancel: Any = None, **_: Any) -> dict[str, Any]:
         """跑完一轮问答后一次性返回结果；运行期异常一律降级为 error 结果，不向外抛。
 
@@ -786,61 +884,87 @@ class SeaVideoHarness:
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
         self._seed_skills_from_checkpoint(trace, thread_id)
-        cancelled = False
-        stalled = False
-        # 失控阈值：工具预算用完后框架会把后续调用一律驳回，模型若继续硬调就会无限刷同一条错误。
-        # 连续失败到这个数就收尾——正常活干到一半偶尔失败一两次不会触发（成功一次即清零）。
-        stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
-        repeat_limit = max(1, int(harness.get("stall_guard_repeat_calls", 3)))
-        stall_reason = ""
         heartbeat = self._start_heartbeat(trace, question)
         try:
-            # updates 模式每次产出一帧增量，交给 _Trace 去重并翻译成事件。
-            # subgraphs=True：保留二元组帧形（namespace, update）；单智能体下命名空间恒为空，
-            # 但开着它以后若再引入子图，逐帧分派不必改。
-            for frame in self.agent.stream(
-                {"messages": [{"role": "user", "content": question}]},
-                config={"configurable": {"thread_id": thread_id}},
-                stream_mode=harness.get("stream_mode", "updates"),
-                subgraphs=True,
-            ):
-                namespace, update = frame if isinstance(frame, tuple) and len(frame) == 2 else ((), frame)
-                if cancel is not None and cancel.is_set():
-                    cancelled = True
-                    break
-                trace.consume(update, namespace)
-                if trace.error_streak >= stall_limit:
-                    stalled = True
-                    stall_reason = f"连续 {trace.error_streak} 次工具调用失败"
-                    break
-                if trace.repeat_streak > repeat_limit:
-                    stalled = True
-                    stall_reason = f"同一个工具调用重复了 {trace.repeat_streak} 次"
-                    break
-        except Exception as error:
-            # 对外只返回安全的短消息，完整 traceback 进入服务日志，便于定位模型/工具/中间件故障。
-            logger.exception("Harness run failed: thread_id=%s", thread_id)
-            message = _error_message(error, trace.event_limit)
-            result = trace.result(thread_id, self.config, state="error")
-            result["error"] = message
-            trace.event({"type": "error", "title": "Harness 执行失败", "message": message, "errorType": type(error).__name__, "result": result})
-            return result
+            outcome = self._drive({"messages": [{"role": "user", "content": question}]}, thread_id, trace, cancel)
         finally:
             if heartbeat is not None:
                 heartbeat.set()
             self.close()
-        if cancelled:
+        return self._finish(trace, thread_id, outcome)
+
+    def resume(self, decision: str, thread_id: str, feedback: str = "", cancel: Any = None) -> dict[str, Any]:
+        """人工拍板后继续上一轮：批准则执行那个工具，拒绝则把理由交回模型换个做法。
+
+        ``decision`` 取 ``approve`` 或 ``reject``。恢复必须用**同一个 thread_id** ——
+        中断点存在检查点里，换 id 就对不上了。
+
+        与 run 共用同一段驱动循环，所以事件契约完全一致。
+        """
+        normalized = str(decision or "").strip().lower()
+        if normalized not in {"approve", "reject"}:
+            raise ValueError(f"decision 只能是 approve 或 reject，收到：{decision!r}")
+        thread_id = thread_id or uuid.uuid4().hex
+        harness = self.config.get("harness", {})
+        trace = _Trace(
+            self.event_handler,
+            int(harness.get("event_payload_max_chars", 4000)),
+            str(harness.get("evidence_tool", "")),
+            _tool_labels(self.config),
+            self._subagent_tool_owners(),
+        )
+        trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
+        self._seed_skills_from_checkpoint(trace, thread_id)
+        self._resume_agent()
+        heartbeat = self._start_heartbeat(trace, "resume")
+        try:
+            outcome = self._drive(_resume_command(normalized, feedback), thread_id, trace, cancel)
+        finally:
+            if heartbeat is not None:
+                heartbeat.set()
+            self.close()
+        return self._finish(trace, thread_id, outcome)
+
+    def _resume_agent(self) -> None:
+        """恢复前重新装配 agent：上一轮结束时检查点连接已释放。"""
+        if getattr(self, "_released", False):
+            self.agent = self._build_agent()
+            self._released = False
+
+    def _finish(self, trace: _Trace, thread_id: str, outcome: dict[str, Any]) -> dict[str, Any]:
+        """run / stream / resume 三条路径共用的收尾：把驱动结果翻成对外事件与结果。"""
+        harness = self.config.get("harness", {})
+        state = outcome.get("state")
+        if state == "awaiting_confirmation":
+            result = trace.result(thread_id, self.config, state="awaiting_confirmation")
+            result["confirmation"] = outcome.get("confirmation") or {}
+            trace.event({
+                "type": "confirm",
+                "title": "等待人工确认",
+                "message": "有一项写入操作需要你确认",
+                "confirmation": result["confirmation"],
+                "result": result,
+            })
+            return result
+        if state == "cancelled":
             result = trace.result(thread_id, self.config, state="cancelled")
             trace.event({"type": "complete", "title": "Harness 已停止", "message": "本轮已按请求停止", "result": result})
             return result
-        if stalled:
-            # 空转（连续失败或原地重复）：不再让模型转下去，按已经拿到的结果收尾
+        if state == "stalled":
             result = trace.result(thread_id, self.config, state="stalled")
             answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
+            reason = str(outcome.get("reason") or "")
             if not str(result.get(answer_field) or "").strip():
-                result[answer_field] = f"{stall_reason}，已按现有结果收尾。" if stall_reason else "本轮未能继续推进，已按现有结果收尾。"
-            trace.event({"type": "status", "title": "工具调用已收尾", "message": f"{stall_reason}，已停止继续尝试"})
+                result[answer_field] = f"{reason}，已按现有结果收尾。" if reason else "本轮未能继续推进，已按现有结果收尾。"
+            trace.event({"type": "status", "title": "工具调用已收尾", "message": f"{reason}，已停止继续尝试"})
             trace.event({"type": "complete", "title": "Harness 已收尾", "message": "工具调用连续失败，已在现有结果上收尾", "result": result})
+            return result
+        if state == "error":
+            error = outcome["error"]
+            message = _error_message(error, trace.event_limit)
+            result = trace.result(thread_id, self.config, state="error")
+            result["error"] = message
+            trace.event({"type": "error", "title": "Harness 执行失败", "message": message, "errorType": type(error).__name__, "result": result})
             return result
         result = trace.result(thread_id, self.config)
         trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成", "result": result})
@@ -887,6 +1011,21 @@ class SeaVideoHarness:
                 subgraphs=True,
             ):
                 namespace, update = frame if isinstance(frame, tuple) and len(frame) == 2 else ((), frame)
+                interrupts = _interrupt_payload(update)
+                if interrupts:
+                    # 停在人工确认：把确认载荷推给前端，本轮以 awaiting_confirmation 收尾（不是失败）
+                    result = trace.result(thread_id, self.config, state="awaiting_confirmation")
+                    result["confirmation"] = _confirmation_from(interrupts)
+                    trace.event({
+                        "type": "confirm",
+                        "title": "等待人工确认",
+                        "message": "有一项写入操作需要你确认",
+                        "confirmation": result["confirmation"],
+                        "result": result,
+                    })
+                    while pending:
+                        yield pending.pop(0)
+                    return
                 trace.consume(update, namespace)
                 while pending:  # 帧内产生的多条事件在同一个 yield 点按序交付
                     yield pending.pop(0)

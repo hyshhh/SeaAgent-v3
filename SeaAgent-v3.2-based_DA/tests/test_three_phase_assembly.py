@@ -81,7 +81,10 @@ def test_the_executor_is_the_rich_one():
     executor = _by_name(subagents)["executor"]
     configured = [str(item["name"]) for item in load_config()["tools"]]
     assert [str(tool.name) for tool in executor["tools"]] == [name for name in configured if name != "show_evidence"]
-    assert len(configured) == 11
+    assert len(configured) == 12
+    # 写入工具也在执行阶段手里，但带人工确认中断
+    assert "add_registry_vessel" in [str(tool.name) for tool in executor["tools"]]
+    assert executor["interrupt_on"]["add_registry_vessel"]["allowed_decisions"] == ["approve", "reject"]
     assert executor["skills"] == ["/skills/track", "/skills/registry", "/skills/visual", "/skills/execution"]
     assert executor["response_format"] is ExecutionFindings
 

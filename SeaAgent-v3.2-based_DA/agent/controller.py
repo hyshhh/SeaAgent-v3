@@ -69,6 +69,50 @@ class AgentController:
         result["turnIndex"] = self.repository.append_turn(session_id, question, result)
         return result
 
+    def resume(self, decision: str, session_id: str, feedback: str = "", cancel: Any = None) -> dict[str, Any]:
+        """人工拍板后继续上一轮。
+
+        中断点存在 SQLite 检查点里，所以恢复必须带着**同一个 session_id**（即同一个 thread_id）。
+        批准则执行那个被拦下的工具；拒绝则把反馈交回模型让它换个做法，本轮继续往下跑。
+
+        结果同样按一轮问答留档：用户看到的是「提问 → 确认 → 回答」，中间那次人工介入
+        不该让这轮记录凭空消失。
+        """
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            raise ValueError("恢复确认必须带上 session_id（中断点是按它会话存的）")
+        session = self.repository.get_session(session_id)
+        turn_index = len((session or {}).get("turns") or []) + 1
+        question = str((session or {}).get("title") or "（人工确认后继续）")
+        runtime: SeaVideoHarness | None = None
+        try:
+            runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
+            state = runtime.resume(decision, thread_id=session_id, feedback=feedback, cancel=cancel)
+            result = self._project(session_id, state, turn_index)
+        except Exception as error:
+            logger.exception("Agent controller resume failed: session_id=%s", session_id)
+            message = str(error).strip() or f"{type(error).__name__}: {error!r}"
+            result = {
+                "success": False,
+                "sessionId": session_id,
+                "answerText": "确认后仍无法完成这一步。",
+                "conclusion": "",
+                "state": "error",
+                "evidence": {},
+                "rounds": [],
+                "toolChain": [],
+                "toolRecords": [],
+                "executionMode": str(self.config.get("harness", {}).get("execution_mode", "three-phase-subagents")),
+                "error": message,
+                "errorType": type(error).__name__,
+            }
+        finally:
+            if runtime is not None:
+                runtime.close()
+        result["sessionId"] = session_id
+        result["turnIndex"] = self.repository.append_turn(session_id, question, result)
+        return result
+
     def _project(self, session_id: str, state: dict[str, Any], turn_index: int = 1) -> dict[str, Any]:
         """把一轮的内部状态投成对外结果，并把工具调用落进 qa_rounds / qa_evidence。
 
@@ -108,7 +152,8 @@ class AgentController:
         evidence = state.get(evidence_key) or state.get("evidence") or {}
         harness_settings = self.config.get("harness", {})
         result = {
-            "success": run_state not in {"error", "cancelled"},
+            # awaiting_confirmation 不是「成功」也不是「失败」：前端据此弹确认卡而不是渲染回答
+            "success": run_state not in {"error", "cancelled", "awaiting_confirmation"},
             "sessionId": session_id,
             "answerText": answer,
             "conclusion": answer,

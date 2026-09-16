@@ -230,6 +230,84 @@ function renderAgentPlan(event) {
   panel.dataset.state = done === total ? 'done' : 'running';
 }
 
+/* ---------------------------------------------------------------------------
+ * 写入确认卡：executor 调 add_registry_vessel 时被 HumanInTheLoop 中断拦下，
+ * 运行时以 confirm 事件把载荷推过来。这里只做展示与回传——
+ * 批准/拒绝之后由后端在同一个 thread 上恢复，本轮继续往下跑。
+ * ------------------------------------------------------------------------- */
+let pendingConfirmation = null;
+
+const CONFIRM_FIELD_LABEL = {
+  hull_number: '舷号',
+  description: '描述',
+  image_paths: '参考图',
+  aliases: '别名',
+  user_intent: '用户要求',
+};
+
+function renderAgentConfirmation(event) {
+  const panel = document.getElementById('agentConfirmPanel');
+  const body = document.getElementById('agentConfirmBody');
+  const hint = document.getElementById('agentConfirmHint');
+  if (!panel || !body) return;
+  const confirmation = event.confirmation || {};
+  const actions = Array.isArray(confirmation.actions) ? confirmation.actions : [];
+  const action = actions[0] || {};
+  if (!action.tool) return;
+  pendingConfirmation = { interruptId: confirmation.interruptId || '', sessionId: currentSessionId || '' };
+  const rows = Object.entries(action.arguments || {}).map(([key, value]) => {
+    const label = CONFIRM_FIELD_LABEL[key] || key;
+    const text = Array.isArray(value) ? value.join('、') : String(value ?? '');
+    return `<div class="qa-confirm-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(text)}</dd></div>`;
+  }).join('');
+  body.innerHTML = rows;
+  if (hint) hint.textContent = action.description || `工具：${action.tool}`;
+  const feedback = document.getElementById('agentConfirmFeedback');
+  if (feedback) { feedback.value = ''; feedback.disabled = false; }
+  panel.hidden = false;
+  panel.dataset.state = 'pending';
+}
+
+function closeAgentConfirmation(state) {
+  const panel = document.getElementById('agentConfirmPanel');
+  if (!panel) return;
+  panel.dataset.state = state;
+  panel.hidden = true;
+  pendingConfirmation = null;
+}
+
+async function submitConfirmation(decision) {
+  if (!pendingConfirmation || !pendingConfirmation.sessionId) return;
+  const feedback = document.getElementById('agentConfirmFeedback');
+  const panel = document.getElementById('agentConfirmPanel');
+  if (panel) panel.dataset.state = 'sending';
+  try {
+    const response = await fetch('/api/agent/query/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: pendingConfirmation.sessionId,
+        decision,
+        feedback: decision === 'reject' ? String((feedback && feedback.value) || '').trim() : '',
+      }),
+    });
+    if (!response.ok) throw new Error(`恢复失败：${response.status}`);
+    const result = await response.json();
+    closeAgentConfirmation(decision === 'approve' ? 'approved' : 'rejected');
+    renderRunOutcome(result);
+  } catch (error) {
+    if (panel) panel.dataset.state = 'failed';
+    appendStandardEvent({ title: '恢复失败' }, 'error', '!', 'CONFIRM', String(error && error.message ? error.message : error));
+  }
+}
+
+function bindConfirmationButtons() {
+  const approve = document.getElementById('btnConfirmApprove');
+  const reject = document.getElementById('btnConfirmReject');
+  if (approve) approve.addEventListener('click', () => submitConfirmation('approve'));
+  if (reject) reject.addEventListener('click', () => submitConfirmation('reject'));
+}
+
 function stepsFromEvents(events) {
   const steps = [];
   const byCallId = new Map();
@@ -238,6 +316,7 @@ function stepsFromEvents(events) {
     // 从智能体的步骤带 agent 标记：轨迹里要能看出「这一步是谁做的」
     const agent = event.agent || '';
     if (event.type === 'plan') renderAgentPlan(event);
+    else if (event.type === 'confirm') renderAgentConfirmation(event);
     if (event.type === 'status') push('system', event.title || event.message || '状态更新');
     else if (event.type === 'skill') push('skill', `加载技能 ${event.skill || event.title || ''}`, { agent });
     else if (event.type === 'model') {
@@ -890,6 +969,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (harnessEvidence) renderEvidence(harnessEvidence);
     });
   }
+  bindConfirmationButtons();
   loadAgentMemorySummary();
   loadSessions();
 });

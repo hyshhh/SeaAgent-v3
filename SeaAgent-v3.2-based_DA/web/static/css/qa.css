@@ -740,3 +740,109 @@
   font-style: normal;
   color: var(--qa-muted);
 }
+
+/* ---------------------------------------------------------------- 写入确认卡 */
+.qa-confirm {
+  border: 1px solid var(--qa-line-strong);
+  border-left: 3px solid var(--qa-blue);
+  border-radius: 10px;
+  background: #fff;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.qa-confirm[data-state='pending'] {
+  border-left-color: var(--qa-blue);
+}
+
+.qa-confirm[data-state='failed'] {
+  border-left-color: var(--qa-red);
+}
+
+.qa-confirm-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.qa-confirm-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--qa-ink);
+}
+
+.qa-confirm-hint {
+  font-size: 12px;
+  color: var(--qa-muted);
+  text-align: right;
+}
+
+.qa-confirm-body {
+  margin: 0 0 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.qa-confirm-row {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.qa-confirm-row dt {
+  flex: 0 0 68px;
+  color: var(--qa-muted);
+}
+
+.qa-confirm-row dd {
+  margin: 0;
+  color: var(--qa-ink);
+  word-break: break-all;
+}
+
+.qa-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.qa-confirm-actions button {
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--qa-line-strong);
+  background: #fff;
+  color: var(--qa-ink);
+}
+
+.qa-confirm-approve {
+  border-color: var(--qa-green);
+  background: var(--qa-green-soft);
+  color: var(--qa-green);
+  font-weight: 600;
+}
+
+.qa-confirm-reject {
+  border-color: var(--qa-line-strong);
+}
+
+.qa-confirm-feedback {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--qa-muted);
+}
+
+.qa-confirm-feedback textarea {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--qa-line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}

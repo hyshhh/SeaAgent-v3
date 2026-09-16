@@ -86,4 +86,22 @@ tools:
       建议一次不超过 20 条轨迹；它需要为关键帧算嵌入向量，规模一大就是分钟级甚至更久。
     arguments: {tracks: {type: json, required: true}, keyframes_by_track: {type: json, required: true, target: keyframesByTrack}}
 
+  # 唯一会改进知识库的工具：写前必须由人确认（见 config/subagents.yaml 的 interrupt_on）。
+  # 描述里写死"只在用户明确要求入库时调用"，这是模型层面的第一道闸；工具内部的校验是第二道。
+  - name: add_registry_vessel
+    label: 先验库写入
+    method: addRegistryVessel
+    description: >-
+      **只在用户明确要求把某条船写入先验库时才调用**（例如"把 003 加进库里""这条船入库"）。
+      模型自己推断"这看起来像 003"不构成调用理由——那种情况先问用户。
+      调用前会被人工确认中断拦下：用户批准才真正写入，拒绝则把反馈交回给你，请换个做法。
+      只新增不覆盖：舷号已存在会报错，需要改已有记录请让用户在界面上更新。
+      image_paths 必须是图片文件的路径（关键帧可以，视频片段不行）。
+    arguments:
+      hull_number: {type: string, required: true, target: hullNumber}
+      description: {type: string, required: false}
+      image_paths: {type: string_list, required: false, target: imagePaths}
+      aliases: {type: string_list, required: false}
+      user_intent: {type: string, required: true, target: userIntent}
+
 

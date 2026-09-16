@@ -15,6 +15,19 @@ class ShipUpdate(BaseModel):
 class ShipBulkCreate(BaseModel):
     ships: dict[str, str]
 
+class AgentResume(BaseModel):
+    """人工确认的结果：批准或拒绝某次被拦下的写入。
+
+    ``feedback`` 在拒绝时交给模型，它要据此换个做法；批准时忽略。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId", max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    decision: Literal["approve", "reject"] = Field(...)
+    feedback: str = Field(default="", max_length=500)
+
+
 class AgentQuery(BaseModel):
     """一轮问答请求；带上 sessionId 即在该会话里追问，不带则开新会话。"""
 

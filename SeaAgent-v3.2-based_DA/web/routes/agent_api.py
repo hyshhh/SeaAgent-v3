@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 
 from agent import AgentController
-from web.models import AgentQuery
+from web.models import AgentQuery, AgentResume
 
 router = APIRouter(tags=["agent-memory"])
 logger = logging.getLogger(__name__)
