@@ -12,6 +12,16 @@
 #   · skills 不继承：这里填技能「组名」，装配时展开成 /skills/<组>；组目录的子目录才是技能。
 #   · 从智能体不继承主智能体的中间件，限流与重复守卫必须各自挂（见 harness/runtime.py）。
 #
+# ⚠️ 关于「工具数」的实测结论（拦 create_agent 看编译结果得到，别再凭列表长度猜）：
+#   子智能体到手的工具 = 这里显式声明的业务工具 + 框架 FilesystemMiddleware 自带的那一套
+#   （read_file / write_file / edit_file / delete / ls / glob / grep / execute）。
+#   所以 `tools: []` 的含义是「没有业务工具」，**不是「一个工具都没有」**：
+#     · planner 因此仍有 read_file —— 这正是 skills 渐进式披露能工作的前提（它靠读 SKILL.md 拿规则）；
+#     · 自带的写入与 shell 由下面的权限规则挡住：write 全拒，读只放开自己那几组技能目录，
+#       于是 ls/glob/grep 的搜索结果同样被收敛在技能组内（结果按读权限逐条过滤）；
+#     · harness.disabled_deepagent_tools 只作用于主智能体，**对从智能体不生效**——
+#       harness profile 是按主智能体的模型键注册的。从智能体的工具面由权限规则兜底。
+#
 # plan 归谁：write_todos 由 TodoListMiddleware 注入主智能体，所以**计划清单在主智能体手里**，
 # 前端从它的 state 读回并渲染；执行与反思收到的是计划里那一步的文本，不维护待办状态。
 
@@ -30,6 +40,7 @@ master_skills:
 subagents:
   - name: planner
     description: 把用户问题解析成一次可执行的查询意图：目标是谁、要什么操作、时间范围是多少、验收要看哪几条。不调用任何领域工具。
+    # 不带业务工具；框架自带的 read_file 留着，供它按需读 planning 技能组拿规则。
     tools: []
     skills: [planning]
     response_format: IntentPlan
