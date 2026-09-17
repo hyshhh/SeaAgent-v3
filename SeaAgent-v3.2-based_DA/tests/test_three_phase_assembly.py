@@ -49,7 +49,8 @@ class _Model(FakeListChatModel):
 
 def _specs():
     config = load_config()
-    return _load_subagents(config, build_tools(config, _Service()), FilesystemPermission)
+    subagents, master_tools, master_skills, interrupts = _load_subagents(config, build_tools(config, _Service()), FilesystemPermission)
+    return subagents, master_tools, master_skills
 
 
 def _by_name(specs):
@@ -65,27 +66,21 @@ def _runtime(tmp_path):
 # ---------------------------------------------------------------- 三个阶段的形状
 
 
-def test_exactly_three_subagents_one_per_phase():
-    """就是 plan / 执行 / reflect 这三个，不多不少。"""
+def test_two_subagents_beside_the_executing_main_agent():
+    """主智能体本人就是执行者，所以只有规划与反思两个从智能体。"""
     subagents, _, _ = _specs()
-    assert [spec["name"] for spec in subagents] == ["planner", "executor", "reflector"]
+    assert [spec["name"] for spec in subagents] == ["planner", "reflector"]
 
 
-def test_the_executor_is_the_rich_one():
-    """执行阶段是主力：除证据工具外的全部领域工具 + 轨迹/先验库/视觉/执行 四个技能组。
-
-    show_evidence 留在主智能体与反思智能体手里（证据要回到主事件流），执行阶段不重复持有。
-    """
-    subagents, _, _ = _specs()
-    executor = _by_name(subagents)["executor"]
+def test_the_main_agent_is_the_executor():
+    """主智能体 = 执行者：全部领域工具 + 执行类技能都在它手里，不再多一层委派。"""
+    _, master_tools, master_skills = _specs()
     configured = [str(item["name"]) for item in load_config()["tools"]]
-    assert [str(tool.name) for tool in executor["tools"]] == [name for name in configured if name != "show_evidence"]
+    # 顺序无关：配置里 show_evidence 排在业务工具之前
+    assert sorted(master_tools) == sorted(configured), "主智能体应当拿全部领域工具"
     assert len(configured) == 12
-    # 写入工具也在执行阶段手里，但带人工确认中断
-    assert "add_registry_vessel" in [str(tool.name) for tool in executor["tools"]]
-    assert executor["interrupt_on"]["add_registry_vessel"]["allowed_decisions"] == ["approve", "reject"]
-    assert executor["skills"] == ["/skills/track", "/skills/registry", "/skills/visual", "/skills/execution"]
-    assert "```json" in executor["system_prompt"], "执行阶段要约定返回的 JSON 块"
+    assert "add_registry_vessel" in master_tools, "写库工具也在执行者手里"
+    assert master_skills == ["execution", "track", "registry", "visual", "answer"]
 
 
 def test_planner_plans_without_touching_data():
@@ -135,37 +130,38 @@ def test_each_phase_carries_its_own_guards_and_read_scope():
         assert RepeatToolCallMiddleware in kinds
         assert ToolCallLimitMiddleware in kinds
         assert next(item for item in spec["middleware"] if isinstance(item, ToolCallLimitMiddleware)).run_limit == limit
-    executor = _by_name(subagents)["executor"]
-    allow = [rule for rule in executor["permissions"] if str(rule.mode) == "allow"]
-    assert set(allow[0].paths) == set(_read_scope_paths(["/skills/track", "/skills/registry", "/skills/visual", "/skills/execution"]))
+    planner = _by_name(subagents)["planner"]
+    allow = [rule for rule in planner["permissions"] if str(rule.mode) == "allow"]
+    assert set(allow[0].paths) == set(_read_scope_paths(["/skills/planning"]))
 
 
-def test_master_keeps_only_the_evidence_tool_and_no_skills():
-    subagents, master_tools, master_skills = _specs()
-    handed_down = {str(tool.name) for spec in subagents for tool in spec["tools"]}
-    assert master_tools == ["show_evidence"]
-    assert master_skills == []
-    # 证据工具同时给主智能体（落到主事件流）与反思智能体（验收时汇总），执行阶段不持有
-    assert "show_evidence" not in {str(tool.name) for tool in _by_name(subagents)["executor"]["tools"]}
-    assert "show_evidence" in handed_down
+def test_the_reflector_keeps_its_narrow_tool_set():
+    """反思阶段只拿证据与查库工具；show_evidence 主智能体也持有（证据要落到主事件流）。"""
+    subagents, master_tools, _ = _specs()
+    reflector = _by_name(subagents)["reflector"]
+    assert [str(tool.name) for tool in reflector["tools"]] == ["show_evidence", "get_registry", "list_registry"]
+    assert "show_evidence" in master_tools
 
 
-def test_master_assembly_narrows_tools_and_skills(tmp_path):
+def test_master_assembly_carries_the_domain_tools(tmp_path):
+    """装配结果：主智能体拿全领域工具与执行类技能，中断配置也在它身上。"""
     runtime = _runtime(tmp_path)
     try:
-        assert [str(tool.name) for tool in runtime.agent_tools] == ["show_evidence"]
-        assert runtime.skill_sources == []
-        assert [spec["name"] for spec in runtime.subagents] == ["planner", "executor", "reflector"]
+        configured = [str(item["name"]) for item in load_config()["tools"]]
+        assert [str(tool.name) for tool in runtime.agent_tools] == configured
+        assert runtime.skill_sources == ["/skills/execution", "/skills/track", "/skills/registry", "/skills/visual", "/skills/answer"]
+        assert runtime.master_interrupts == {"add_registry_vessel": {"allowed_decisions": ["approve", "reject"]}}
+        assert [spec["name"] for spec in runtime.subagents] == ["planner", "reflector"]
     finally:
         runtime.close()
 
 
 def test_a_subagent_can_only_read_its_own_skill_groups():
-    """读取面按组收口：执行读不到反思组的技能，反思读不到执行组的。"""
-    executor_rules = _by_name(_specs()[0])["executor"]["permissions"]
-    assert _check_fs_permission(executor_rules, "read", "/skills/track/query/SKILL.md") == "allow"
-    assert _check_fs_permission(executor_rules, "read", "/skills/reflection/exit_rules/SKILL.md") == "deny"
-    assert _check_fs_permission(executor_rules, "write", "/skills/track/query/SKILL.md") == "deny"
+    """读取面按组收口：planner 只读得到 planning，反思组对它是拒绝的，写入一律拒绝。"""
+    planner_rules = _by_name(_specs()[0])["planner"]["permissions"]
+    assert _check_fs_permission(planner_rules, "read", "/skills/planning/intent/SKILL.md") == "allow"
+    assert _check_fs_permission(planner_rules, "read", "/skills/reflection/exit_rules/SKILL.md") == "deny"
+    assert _check_fs_permission(planner_rules, "write", "/skills/planning/intent/SKILL.md") == "deny"
 
 
 def test_unknown_tool_name_and_structured_format_fail_loudly(tmp_path):

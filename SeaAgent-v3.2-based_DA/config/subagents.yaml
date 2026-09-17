@@ -1,10 +1,10 @@
-# 三阶段协同：规划 / 执行 / 反思各是一个从智能体，主智能体只规划、委派与落证据。
+# 三阶段协同：主智能体 = 执行者，外加规划与反思两个从智能体。
 #
 # 与已退场的 v3.2 旧版主从协同的区别：**按阶段切，不按数据切**。
 #   · 旧版把领域工具拆给 track_scout / registry_checker / visual_prover 三个数据分身，
 #     主智能体手里只剩 show_evidence，执行阶段本身反而不成体系。
-#   · 现在执行阶段是一个完整的 Execution Agent：11 个领域工具全给它，技能组也全给它，
-#     轨迹/先验库/视觉规则都在它手里闭环。
+#   · 现在执行阶段就是主智能体本人：领域工具与执行类技能都在它手里，直接调用，
+#     不再多一层委派（直接调还更透明——工具事件本来就在主事件流里）。
 #
 # 字段对应 Deep Agents 官方 SubAgent 规格：name / description / system_prompt / tools / skills。
 #   · **不挂 response_format**：框架的结构化返回是把 schema 绑成一个「工具」，而这个 4B 模型在
@@ -34,12 +34,32 @@ master_tools:
   # show_evidence 必须留在主智能体：从智能体的内部调用不会回到主事件流，
   # 下放它会让前端证据面板永远是空的（收尾守卫也会一直提醒）。
   - show_evidence
+  - get_track
+  - get_frames
+  - get_clip
+  - get_registry
+  - list_registry
+  - match_hull
+  - match_text
+  - match_image
+  - verify_target
+  - dedup_tracks
+  - add_registry_vessel
 
 master_skills:
-  # ⚠️ 不挂技能，这是三次事故换来的结论：4B 模型看到技能目录会把"把技能读完"当成任务本身，
-  # 而主智能体只负责规划、委派与落证据——它的规则写在 harness/planner.md 里（每轮都在，不会被摘要掉）。
-  # 技能真正起作用的地方在执行智能体：工具与技能都在它那里闭环，越丰富越好。
-  []
+  # 主智能体就是 Execution Agent：它要直接调领域工具，所以必须挂执行类技能。
+  # （早先这里为空是因为它当时只做规划与汇总；现在它自己干活，规则就得在自己手里。）
+  - execution
+  - track
+  - registry
+  - visual
+  - answer
+
+# 写库前人工确认：主智能体直接持有 add_registry_vessel，所以中断配在它身上
+# （create_deep_agent 的 interrupt_on 参数，框架会自动加 HumanInTheLoopMiddleware）。
+interrupt_on:
+  add_registry_vessel:
+    allowed_decisions: [approve, reject]
 
 subagents:
   - name: planner
@@ -87,42 +107,6 @@ subagents:
        "restated_question":"", "uncertain":[], "summary":""}
       ```
       **只给这一个 JSON 块**：不要重复输出多份，也不要在 JSON 外面复述它的内容。
-
-  - name: executor
-    description: 按计划那一步去查数据：筛轨迹、取关键帧、去重、查先验库、做图像匹配与视觉核验、切视频片段。返回带证据 ID 的结构化结果。
-    tools: [get_track, get_frames, get_clip, get_registry, list_registry, match_hull, match_text, match_image, verify_target, dedup_tracks, add_registry_vessel]
-    # 写入前人工确认：框架的 HumanInTheLoopMiddleware 会在这里中断整轮，
-    # 前端弹确认卡；用户批准才执行，拒绝则把理由作为工具结果交回给执行智能体换个做法。
-    interrupt_on:
-      add_registry_vessel:
-        allowed_decisions: [approve, reject]
-    skills: [track, registry, visual, execution]
-    system_prompt: |
-      你是这条问答链路的主力执行者。计划方给你一步要做什么，你去把它做出来，并返回**带证据 ID**的结构化结果。
-      你不写最终回答、不替用户下结论，也不判断"是否已经够了"——那是反思方的事，你只管把这一步做实。
-
-      做法按你手上的技能组来（轨道/先验库/视觉/执行），三条最常踩的坑先说在前面：
-
-      1. **按舷号筛轨迹返回空，不代表这条船没出现。** hull_number 只匹配"已识别出舷号且与之一致"的轨迹，
-         识别失败的轨迹不会被它匹配到。命中空时不要用同一份参数重调：改按时间范围列全部轨迹，
-         或者先把舷号拿去先验库确认在库。
-      2. **关键帧与去重都按"已筛过的少量轨迹"调用**（一次别超过 20 条）。全量轨迹直接丢进去会让这一步变成分钟级重活。
-      3. **视觉结论要分清参照物**：先验库参考图是"已知身份"，视频关键帧是"待证事实"，两者不要混为一谈；
-         图像分数落在灰色区间就如实报 uncertain，不要挑一个好看的分数当结论。
-      4. **不要主动写先验库。** 只有用户在问题里明确要求入库（"把 003 加进库里""这条船入库"）时才调用
-         add_registry_vessel，并把用户的原话填进 user_intent。你自己推断"这看起来像 003"不构成理由——
-         那种情况在返回结果里说明，由主智能体去问用户。写入前会有人工确认打断：用户批准才真正落库，
-         拒绝时你会收到一条带理由的工具结果，请按那个理由换个做法（例如改成先查库、或改舷号重试），
-         不要重复同一个调用。
-
-      返回格式：先写一句中文概述，然后给一个 JSON 代码块：
-      ```json
-      {"findings":[{"track_id":"","keyframe_ids":[],"registry_ids":[],"reference_ids":[],
-                    "segment_ids":[],"score":0.0,"band":"confirmed|uncertain|mismatch","reason":""}],
-       "unresolved":[], "tools_used":[], "summary":""}
-      ```
-      **证据 ID 必须来自本次工具返回**，不许编造、不许复用上一轮的。没做成的部分进 unresolved 并写清缺什么。
-      **只给这一个 JSON 块**，不要重复输出多份。
 
   - name: reflector
     description: 验收执行结果：按意图清单逐条判定证据是否成立、是否还要再走一步、能否退出，并汇总本轮证据 ID。

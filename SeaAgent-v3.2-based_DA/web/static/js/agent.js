@@ -19,9 +19,6 @@ let harnessEvidence = null;
 let harnessEventCount = 0;
 let harnessToolCount = 0;
 const harnessToolCards = new Map();
-// 流式输出按段合并：同一段输出（agent + streamKey）只占一行，后续块追加进正文。
-// 放在顶部是因为重置函数在下面，避免「用在前、声明在后」的时序问题。
-const streamingRows = new Map();
 const harnessSkillNames = new Set();
 let harnessSkillActivityCard = null;
 let qaView = 'chat';           // 主列当前显示的子页：chat（对话）/ trace（轨迹）
@@ -138,7 +135,7 @@ function resetActivityDom() {
   if (summary) summary.textContent = 'Waiting for completion';
   harnessEventCount = 0;
   harnessToolCount = 0;
-  streamingRows.clear();  // 新一轮开始，别把上一段的流式正文接下去
+  agentLines.clear();  // 新一轮开始：子智能体行重新来
   harnessToolCards.clear();
   harnessSkillNames.clear();
   harnessSkillActivityCard = null;
@@ -717,24 +714,51 @@ function isEvidencePayload(result) {
   return !!result && typeof result === 'object' && ['shownKeyframeIds', 'shownShipSegmentIds', 'shownRegistryReferenceIds'].some((key) => Array.isArray(result[key]));
 }
 
-function appendStreamingEvent(event, kind, icon, label) {
+/* 子智能体行：一个 agent 只占一行，内容在该行内更新，结束后压成一行摘要。
+   之前是每个流式块新建一行，一段推理能刷出十几行，轨迹没法看。 */
+const agentLines = new Map();
+
+function agentLine(agent) {
   const stream = document.getElementById('agentActivityStream');
-  if (!stream) return;
-  const key = `${event.agent || ''}:${event.streamKey || ''}`;
-  const existing = streamingRows.get(key);
-  if (existing && existing.isConnected) {
-    const body = existing.querySelector('.qa-event-message');
-    if (body) body.textContent += event.message || '';
-    return existing;
-  }
+  if (!stream) return null;
+  const key = String(agent || '子智能体');
+  const existing = agentLines.get(key);
+  if (existing && existing.isConnected) return existing;
   stream.querySelector('.qa-empty-state')?.remove();
   const row = document.createElement('article');
-  row.className = `qa-event-row qa-${kind}`;
-  row.dataset.streamKey = key;
-  row.innerHTML = `<span class="qa-event-icon" aria-hidden="true">${icon}</span><div class="qa-event-main"><div class="qa-event-title"><span>${escapeHtml(event.title || label)}</span><em class="qa-event-label">${escapeHtml(label)}${event.agent ? ' · ' + escapeHtml(event.agent) : ''}</em></div><div class="qa-event-message">${escapeHtml(event.message || '')}</div></div><time class="qa-event-meta">${formatEventTime()}</time>`;
+  row.className = 'qa-agent-line';
+  row.dataset.agent = key;
+  row.dataset.state = 'running';
+  row.innerHTML = `<span class="qa-agent-line-icon" aria-hidden="true">◈</span><span class="qa-agent-line-name">${escapeHtml(key)}</span><span class="qa-agent-line-label">思考 ·</span><span class="qa-agent-line-text"></span>`;
   stream.appendChild(row);
-  streamingRows.set(key, row);
+  agentLines.set(key, row);
   return row;
+}
+
+function agentLineSet(agent, text, options) {
+  const opts = options || {};
+  const row = agentLine(agent);
+  if (!row) return;
+  const body = row.querySelector('.qa-agent-line-text');
+  if (body) {
+    const next = opts.replace ? String(text || '') : `${body.textContent || ''}${text || ''}`;
+    // 行内滚动：只保留尾部，长推理不会把这一行撑爆
+    body.textContent = next.length > 400 ? next.slice(-400) : next;
+  }
+  if (opts.label) {
+    const tag = row.querySelector('.qa-agent-line-label');
+    if (tag) tag.textContent = `${opts.label} ·`;
+  }
+}
+
+function agentLineNote(agent, note) {
+  agentLineSet(agent, note ? `${note}\n` : '', { label: '工具' });
+}
+
+function finishAgentLines() {
+  for (const row of agentLines.values()) {
+    if (row.isConnected) row.dataset.state = 'done';
+  }
 }
 
 function appendHarnessEvent(event) {
@@ -746,23 +770,40 @@ function appendHarnessEvent(event) {
     updateSkillActivitySummary();
     setHarnessState(`Skills · ${harnessSkillNames.size} loaded`, 'running');
   } else if (event.type === 'tool_start') {
-    createToolEvent(event);
+    if (event.agent) {
+      // 子智能体的工具调用压进它那一行
+      const args = event.arguments ? JSON.stringify(event.arguments).slice(0, 80) : '';
+      agentLineNote(event.agent, `→ ${event.tool || 'tool'} ${args}`);
+    } else {
+      createToolEvent(event);
+    }
     setHarnessState(`Tool · ${event.label || event.tool || 'running'}`, 'running');
   } else if (event.type === 'tool_result') {
-    completeToolEvent(event);
-    if (isEvidencePayload(event.result)) renderEvidence(event.result);
+    if (event.agent) {
+      if (event.status === 'error') agentLineNote(event.agent, `✗ ${event.tool || 'tool'} 失败`);
+    } else {
+      completeToolEvent(event);
+      if (isEvidencePayload(event.result)) renderEvidence(event.result);
+    }
     setHarnessState('Tool complete', 'running');
   } else if (event.type === 'model') {
-    if (event.append && event.streamKey) {
-      // 流式正文：同一段输出合并进一行
-      appendStreamingEvent(event, 'model', '◌', 'MODEL');
+    if (event.agent) {
+      // 子智能体的思考：更新它自己那一行，不新建
+      if (event.append) agentLineSet(event.agent, event.message || '');
+      else if (event.message) agentLineSet(event.agent, event.message, { replace: true, label: '思考' });
     } else {
       appendStandardEvent(event, 'model', '◌', 'MODEL', event.message || 'Public model step updated');
     }
     setHarnessState('Model response', 'running');
   } else if (event.type === 'status') {
-    appendStandardEvent(event, 'status', '◈', 'SYSTEM', event.message || 'Harness ready');
+    if (event.title === '委派结束' && event.agent) {
+      const row = agentLines.get(String(event.agent));
+      if (row) row.dataset.state = 'done';
+    } else {
+      appendStandardEvent(event, 'status', '◈', 'SYSTEM', event.message || 'Harness ready');
+    }
   } else if (event.type === 'complete') {
+    finishAgentLines();
     appendStandardEvent(event, 'complete', '✓', 'DONE', event.message || 'Answer and evidence generated');
     setHarnessState(event.result?.state === 'cancelled' ? 'Stopped' : 'Complete', event.result?.state === 'cancelled' ? '' : 'complete');
   } else if (event.type === 'error') {

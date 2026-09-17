@@ -594,7 +594,7 @@ def _read_scope_paths(sources: list[str]) -> list[str]:
 def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: Any) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """按 ``config/subagents.yaml`` 装配三阶段从智能体：规划 / 执行 / 反思。
 
-    返回（从智能体规格, 主智能体工具白名单, 主智能体技能组）。
+    返回（从智能体规格, 主智能体工具白名单, 主智能体技能组, 主智能体的人工确认配置）。
 
     几条硬约束都来自 Deep Agents 官方语义：
       · ``tools`` 不写就继承主智能体全部工具——所以逐个按名字显式取，名字写错就当场报错；
@@ -667,7 +667,12 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
         subagents.append(built)
     if not subagents:
         raise ValueError(f"开启了三阶段协同但 {spec_path} 里没有 subagents")
-    return subagents, [str(item) for item in (raw.get("master_tools") or [])], [str(item) for item in (raw.get("master_skills") or [])]
+    return (
+        subagents,
+        [str(item) for item in (raw.get("master_tools") or [])],
+        [str(item) for item in (raw.get("master_skills") or [])],
+        raw.get("interrupt_on") if isinstance(raw.get("interrupt_on"), dict) else {},
+    )
 
 
 def _filesystem_permissions(harness: dict[str, Any], permission_type: Any) -> list[Any] | None:
@@ -692,11 +697,11 @@ class SeaVideoHarness:
         harness = config.get("harness", {})
         # 三阶段协同：规划 / 执行 / 反思各挂一个从智能体，主智能体只规划、委派与落证据。
         # 关掉开关即退回单智能体（不传 subagents ⇒ 根本没有 task 工具），三阶段由主智能体自己跑。
-        self.subagents, master_tools, master_skills = ([], [], [])
+        self.subagents, master_tools, master_skills, self.master_interrupts = ([], [], [], {})
         if harness.get("subagents_enabled"):
             from deepagents import FilesystemPermission
 
-            self.subagents, master_tools, master_skills = _load_subagents(config, self.tools, FilesystemPermission)
+            self.subagents, master_tools, master_skills, self.master_interrupts = _load_subagents(config, self.tools, FilesystemPermission)
         self.agent_tools = [tool for tool in self.tools if str(getattr(tool, "name", "")) in master_tools] if self.subagents else self.tools
         # 协同时主智能体改读「规划者」提示词：它只规划、委派与汇总，不亲自查数据。
         prompt_file = str(harness.get("planner_prompt_file", "harness/planner.md")) if self.subagents else str(harness.get("system_prompt_file", "harness/system.md"))
@@ -770,6 +775,8 @@ class SeaVideoHarness:
                 backend=backend,
                 permissions=permissions,
                 subagents=self.subagents or None,
+                # 人工确认：主智能体现在直接持有写入工具，中断要配在它身上
+                interrupt_on=self.master_interrupts or None,
                 middleware=build_middleware(self.config, self.model, skills_attached=skills_attached),
                 checkpointer=saver,
                 name="sea_video_harness",

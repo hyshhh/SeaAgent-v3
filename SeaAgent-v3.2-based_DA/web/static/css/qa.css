@@ -846,3 +846,64 @@
   font-size: 12px;
   resize: vertical;
 }
+
+/* ---------------------------------------------------------------- 子智能体行
+   一个子智能体只占一行：正文在该行内更新，超出隐藏并贴底显示最新内容；
+   委派结束后这一行压成 `思考 · <最新内容>…` 的摘要形态。 */
+.qa-agent-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--qa-line);
+  font-size: 12px;
+  color: var(--qa-ink);
+}
+
+.qa-agent-line:last-child {
+  border-bottom: none;
+}
+
+.qa-agent-line-icon {
+  color: var(--qa-muted);
+  font-size: 11px;
+}
+
+.qa-agent-line-name {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--qa-blue);
+}
+
+.qa-agent-line-label {
+  flex: 0 0 auto;
+  color: var(--qa-muted);
+}
+
+.qa-agent-line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 内容滚动：只留三行高度，最新内容贴底，超出部分裁掉 */
+  max-height: 3.6em;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.2;
+}
+
+.qa-agent-line[data-state='done'] .qa-agent-line-text {
+  /* 完成后压成一行摘要 */
+  display: block;
+  max-height: 1.3em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--qa-muted);
+}
+
+.qa-agent-line[data-state='done'] .qa-agent-line-name {
+  color: var(--qa-muted);
+}
