@@ -907,3 +907,36 @@
 .qa-agent-line[data-state='done'] .qa-agent-line-name {
   color: var(--qa-muted);
 }
+
+/* ---------------------------------------------------------------- 右栏滚动条
+   默认细条在窄栏里很难抓，这里显式加宽：Firefox 用 scrollbar-width，
+   WebKit/Blink 用 ::-webkit-scrollbar。证据列表同宽，避免两条粗细不一。 */
+#tab-agent-qa .qa-inspector,
+#tab-agent-qa .qa-evidence-gallery {
+  scrollbar-width: auto;
+  scrollbar-color: #b7c1cc #eef1f4;
+}
+
+#tab-agent-qa .qa-inspector::-webkit-scrollbar,
+#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar {
+  width: 12px;
+}
+
+#tab-agent-qa .qa-inspector::-webkit-scrollbar-track,
+#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar-track {
+  border-radius: 8px;
+  background: #eef1f4;
+}
+
+#tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb,
+#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar-thumb {
+  min-height: 40px;
+  border: 2px solid #eef1f4;
+  border-radius: 8px;
+  background: #b7c1cc;
+}
+
+#tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb:hover,
+#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar-thumb:hover {
+  background: #93a1ae;
+}
