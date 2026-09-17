@@ -861,7 +861,11 @@ class SeaVideoHarness:
                     "configurable": {"thread_id": thread_id},
                     # 子智能体的内部步骤不进主流（框架用 subagent.invoke 单独跑的），
                     # 靠回调把它们接出来：父方 callbacks 会随 config 传进子智能体。
-                    "callbacks": [SubagentTraceCallback(trace.event, trace.event_limit)],
+                    "callbacks": [SubagentTraceCallback(
+                        trace.event,
+                        trace.event_limit,
+                        float(harness.get("heartbeat_seconds", 15) or 15),
+                    )],
                 },
                 stream_mode=harness.get("stream_mode", "updates"),
                 subgraphs=True,

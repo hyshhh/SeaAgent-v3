@@ -11,6 +11,8 @@ llm:
   base_url: http://localhost:7890/v1
   temperature: 0.0
   timeout_seconds: 90
+  # 流式：开着才能把子智能体的输出实时外发到轨迹页（关掉则只剩「思考中」一条）
+  streaming: true
 embedding:
   model: Qwen/Qwen3-VL-Embedding-2B
   api_key: abc123
