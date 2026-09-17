@@ -26,6 +26,7 @@ from typing import Any, Self
 from config import project_root
 
 from .evidence import build_evidence_payload
+from .subagent_trace import SubagentTraceCallback
 from .middleware import build_middleware
 from .model import build_model
 from .tools import build_tools
@@ -856,7 +857,12 @@ class SeaVideoHarness:
         try:
             for frame in self.agent.stream(
                 payload,
-                config={"configurable": {"thread_id": thread_id}},
+                config={
+                    "configurable": {"thread_id": thread_id},
+                    # 子智能体的内部步骤不进主流（框架用 subagent.invoke 单独跑的），
+                    # 靠回调把它们接出来：父方 callbacks 会随 config 传进子智能体。
+                    "callbacks": [SubagentTraceCallback(trace.event, trace.event_limit)],
+                },
                 stream_mode=harness.get("stream_mode", "updates"),
                 subgraphs=True,
             ):
