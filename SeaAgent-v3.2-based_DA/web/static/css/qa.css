@@ -1469,3 +1469,115 @@
 #tab-agent-qa .qa-plan-item { transition: color .18s ease, opacity .18s ease; }
 #tab-agent-qa .qa-plan-text { transition: color .18s ease; }
 #tab-agent-qa .qa-plan-mark { transition: color .18s ease; }
+
+/* ---------------------------------------------------------------- 顶栏与 tab（Codex 头部）
+   原来 58px 高、青蓝徽标、衬线标题，还带一条竖分隔线的 tab。这里压到 44px、
+   改成黑白方块标识 + 无衬线字标，tab 之间的竖线去掉，激活态用黑色下划线。 */
+.app-header {
+  min-height: 44px;
+  height: 44px;
+  padding: 0 max(20px, calc((100vw - 1640px) / 2));
+  gap: 10px;
+  background: #fff;
+  border-bottom: 0;
+  box-shadow: none;
+}
+
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  background: #0a0a0a;
+  box-shadow: none;
+}
+
+.brand-mark::after { display: none; content: none; }
+
+.brand-mark span {
+  transform: none;
+  font: 700 11px/1 "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  letter-spacing: .04em;
+}
+
+.app-header h1 {
+  margin: 0;
+  overflow: hidden;
+  color: #0a0a0a;
+  font-family: "Segoe UI Variable Display", "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 右侧状态徽章：去边框与外框感，只留一枚圆点加一行小字 */
+.system-badge {
+  margin-left: auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.system-badge > span {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #0a0a0a;
+  box-shadow: none;
+}
+
+.system-badge strong {
+  color: #6f6f6f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* tab 栏：贴着顶栏，tab 直接铺开，不要竖分隔线 */
+.tab-nav {
+  padding: 0 max(20px, calc((100vw - 1640px) / 2));
+  gap: 2px;
+  background: #fff;
+  border-bottom: 1px solid #e6e6e6;
+}
+
+.tab-btn,
+.tab-btn:first-child {
+  min-width: 0;
+  padding: 9px 12px;
+  color: #6f6f6f;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tab-btn:hover { color: #0a0a0a; background: transparent; }
+
+.tab-btn.active {
+  color: #0a0a0a;
+  background: transparent;
+  font-weight: 700;
+}
+
+.tab-btn.active::after {
+  right: 12px;
+  left: 12px;
+  height: 2px;
+  background: #0a0a0a;
+}
