@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -24,7 +25,57 @@ class ToolService:
         self.vectors = vectors or VectorCatalog(self.config)
         self.settings = self.config["pipeline"]["retrieval"]
 
+    # 时间窗口的合理性下限：比这更窄的窗口在监控视频里不可能有意义。
+    # 取一小时而不是一天，是为了不误伤"只看某几分钟"这种真实需求。
+    MIN_TRACK_WINDOW_SECONDS = 60.0
+    # epoch 秒的合理下限（2017 年）：早于此说明模型在编数字，而不是在描述监控录像
+    MIN_PLAUSIBLE_EPOCH = 1483228800.0
+
+    @classmethod
+    def _validate_time_range(cls, time_range: Any) -> tuple[tuple[float, float] | None, str]:
+        """校验时间窗口。返回 (归一化后的范围, 错误原因)；范围合法时错误为空串。
+
+        拒绝三类：反了的、窄到没有意义的、以及明显是在编数字的（起点早于 2017）。
+        这不是"帮模型猜意图"，而是不让一个无意义的窗口伪装成一次成功查询。
+        """
+        if time_range is None:
+            return None, ""
+        try:
+            start, end = (float(time_range[0]), float(time_range[1]))
+        except (TypeError, ValueError, IndexError):
+            return None, "time_range 必须是两个数字 [start, end]（epoch 秒）"
+        if not (math.isfinite(start) and math.isfinite(end)):
+            return None, "time_range 必须是有限的 epoch 秒，不能是 nan 或 inf"
+        if end < start:
+            return None, f"time_range 的起点晚于终点：{[start, end]}"
+        if end - start < cls.MIN_TRACK_WINDOW_SECONDS:
+            return None, (
+                f"time_range 太窄（{end - start:g} 秒）：监控轨迹按分钟到小时分布，"
+                f"窗口至少 {cls.MIN_TRACK_WINDOW_SECONDS:g} 秒才有意义。"
+                "如果问题里没有明确的时间段，先向用户确认，不要自己缩小窗口反复试探。"
+            )
+        if start < cls.MIN_PLAUSIBLE_EPOCH:
+            return None, (
+                f"time_range 的起点 {start:g} 早于监控数据的时间范围（起点应在 2017 年之后）。"
+                "这通常是把占位数字当成了真实时间：请用户给出具体时段，或留空表示全部监控时段。"
+            )
+        return (start, end), ""
+
     def getTrack(self, timeRange: tuple[float, float] | None = None, hullNumber: str | None = None, finalMatchType: str | None = None, offset: int = 0, limit: int = 0) -> dict[str, Any]:
+        scope, problem = self._validate_time_range(timeRange)
+        if problem:
+            # 不回"成功的空结果"：那等于告诉模型这条路可行，它会继续缩窗口试探
+            return {
+                "ok": False,
+                "error": "invalid_time_range",
+                "hint": problem,
+                "queryScope": list(timeRange) if isinstance(timeRange, (list, tuple)) and len(timeRange) == 2 else None,
+                "tracks": [],
+                "trackIds": [],
+                "totalTrackCount": 0,
+                "returnedTrackCount": 0,
+            }
+        timeRange = scope
         tracks = self.repository.find_tracks(timeRange, hullNumber, finalMatchType)
         start = max(0, int(offset or 0))
         page_size = max(0, min(200, int(limit or 0)))
