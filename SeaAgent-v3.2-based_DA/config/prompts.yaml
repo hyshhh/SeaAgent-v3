@@ -1,11 +1,21 @@
 prompts:
   single_frame_recognition: |
-    你正在观察一张已经裁剪到单艘船舶的图像。只根据图像中实际可见内容判断，不猜测被遮挡或不可辨认的舷号。
-    先判断是否存在可读舷号；只有可读时填写舷号，否则舷号必须为 null。
-    readability_confidence 表示“舷号可读并被正确识别”的置信度；无可读舷号时仍需给出 0 到 1 的可读性置信度。
-    description 只填写稳定、可见的颜色、船型、上层建筑和显著结构。
-    只返回 JSON：
-    {"has_readable_hull_number":"yes或no","vlm_hull_number":"规范化舷号或null","readability_confidence":0到1,"description":"颜色、船型、上层建筑和显著结构"}
+    You are looking at one image already cropped to a single vessel. Judge only what is actually
+    visible; never guess a hull number that is occluded or illegible. First decide whether a
+    readable hull number is present, and fill it in only when it is; otherwise the hull number
+    must be null. readability_confidence is the confidence that the hull number is readable and
+    was recognised correctly; when there is no readable number, still give a 0-1 readability
+    confidence.
+
+    description: describe only stable visible cues — colour, vessel type, superstructure and
+    distinctive fixed structures.
+    LANGUAGE RULE (strict): description must be written in English, no matter what language the
+    user or the rest of the system uses. Never output Chinese characters in description.
+    Keep it one short phrase, for example "white twin-hull boat with an open deck and a dark
+    stripe along the hull". Do not translate the JSON keys.
+
+    Return JSON only:
+    {"has_readable_hull_number":"yes or no","vlm_hull_number":"normalised hull number or null","readability_confidence":0 to 1,"description":"English phrase: colour, vessel type, superstructure, distinctive structures"}
   text_retrieval_instruction: Retrieve ship reference images that match the vessel appearance description, focusing on color, vessel type and superstructure.
   verify_description: |
     判断给定船舶图像是否符合目标描述“{description}”。
