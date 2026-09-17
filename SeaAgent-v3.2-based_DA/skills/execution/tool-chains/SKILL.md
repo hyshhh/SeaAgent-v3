@@ -1,6 +1,6 @@
 ---
-name: tool_chains
-description: Use for every data question to pick the chain that fits the operation, and the repair chain after an empty result.
+name: tool-chains
+description: "Use for every data question to pick the chain that fits the operation, and the repair chain after an empty result."
 ---
 
 # Sea-Video Tool Chains

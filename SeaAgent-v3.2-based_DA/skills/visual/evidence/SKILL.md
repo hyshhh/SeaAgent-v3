@@ -1,6 +1,6 @@
 ---
 name: evidence
-description: Use when an answer needs visual proof, keyframes, clips, or confidence handling.
+description: "Use when an answer needs visual proof, keyframes, clips, or confidence handling."
 ---
 
 # Sea-Video Evidence

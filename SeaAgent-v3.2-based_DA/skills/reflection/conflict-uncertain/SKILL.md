@@ -1,6 +1,6 @@
 ---
-name: conflict_uncertain
-description: Use when the evidence does not settle cleanly.
+name: conflict-uncertain
+description: "Use when the evidence does not settle cleanly."
 ---
 
 # Sea-Video Conflict And Uncertainty

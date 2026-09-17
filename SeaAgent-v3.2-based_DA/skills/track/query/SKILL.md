@@ -1,6 +1,6 @@
 ---
 name: query
-description: Use for every Sea-Video question. Select the minimum evidence path and preserve the requested time scope.
+description: "Use for every Sea-Video question. Select the minimum evidence path and preserve the requested time scope."
 ---
 
 # Sea-Video Query

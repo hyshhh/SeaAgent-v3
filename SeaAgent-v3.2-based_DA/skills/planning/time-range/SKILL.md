@@ -1,6 +1,6 @@
 ---
-name: time_range
-description: Use whenever the question mentions a time, or deliberately does not.
+name: time-range
+description: "Use whenever the question mentions a time, or deliberately does not."
 ---
 
 # Sea-Video Time Range

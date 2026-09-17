@@ -1,6 +1,6 @@
 ---
-name: next_step
-description: Use when a gap must become one concrete next instruction.
+name: next-step
+description: "Use when a gap must become one concrete next instruction."
 ---
 
 # Sea-Video Next Step

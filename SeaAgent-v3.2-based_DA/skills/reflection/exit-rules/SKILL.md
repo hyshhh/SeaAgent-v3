@@ -1,6 +1,6 @@
 ---
-name: exit_rules
-description: Use to decide whether the loop may end, per question class.
+name: exit-rules
+description: "Use to decide whether the loop may end, per question class."
 ---
 
 # Sea-Video Exit Rules

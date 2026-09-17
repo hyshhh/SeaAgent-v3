@@ -1,6 +1,6 @@
 ---
 name: summary
-description: Use when compressing results for the next phase: what to keep, what to truncate.
+description: "Use when compressing results for the next phase: what to keep, what to truncate."
 ---
 
 # Sea-Video Result Summary

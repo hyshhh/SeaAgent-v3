@@ -1,6 +1,6 @@
 ---
 name: intent
-description: Use at the start of every question to turn the request into one self-contained claim.
+description: "Use at the start of every question to turn the request into one self-contained claim."
 ---
 
 # Sea-Video Intent

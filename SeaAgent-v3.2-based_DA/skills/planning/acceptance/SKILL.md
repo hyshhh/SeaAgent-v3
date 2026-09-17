@@ -1,6 +1,6 @@
 ---
 name: acceptance
-description: Use when writing the acceptance checklist: which evidence must exist before the answer counts as established.
+description: "Use when writing the acceptance checklist: which evidence must exist before the answer counts as established."
 ---
 
 # Sea-Video Acceptance Checklist

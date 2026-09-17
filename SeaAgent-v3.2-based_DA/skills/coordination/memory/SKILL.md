@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Use when a question requires conversation continuity or explanation of stored memory.
+description: "Use when a question requires conversation continuity or explanation of stored memory."
 ---
 
 # Sea-Video Memory

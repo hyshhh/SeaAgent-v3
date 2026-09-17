@@ -1,6 +1,6 @@
 ---
-name: registry_reading
-description: Use after a registry query to read it correctly and say what is still missing.
+name: registry-reading
+description: "Use after a registry query to read it correctly and say what is still missing."
 ---
 
 # Sea-Video Registry Reading

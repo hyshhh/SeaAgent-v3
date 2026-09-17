@@ -1,6 +1,6 @@
 ---
 name: acceptance
-description: Use before you stop working, to audit whether the claim is actually proved and decide exit or one more step.
+description: "Use before you stop working, to audit whether the claim is actually proved and decide exit or one more step."
 ---
 
 # Sea-Video Acceptance

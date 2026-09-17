@@ -1,6 +1,6 @@
 ---
 name: planning
-description: Use at the start of every turn, before the first domain tool call, and again whenever a result forces a change of plan.
+description: "Use at the start of every turn, before the first domain tool call, and again whenever a result forces a change of plan."
 ---
 
 # Sea-Video Planning

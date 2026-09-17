@@ -1,6 +1,6 @@
 ---
 name: dedup
-description: Use for counting or enumerating vessels when multiple tracks may belong to one vessel.
+description: "Use for counting or enumerating vessels when multiple tracks may belong to one vessel."
 ---
 
 # Sea-Video Deduplication

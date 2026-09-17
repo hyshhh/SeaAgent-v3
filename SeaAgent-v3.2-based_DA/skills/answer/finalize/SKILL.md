@@ -1,6 +1,6 @@
 ---
 name: finalize
-description: Use before ending any answer, to land the visual evidence and shape the final Chinese response.
+description: "Use before ending any answer, to land the visual evidence and shape the final Chinese response."
 ---
 
 # Sea-Video Finalize

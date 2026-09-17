@@ -1,6 +1,6 @@
 ---
-name: registry_scope
-description: Use when the question mentions the registry (先验库/在库/库里/名录) to decide whether the footage is involved at all.
+name: registry-scope
+description: "Use when the question mentions the registry (先验库/在库/库里/名录) to decide whether the footage is involved at all."
 ---
 
 # Sea-Video Registry Scope

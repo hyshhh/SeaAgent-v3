@@ -1,6 +1,6 @@
 ---
 name: registry
-description: Use for vessel registry lookup, registry membership, hull-number matching, and registry descriptions.
+description: "Use for vessel registry lookup, registry membership, hull-number matching, and registry descriptions."
 ---
 
 # Sea-Video Registry

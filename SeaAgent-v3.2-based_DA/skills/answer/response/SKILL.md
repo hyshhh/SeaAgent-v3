@@ -1,6 +1,6 @@
 ---
 name: response
-description: Use before finalizing any answer to normalize evidence, uncertainty, and concise Chinese presentation.
+description: "Use before finalizing any answer to normalize evidence, uncertainty, and concise Chinese presentation."
 ---
 
 # Sea-Video Response

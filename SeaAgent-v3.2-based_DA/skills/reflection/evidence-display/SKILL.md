@@ -1,6 +1,6 @@
 ---
-name: evidence_display
-description: Use before you exit, to land the evidence this turn produced.
+name: evidence-display
+description: "Use before you exit, to land the evidence this turn produced."
 ---
 
 # Sea-Video Evidence Display

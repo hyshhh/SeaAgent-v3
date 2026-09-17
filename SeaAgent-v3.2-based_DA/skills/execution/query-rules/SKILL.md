@@ -1,6 +1,6 @@
 ---
-name: query_rules
-description: Use before running a tool, to run it the way its domain requires and keep the two false negatives out of the answer.
+name: query-rules
+description: "Use before running a tool, to run it the way its domain requires and keep the two false negatives out of the answer."
 ---
 
 # Sea-Video Query Rules

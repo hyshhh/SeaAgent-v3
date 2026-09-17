@@ -1,6 +1,6 @@
 ---
 name: arguments
-description: Use before issuing a call to get its arguments and dependencies right.
+description: "Use before issuing a call to get its arguments and dependencies right."
 ---
 
 # Sea-Video Arguments And Dependencies
