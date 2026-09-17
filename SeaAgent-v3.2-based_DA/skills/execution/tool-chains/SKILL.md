@@ -19,6 +19,17 @@ Chains:
 - **count** — unfiltered track query with no paging → keyframes → dedup.
 - **registry-only description** — catalogue listing → text match over registry references.
 
+Cost rules — the three calls that can stall a whole turn:
+- The track query must carry a time window or a page limit. Never ask for the whole monitoring
+  period of a busy camera: that returns thousands of rows, and everything downstream multiplies it.
+- **Never pass an unfiltered track result straight into the keyframe lookup or the dedup step.**
+  Both work per track and both are minute-scale jobs once the input grows. Converge to at most
+  about twenty tracks first — narrow the window, take the top candidates, or page the query.
+- The dedup step additionally computes an embedding per keyframe, so it is the slowest call here.
+  Only run it when the question actually needs a count.
+- If the question gives no time range at all, ask the user for one instead of scanning everything.
+  If it must span a wide period, page it and narrow between pages rather than materialising it all.
+
 Repair rules after an empty round:
 - hull-filtered tracks = 0 and the registry was requested → look the registry up; do not repeat the identical track call.
 - registry already read and a visual check still required → the next chain must contain an image match, with the hull filter dropped.

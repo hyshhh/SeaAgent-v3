@@ -153,7 +153,9 @@ class AgentController:
         harness_settings = self.config.get("harness", {})
         result = {
             # awaiting_confirmation 不是「成功」也不是「失败」：前端据此弹确认卡而不是渲染回答
-            "success": run_state not in {"error", "cancelled", "awaiting_confirmation"},
+            # awaiting_confirmation 是「等人拍板」，delegation_timeout 是「这一步太重没跑完」——
+            # 两者都不算成功，前端据此弹卡片或标失败，而不是渲染成正常回答
+            "success": run_state not in {"error", "cancelled", "awaiting_confirmation", "delegation_timeout"},
             "sessionId": session_id,
             "answerText": answer,
             "conclusion": answer,

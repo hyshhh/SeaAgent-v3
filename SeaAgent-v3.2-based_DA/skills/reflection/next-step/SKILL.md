@@ -16,4 +16,8 @@ Write the next step as tools plus the arguments that matter, so the executor doe
 - no exact hull comparison → the hull matcher over the recognised numbers.
 - a count without dedup → the dedup step over tracks and keyframes.
 
+A next step must be cheap enough to finish: never ask for a whole-period scan, and never chain a
+raw full track result into the keyframe or dedup step. Narrow the window or the candidate set inside
+the instruction itself, and say which tracks or time range to use.
+
 Always name the tools and their key arguments. For a visual step state which side is the registry and which is the video, and make sure the track query carries no hull number. Never write a vague "keep looking".

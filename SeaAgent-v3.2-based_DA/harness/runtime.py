@@ -17,6 +17,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from types import TracebackType
@@ -251,6 +252,15 @@ class _Trace:
                 "message": str(item.get("description") or "Skill 已加载"),
                 "skill": name,
             })
+
+    @property
+    def pending_subagent(self) -> str:
+        """当前还没结束的委派目标；没有就返回空串。
+
+        超时信息要能点名是谁卡住了，否则用户只看到「等太久」，不知道该缩哪一步的范围。
+        并发委派时可能有多个，这里如实按顺序列出，不做猜测。
+        """
+        return "、".join(self._pending_delegations)
 
     def consume_todos(self, state: dict[str, Any]) -> None:
         """把待办清单转成 plan 事件，让前端画出「计划执行到哪一步」。
@@ -838,6 +848,9 @@ class SeaVideoHarness:
         harness = self.config.get("harness", {})
         stall_limit = max(1, int(harness.get("stall_guard_consecutive_errors", 4)))
         repeat_limit = max(1, int(harness.get("stall_guard_repeat_calls", 3)))
+        # 单次委派的墙钟上限：0 表示不设（退回只靠 HTTP 层那 600 秒兜底）
+        delegation_timeout = float(harness.get("delegation_timeout_seconds", 0) or 0)
+        last_frame_at = time.monotonic()
         state = "completed"
         confirmation: dict[str, Any] | None = None
         try:
@@ -848,6 +861,21 @@ class SeaVideoHarness:
                 subgraphs=True,
             ):
                 namespace, update = frame if isinstance(frame, tuple) and len(frame) == 2 else ((), frame)
+                # 心跳式看门狗：从智能体每完成一步都会回一帧，所以「距上一帧的间隔」就是
+                # 单步耗时。明显超限说明它内部卡住了（长工具调用、或在自己的循环里打转），
+                # 这时中止本轮并点名卡在哪一步，比让用户干等到 HTTP 层超时有用得多。
+                now = time.monotonic()
+                if delegation_timeout > 0 and now - last_frame_at > delegation_timeout:
+                    stalled_for = int(now - last_frame_at)
+                    who = trace.pending_subagent
+                    logger.warning("Delegation stalled: thread_id=%s, subagent=%s, %.0fs", thread_id, who or "?", stalled_for)
+                    return {
+                        "state": "delegation_timeout",
+                        "confirmation": None,
+                        "stalled_seconds": stalled_for,
+                        "subagent": who,
+                    }
+                last_frame_at = now
                 if cancel is not None and cancel.is_set():
                     return {"state": "cancelled", "confirmation": None}
                 interrupts = _interrupt_payload(update)
@@ -949,6 +977,28 @@ class SeaVideoHarness:
         if state == "cancelled":
             result = trace.result(thread_id, self.config, state="cancelled")
             trace.event({"type": "complete", "title": "Harness 已停止", "message": "本轮已按请求停止", "result": result})
+            return result
+        if state == "delegation_timeout":
+            # 不是失败，是「这一步太重」：如实说明卡在哪、下一步该怎么缩
+            result = trace.result(thread_id, self.config, state="delegation_timeout")
+            answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
+            who = str(outcome.get("subagent") or "")
+            waited = int(outcome.get("stalled_seconds") or 0)
+            limit = int(float(harness.get("delegation_timeout_seconds", 0) or 0))
+            where = f"委派给 {who} 的那一步" if who else "某次委派"
+            message = (
+                f"{where}已经 {waited} 秒没有任何进展，已中止本轮。"
+                f"最常见的原因是全量扫描：轨迹查询没带时间范围，或把未收敛的轨迹直接喂给了关键帧/去重。"
+                f"请把时间范围缩小（或指定舷号）后重试。"
+            )
+            if not str(result.get(answer_field) or "").strip():
+                result[answer_field] = message
+            trace.event({
+                "type": "status",
+                "title": "委派已超时",
+                "message": f"{where}超过 {limit} 秒没有返回，已中止",
+            })
+            trace.event({"type": "complete", "title": "Harness 已收尾", "message": "单步超时，已在现有结果上收尾", "result": result})
             return result
         if state == "stalled":
             result = trace.result(thread_id, self.config, state="stalled")
