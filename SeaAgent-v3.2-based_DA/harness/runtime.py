@@ -613,7 +613,6 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
 
     from langchain.agents.middleware import ToolCallLimitMiddleware
 
-    from .subagent_schemas import resolve_response_format
     from .tool_guard import RepeatToolCallMiddleware
 
     harness = config.get("harness", {})
@@ -651,9 +650,14 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
             RepeatToolCallMiddleware(),
             ToolCallLimitMiddleware(run_limit=max(1, int(harness.get("subagent_tool_calls", 12)))),
         ]
-        response_format = resolve_response_format(spec.get("response_format"))
-        if response_format is not None:
-            built["response_format"] = response_format
+        # 结构化返回：明确拒绝。框架的实现是把 schema 绑成一个「工具」，而 4B 模型在思考模式下
+        # 会一次回复里调它十几次；框架按 ToolStrategy 默认的 handle_errors=True 反复重试，
+        # 直到烧光这个子智能体的工具预算——对外表现就是「委派卡住」。返回格式改由提示词约定。
+        if spec.get("response_format"):
+            raise ValueError(
+                f"从智能体 {name} 不该配 response_format（当前值：{spec['response_format']}）。"
+                "框架的结构化返回会被模型重复调用并触发重试死循环；请改在 system_prompt 里约定 JSON 块。"
+            )
         # 人工确认：把 YAML 的 interrupt_on 原样交给框架，它会在编译这个从智能体时
         # 自动加上 HumanInTheLoopMiddleware（见 deepagents graph.py 的 interrupt_on 处理）。
         # 漏搬这一个字段的表现是「配了也不中断」——写库会直接执行，没有任何确认。

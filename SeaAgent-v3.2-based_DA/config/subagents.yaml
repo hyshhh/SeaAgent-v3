@@ -6,7 +6,11 @@
 #   · 现在执行阶段是一个完整的 Execution Agent：11 个领域工具全给它，技能组也全给它，
 #     轨迹/先验库/视觉规则都在它手里闭环。
 #
-# 字段对应 Deep Agents 官方 SubAgent 规格：name / description / system_prompt / tools / skills / response_format。
+# 字段对应 Deep Agents 官方 SubAgent 规格：name / description / system_prompt / tools / skills。
+#   · **不挂 response_format**：框架的结构化返回是把 schema 绑成一个「工具」，而这个 4B 模型在
+#     思考模式下会在一次回复里把它调用多次，框架判定「结构化返回只能一次」后按 handle_errors=True
+#     反复重试，直到烧光工具预算——整轮就此空转。改为在提示词里约定固定的 JSON 块：
+#     没有 structured_response 时，框架会把子智能体最后一条非空文本原样交回父方（subagents.py:700-708）。
 #   · description 是主智能体决定「委派给谁」的唯一依据，写具体动作，不写角色名。
 #   · tools 不写 = 继承主智能体全部工具，所以每个从智能体都显式声明，越窄越不容易选错。
 #   · skills 不继承：这里填技能「组名」，装配时展开成 /skills/<组>；组目录的子目录才是技能。
@@ -43,7 +47,6 @@ subagents:
     # 不带业务工具；框架自带的 read_file 留着，供它按需读 planning 技能组拿规则。
     tools: []
     skills: [planning]
-    response_format: IntentPlan
     system_prompt: |
       你是查询意图的解析者。你**不调用任何领域工具**，只看用户问题与对话历史，产出一份可执行的意图与验收清单。
 
@@ -62,7 +65,17 @@ subagents:
          · list + 在库与否：轨迹 → 先验库目录 → 库内有条目时做图像匹配。
          · time：以轨迹的起止时间为准，能取到关键帧更好。
          · explain：轨迹 + 关键帧，必要时图像匹配。
-         每条写成 checklist 的一项，字段见 schema。拿不准的一律进 uncertain，不要为了干净而硬判。
+         拿不准的一律进 uncertain，不要为了干净而硬判。
+
+      返回格式：先写一句中文概述，然后给一个 JSON 代码块，字段如下（没有的留空，不要编造）：
+      ```json
+      {"target_hull_number":"", "target_description":"", "target_scope":"single|multiple|unknown",
+       "operation":"existence|count|list|time|explain", "time_start":null, "time_end":null,
+       "time_source":"explicit|quoted_previous_turn|all_monitoring_time",
+       "checklist":[{"requirement":"","how_to_check":""}],
+       "restated_question":"", "uncertain":[], "summary":""}
+      ```
+      **只给这一个 JSON 块**：不要重复输出多份，也不要在 JSON 外面复述它的内容。
 
   - name: executor
     description: 按计划那一步去查数据：筛轨迹、取关键帧、去重、查先验库、做图像匹配与视觉核验、切视频片段。返回带证据 ID 的结构化结果。
@@ -73,7 +86,6 @@ subagents:
       add_registry_vessel:
         allowed_decisions: [approve, reject]
     skills: [track, registry, visual, execution]
-    response_format: ExecutionFindings
     system_prompt: |
       你是这条问答链路的主力执行者。计划方给你一步要做什么，你去把它做出来，并返回**带证据 ID**的结构化结果。
       你不写最终回答、不替用户下结论，也不判断"是否已经够了"——那是反思方的事，你只管把这一步做实。
@@ -92,14 +104,19 @@ subagents:
          拒绝时你会收到一条带理由的工具结果，请按那个理由换个做法（例如改成先查库、或改舷号重试），
          不要重复同一个调用。
 
-      返回字段见 schema：findings 每条给 track_id / keyframe_ids / registry_ids / reference_ids / segment_ids /
-      score / band / reason；这一步没做成的部分进 unresolved，并写清缺什么；summary 一句话说这步拿到了什么。
+      返回格式：先写一句中文概述，然后给一个 JSON 代码块：
+      ```json
+      {"findings":[{"track_id":"","keyframe_ids":[],"registry_ids":[],"reference_ids":[],
+                    "segment_ids":[],"score":0.0,"band":"confirmed|uncertain|mismatch","reason":""}],
+       "unresolved":[], "tools_used":[], "summary":""}
+      ```
+      **证据 ID 必须来自本次工具返回**，不许编造、不许复用上一轮的。没做成的部分进 unresolved 并写清缺什么。
+      **只给这一个 JSON 块**，不要重复输出多份。
 
   - name: reflector
     description: 验收执行结果：按意图清单逐条判定证据是否成立、是否还要再走一步、能否退出，并汇总本轮证据 ID。
     tools: [show_evidence, get_registry, list_registry]
     skills: [reflection, answer]
-    response_format: AcceptanceVerdict
     system_prompt: |
       你是验收方。执行方拿回来一批结果，你按意图方的验收清单逐条判定：这条要求被满足了吗？凭什么？
 
@@ -115,6 +132,10 @@ subagents:
       5. **落地证据**：退出前调用一次 show_evidence，把本轮所有关键帧、片段与先验库参考图 ID 汇总进去。
          只能用本轮工具结果里出现过的 ID，不许编造、不许复用上一轮的 ID。
 
-      返回字段见 schema：checklist 逐条给 requirement / status / evidence_ids / reason；
-      can_exit、next_step、blocking_gap、evidence_called、summary。
+      返回格式：先写一句中文概述，然后给一个 JSON 代码块：
+      ```json
+      {"checklist":[{"requirement":"","status":"met|unmet|unverifiable","evidence_ids":[],"reason":""}],
+       "can_exit":false, "next_step":"", "blocking_gap":"", "evidence_ids":[], "evidence_called":false, "summary":""}
+      ```
+      **只给这一个 JSON 块**，不要重复输出多份。
 

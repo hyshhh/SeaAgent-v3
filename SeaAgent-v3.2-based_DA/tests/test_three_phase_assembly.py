@@ -25,7 +25,6 @@ from harness.runtime import (
     _skill_sources,
     _tool_labels,
 )
-from harness.subagent_schemas import AcceptanceVerdict, ExecutionFindings, IntentPlan
 from harness.tool_guard import RepeatToolCallMiddleware
 from harness.tools import build_tools
 
@@ -86,7 +85,7 @@ def test_the_executor_is_the_rich_one():
     assert "add_registry_vessel" in [str(tool.name) for tool in executor["tools"]]
     assert executor["interrupt_on"]["add_registry_vessel"]["allowed_decisions"] == ["approve", "reject"]
     assert executor["skills"] == ["/skills/track", "/skills/registry", "/skills/visual", "/skills/execution"]
-    assert executor["response_format"] is ExecutionFindings
+    assert "```json" in executor["system_prompt"], "执行阶段要约定返回的 JSON 块"
 
 
 def test_planner_plans_without_touching_data():
@@ -95,7 +94,7 @@ def test_planner_plans_without_touching_data():
     planner = _by_name(subagents)["planner"]
     assert planner["tools"] == []
     assert planner["skills"] == ["/skills/planning"]
-    assert planner["response_format"] is IntentPlan
+    assert "```json" in planner["system_prompt"], "规划阶段要约定返回的 JSON 块"
 
 
 def test_reflector_audits_and_lands_the_evidence():
@@ -104,7 +103,20 @@ def test_reflector_audits_and_lands_the_evidence():
     reflector = _by_name(subagents)["reflector"]
     assert [str(tool.name) for tool in reflector["tools"]] == ["show_evidence", "get_registry", "list_registry"]
     assert reflector["skills"] == ["/skills/reflection", "/skills/answer"]
-    assert reflector["response_format"] is AcceptanceVerdict
+    assert "```json" in reflector["system_prompt"], "反思阶段要约定返回的 JSON 块"
+
+
+def test_no_phase_uses_structured_response_format():
+    """回归：不许再挂 response_format。
+
+    事故经过：框架把结构化 schema 绑成一个「工具」，而这个 4B 模型在思考模式下一次回复里
+    把它调用了十几次；框架判定「结构化返回只能一次」后，按 ToolStrategy 的默认
+    handle_errors=True 把错误塞回对话重试，模型每次都犯同样的错，直到烧光子智能体的
+    工具预算（12 次）——对外表现就是「委派卡住、什么都出不来」。
+    """
+    subagents, _, _ = _specs()
+    offenders = [spec["name"] for spec in subagents if "response_format" in spec]
+    assert not offenders, f"这些子智能体又挂上了结构化返回：{offenders}"
 
 
 def test_every_phase_carries_a_prompt_and_description():
@@ -156,7 +168,7 @@ def test_a_subagent_can_only_read_its_own_skill_groups():
     assert _check_fs_permission(executor_rules, "write", "/skills/track/query/SKILL.md") == "deny"
 
 
-def test_unknown_tool_or_schema_fails_loudly(tmp_path):
+def test_unknown_tool_name_and_structured_format_fail_loudly(tmp_path):
     """配置写错要在启动时炸掉，而不是等模型真去调它。"""
     import yaml
 
@@ -173,13 +185,14 @@ def test_unknown_tool_or_schema_fails_loudly(tmp_path):
     else:
         raise AssertionError("未声明的工具名没有被拦下")
 
-    spec_path.write_text(yaml.safe_dump({"subagents": [{"name": "x", "description": "d", "system_prompt": "s", "tools": [], "response_format": "NoSuchSchema"}]}), encoding="utf-8")
+    # 结构化返回一律拒绝：配了要当场报错，不能静默失效（见 test_no_phase_uses_structured_response_format）
+    spec_path.write_text(yaml.safe_dump({"subagents": [{"name": "x", "description": "d", "system_prompt": "s", "tools": [], "response_format": "IntentPlan"}]}), encoding="utf-8")
     try:
         _load_subagents(config, tools, FilesystemPermission)
     except ValueError as error:
-        assert "NoSuchSchema" in str(error)
+        assert "response_format" in str(error)
     else:
-        raise AssertionError("未声明的返回契约没有被拦下")
+        raise AssertionError("配了 response_format 却没有被拦下")
 
 
 # ---------------------------------------------------------------- 编排靠框架，不靠自造判定
