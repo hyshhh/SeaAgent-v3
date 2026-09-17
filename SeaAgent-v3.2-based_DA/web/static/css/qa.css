@@ -956,3 +956,263 @@
 #tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb:hover {
   background: #93a1ae;
 }
+
+/* ============================================================================
+ * Codex 主题：纯黑白 + 单一字号 + 无嵌套边框
+ * ----------------------------------------------------------------------------
+ *  · 只有黑 / 白 / 中性灰；蓝、琥珀、彩色徽章一律压成灰；
+ *  · 字号统一 13px 一档，层级靠字重（400 / 600 / 700）；
+ *  · 区块之间用 1px 分隔线，去掉卡片边框与阴影，取消小框套大框。
+ * ========================================================================== */
+#tab-agent-qa {
+  --qa-ink: #0a0a0a;
+  --qa-body: #1f1f1f;
+  --qa-muted: #6f6f6f;
+  --qa-faint: #9a9a9a;
+  --qa-line: #e6e6e6;
+  --qa-line-strong: #d4d4d4;
+  --qa-subtle: #f7f7f7;
+  --qa-blue: #0a0a0a;
+  --qa-blue-soft: #f2f2f2;
+  --qa-green: #0a0a0a;
+  --qa-green-soft: #f4f4f4;
+  --qa-red: #0a0a0a;
+  --qa-red-soft: #f4f4f4;
+  font-size: 13px;
+  color: var(--qa-body);
+}
+
+/* ---------------------------------------------------------------- 容器与面板 */
+#tab-agent-qa .qa-shell,
+#tab-agent-qa .qa-layout,
+#tab-agent-qa .qa-sessions,
+#tab-agent-qa .qa-main,
+#tab-agent-qa .qa-view { background: #fff; }
+
+#tab-agent-qa .qa-sessions { border-right: 1px solid var(--qa-line); }
+#tab-agent-qa .qa-inspector { background: #fff; border-left: 1px solid var(--qa-line); }
+
+/* 顶层是「面板」，不是卡片：去掉边框、圆角与阴影，改用分隔线 */
+#tab-agent-qa .qa-topbar,
+#tab-agent-qa .qa-subnav {
+  border: 0;
+  border-bottom: 1px solid var(--qa-line);
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------------------- 字号与字重 */
+#tab-agent-qa .qa-section-title,
+#tab-agent-qa .qa-sessions-title,
+#tab-agent-qa .qa-trace-title,
+#tab-agent-qa .qa-inspector-heading,
+#tab-agent-qa .qa-answer-badge,
+#tab-agent-qa .qa-composer-label,
+#tab-agent-qa .qa-message-label,
+#tab-agent-qa .qa-plan-title,
+#tab-agent-qa .qa-confirm-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--qa-ink);
+}
+
+#tab-agent-qa .qa-status-card > strong,
+#tab-agent-qa .qa-welcome h1 { font-size: 13px; font-weight: 700; color: var(--qa-ink); }
+
+#tab-agent-qa .qa-welcome p,
+#tab-agent-qa .qa-status-card > p,
+#tab-agent-qa .qa-answer-text,
+#tab-agent-qa .qa-event-message,
+#tab-agent-qa .qa-agent-line,
+#tab-agent-qa .qa-plan-item,
+#tab-agent-qa .qa-confirm-row,
+#tab-agent-qa .qa-step,
+#tab-agent-qa .qa-trace-record,
+#tab-agent-qa .qa-user-bubble,
+#tab-agent-qa .qa-history-item { font-size: 13px; line-height: 1.6; }
+
+/* 标签类一律压成同一档、只靠颜色区分主次 */
+#tab-agent-qa .qa-muted,
+#tab-agent-qa .qa-event-label,
+#tab-agent-qa .qa-event-meta,
+#tab-agent-qa .qa-session-meta,
+#tab-agent-qa .qa-session-note,
+#tab-agent-qa .qa-subnav-meta,
+#tab-agent-qa .qa-kicker,
+#tab-agent-qa .qa-shortcut,
+#tab-agent-qa .qa-plan-status,
+#tab-agent-qa .qa-confirm-hint,
+#tab-agent-qa .qa-step-badge,
+#tab-agent-qa .qa-step-kind { font-size: 13px; font-weight: 400; color: var(--qa-muted); }
+
+/* ---------------------------------------------------------------- 彩色一律压成灰 */
+#tab-agent-qa .qa-runtime-badge,
+#tab-agent-qa .qa-live-indicator,
+#tab-agent-qa #agentThinkingDot,
+#tab-agent-qa #qaHeaderDot,
+#tab-agent-qa .qa-dot-assistant,
+#tab-agent-qa .qa-dot-tool,
+#tab-agent-qa .qa-dot-skill,
+#tab-agent-qa .qa-dot-system,
+#tab-agent-qa .qa-dot-error {
+  background: var(--qa-ink);
+  border-color: var(--qa-ink);
+  color: #fff;
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-dot-assistant,
+#tab-agent-qa .qa-dot-system { background: var(--qa-faint); border-color: var(--qa-faint); }
+
+#tab-agent-qa .qa-live-indicator.live,
+#tab-agent-qa .qa-live-indicator { animation: none; }
+
+#tab-agent-qa .qa-agent-line-name,
+#tab-agent-qa .qa-agent-line-icon,
+#tab-agent-qa .qa-agent-line-label,
+#tab-agent-qa .qa-summary-icon { color: var(--qa-ink); }
+
+#tab-agent-qa .qa-session-item.is-active,
+#tab-agent-qa .qa-subtab.is-active,
+#tab-agent-qa .qa-plan-mark { background: transparent; color: var(--qa-ink); font-weight: 700; }
+
+#tab-agent-qa .qa-subtab.is-active { border-color: var(--qa-ink); }
+
+/* ---------------------------------------------------------------- 卡片 → 扁平区块 */
+#tab-agent-qa .qa-inspector-card,
+#tab-agent-qa .qa-answer-card,
+#tab-agent-qa .qa-activity,
+#tab-agent-qa .qa-plan,
+#tab-agent-qa .qa-confirm,
+#tab-agent-qa .qa-tool-event,
+#tab-agent-qa .qa-history-item {
+  border: 0;
+  border-bottom: 1px solid var(--qa-line);
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-inspector-card { padding: 12px 0; }
+#tab-agent-qa .qa-inspector-card:last-child { border-bottom: 0; }
+
+/* 计划清单 / 确认卡：去掉独立边框，改成一段带左线的区块 */
+#tab-agent-qa .qa-plan,
+#tab-agent-qa .qa-confirm {
+  padding: 10px 0;
+  border-left: 0;
+  border-bottom: 1px solid var(--qa-line);
+}
+
+#tab-agent-qa .qa-plan-meter { height: 2px; background: var(--qa-line); border-radius: 0; }
+#tab-agent-qa .qa-plan-meter i { background: var(--qa-ink); border-radius: 0; }
+
+/* 轨迹事件：去掉每条的小框，用分隔线排开 */
+#tab-agent-qa .qa-event-row,
+#tab-agent-qa .qa-agent-line { border-bottom: 1px solid var(--qa-line); border-radius: 0; }
+#tab-agent-qa .qa-agent-line:last-child { border-bottom: 0; }
+
+#tab-agent-qa .qa-event-icon,
+#tab-agent-qa .qa-step-line,
+#tab-agent-qa .qa-trace-ribbon { color: var(--qa-faint); }
+
+/* ---------------------------------------------------------------- 输入区与按钮 */
+#tab-agent-qa .qa-composer-wrap {
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--qa-line);
+  background: #fff;
+}
+
+#tab-agent-qa .qa-composer {
+  max-width: 760px;
+  border: 1px solid var(--qa-line-strong);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-composer textarea { font-size: 13px; color: var(--qa-ink); }
+#tab-agent-qa .qa-composer-topline,
+#tab-agent-qa .qa-composer-actions,
+#tab-agent-qa .qa-composer-tools { border-color: var(--qa-line); }
+
+#tab-agent-qa .qa-send-button,
+#tab-agent-qa .qa-stop-button,
+#tab-agent-qa .qa-sessions-new,
+#tab-agent-qa .qa-confirm-approve,
+#tab-agent-qa .qa-suggestion-row button {
+  border: 1px solid var(--qa-ink);
+  border-radius: 8px;
+  background: var(--qa-ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-stop-button,
+#tab-agent-qa .qa-confirm-reject,
+#tab-agent-qa .qa-tool-button,
+#tab-agent-qa .qa-sessions-refresh,
+#tab-agent-qa .qa-session-delete {
+  border: 1px solid var(--qa-line-strong);
+  background: #fff;
+  color: var(--qa-ink);
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-send-button:hover,
+#tab-agent-qa .qa-sessions-new:hover,
+#tab-agent-qa .qa-confirm-approve:hover { background: #262626; border-color: #262626; }
+
+#tab-agent-qa .qa-tool-button:hover,
+#tab-agent-qa .qa-confirm-reject:hover { background: var(--qa-subtle); }
+
+#tab-agent-qa .qa-user-bubble {
+  background: var(--qa-subtle);
+  border: 0;
+  border-radius: 10px;
+  color: var(--qa-ink);
+}
+
+/* ---------------------------------------------------------------- 证据区 */
+#tab-agent-qa .qa-evidence-toolbar label,
+#tab-agent-qa .qa-evidence-toolbar output,
+#tab-agent-qa .evidence-group strong,
+#tab-agent-qa .evidence-card span,
+#tab-agent-qa .evidence-json { font-size: 13px; color: var(--qa-muted); }
+
+#tab-agent-qa .evidence-card {
+  border: 1px solid var(--qa-line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: none;
+}
+
+#tab-agent-qa .evidence-json { border: 0; border-top: 1px solid var(--qa-line); background: #fff; }
+
+/* 零散强调色：这些地方写死了蓝/琥珀/紫/绿/红，绕过了变量，一并压成灰 */
+#tab-agent-qa #qaHeaderDot.running,
+#tab-agent-qa .qa-activity[data-state="running"] .qa-live-indicator,
+#tab-agent-qa .qa-step-badge.is-ok { background: var(--qa-ink); color: #fff; border-color: var(--qa-ink); }
+
+#tab-agent-qa .qa-welcome-mark {
+  color: var(--qa-ink);
+  border: 1px solid var(--qa-line-strong);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-tool-button:hover,
+#tab-agent-qa .qa-step-detail summary:hover,
+#tab-agent-qa .qa-inspector-heading:hover { color: var(--qa-ink); background: var(--qa-subtle); }
+
+#tab-agent-qa .qa-skill-item i,
+#tab-agent-qa .qa-dot-skill { color: var(--qa-ink); background: var(--qa-ink); }
+
+#tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb { background: #c4c4c4; border-color: #fff; }
+#tab-agent-qa .qa-inspector { scrollbar-color: #c4c4c4 #fff; }
