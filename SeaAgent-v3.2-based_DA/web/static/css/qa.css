@@ -143,7 +143,8 @@
   height: auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr) 318px;
+  /* 右栏要放得下证据网格：给一个随视口伸缩的宽度，宽屏能排两三列 */
+  grid-template-columns: 236px minmax(0, 1fr) clamp(360px, 26vw, 520px);
 }
 /* 主列的两种视图：对话（消息流 + 输入区）与轨迹（执行步骤表），各自铺满主列 */
 #tab-agent-qa .qa-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
@@ -448,7 +449,7 @@
 #tab-agent-qa .qa-inspector {
   min-width: 0;
   max-width: 100%;
-  padding: 20px 16px 24px;
+  padding: 18px 12px 22px;
   overflow-x: hidden;
   overflow-y: auto;
   border-left: 1px solid var(--qa-line);
@@ -461,7 +462,7 @@
   box-sizing: border-box;
   overflow: hidden;
   margin-bottom: 12px;
-  padding: 14px;
+  padding: 12px 10px;
   border: 1px solid var(--qa-line);
   border-radius: 12px;
   background: #fff;
@@ -511,7 +512,7 @@
 @keyframes qaPulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 @keyframes qaToolPulse { 0%,100% { box-shadow: none; } 50% { box-shadow: 0 0 0 4px rgba(226,163,60,.12); } }
 @media (max-width: 1120px) {
-  #tab-agent-qa .qa-layout { grid-template-columns: 196px minmax(0,1fr) 282px; }
+  #tab-agent-qa .qa-layout { grid-template-columns: 196px minmax(0,1fr) clamp(320px, 30vw, 380px); }
   #tab-agent-qa .qa-conversation { padding-inline: 34px; }
   #tab-agent-qa .qa-composer-wrap { padding-inline: 28px; }
 }
@@ -575,7 +576,7 @@
    等于没生效；这里落在真正的网格容器上，并做成自适应多列。 */
 #tab-agent-qa .qa-evidence-gallery .evidence-group-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
   gap: 7px;
 }
 
