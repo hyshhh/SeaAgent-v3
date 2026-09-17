@@ -22,6 +22,8 @@ def build_model(config: dict[str, Any]):
     settings = config.get("llm", {})
     # streaming=True：子智能体的输出只有走流式才会以 on_llm_new_token 回调出来，
     # 否则外部只能看到「子智能体思考」这一条，之后一片空白（见 harness/subagent_trace.py）。
+    # 思考上限：模型先输出内部推理再给答案，两者共用这个额度。不设就走服务端默认值。
+    max_tokens = settings.get("max_tokens")
     return ChatOpenAI(
         model=settings["model"],
         api_key=settings.get("api_key"),
@@ -29,4 +31,5 @@ def build_model(config: dict[str, Any]):
         temperature=float(settings.get("temperature", 0)),
         timeout=float(settings.get("timeout_seconds", 90)),
         streaming=bool(settings.get("streaming", True)),
+        max_tokens=int(max_tokens) if max_tokens else None,
     )

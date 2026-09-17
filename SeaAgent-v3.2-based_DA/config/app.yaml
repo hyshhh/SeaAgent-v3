@@ -13,6 +13,11 @@ llm:
   timeout_seconds: 90
   # 流式：开着才能把子智能体的输出实时外发到轨迹页（关掉则只剩「思考中」一条）
   streaming: true
+  # 思考上限（单次调用输出的 token 上限）：这个模型先输出内部推理再给答案，
+  # 两者共用这个额度。额度太小，答案（尤其要求 JSON 的结构化返回）会被截断；
+  # 不设则走服务端默认值，可能很大，单次调用会拖很长。
+  # 实测本机服务约 146 token/秒，2048 对应约 14 秒，够「思考 + 完整答案」。
+  max_tokens: 2048
 embedding:
   model: Qwen/Qwen3-VL-Embedding-2B
   api_key: abc123
