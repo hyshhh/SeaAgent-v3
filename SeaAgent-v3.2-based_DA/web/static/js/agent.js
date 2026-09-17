@@ -936,9 +936,30 @@ function renderEvidence(evidence) {
   const total = groups.reduce((sum, [key]) => sum + (Array.isArray(evidence?.[key]) ? evidence[key].length : 0), 0);
   const count = document.getElementById('evidenceResultCount');
   if (count) count.textContent = total ? `${shown}/${total} item${total === 1 ? '' : 's'}` : 'No items';
+  // 一行上下文：截图进论文时，这张图要能自己说清"这是哪一问的证据"。
+  const context = document.getElementById('evidenceContext');
+  if (context) {
+    const asked = String(harnessResult?.question || currentSession?.title || '').trim();
+    context.textContent = asked ? `Evidence for: ${asked}` : '';
+    context.hidden = !asked;
+  }
   node.style.setProperty('--qa-image-scale', String(Number(document.getElementById('evidenceImageScale')?.value || 0.5)));
   node.style.setProperty('--qa-video-scale', String(Number(document.getElementById('evidenceVideoScale')?.value || 0.25)));
-  node.innerHTML = sections.length ? sections.join('') + `<pre class="evidence-json">${escapeHtml(compact(evidence, 5000))}</pre>` : '<div class="qa-inspector-empty">No evidence available.</div>';
+  // 不再把整段原始 JSON 摊在面板里：换成能一眼看懂的要点。
+  // 论文插图里那堆花括号只会占地方，真正要交代的是"有几条、什么 ID、用什么取的"。
+  const tools = Array.isArray(evidence?.tools) ? [...new Set(evidence.tools.filter(Boolean))] : [];
+  const facts = [
+    ['Items', `${shown}/${total}`],
+    ['Breakdown', groups.filter(([key]) => Array.isArray(evidence?.[key]) && evidence[key].length)
+      .map(([key, label]) => `${label} ${evidence[key].length}`).join(' · ') || '—'],
+    ['Display', String(evidence?.displayId || '—')],
+    ['Retrieved by', tools.length ? tools.join(', ') : '—'],
+  ];
+  const meta = `<dl class="evidence-meta">${facts.map(([term, value]) =>
+    `<div><dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
+  node.innerHTML = sections.length
+    ? sections.join('') + meta
+    : '<div class="qa-inspector-empty">No evidence available.</div>';
 }
 
 async function loadAgentMemorySummary(showNotice = false) {

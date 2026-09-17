@@ -1275,3 +1275,103 @@
 #tab-agent-qa .qa-answer-text pre code { padding: 0; border: 0; background: none; }
 
 #tab-agent-qa .qa-answer-text a { color: var(--qa-ink); text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---------------------------------------------------------------- 证据面板（论文插图向）
+   去深色底：那层 #091827 来自全局 style.css 的 .evidence-group，之前的主题漏了它，
+   于是卡片浮在一块深色板上。这里把整组压成白底 + 一条分隔线。
+   网格用 auto-fit（而非 auto-fill）：证据少时列宽跟着内容走，不撑出大片空板。 */
+#tab-agent-qa .qa-evidence-gallery .evidence-group {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-evidence-gallery .evidence-group strong {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--qa-ink);
+}
+
+#tab-agent-qa .qa-evidence-gallery .evidence-group + .evidence-group { margin-top: 14px; }
+
+#tab-agent-qa .qa-evidence-gallery .evidence-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 132px));
+  justify-content: start;
+  gap: 8px;
+}
+
+/* 卡片：一个中性描边容器，图片居中，文件名一行小字 */
+#tab-agent-qa .qa-evidence-gallery .evidence-card {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--qa-line);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: none;
+}
+
+#tab-agent-qa .qa-evidence-gallery .evidence-card:hover { border-color: var(--qa-line-strong); }
+
+#tab-agent-qa .qa-evidence-gallery .evidence-card img,
+#tab-agent-qa .qa-evidence-gallery .evidence-card video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: var(--qa-subtle);
+}
+
+#tab-agent-qa .qa-evidence-gallery .evidence-card span {
+  display: block;
+  padding: 4px 6px;
+  overflow: hidden;
+  color: var(--qa-muted);
+  font: 11px/1.4 Consolas, "SF Mono", Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 要点表：替掉原来那块原始 JSON */
+#tab-agent-qa .evidence-meta {
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--qa-line);
+  display: grid;
+  gap: 3px;
+}
+
+#tab-agent-qa .evidence-meta > div { display: flex; align-items: baseline; gap: 8px; }
+
+#tab-agent-qa .evidence-meta dt {
+  flex: 0 0 84px;
+  color: var(--qa-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+#tab-agent-qa .evidence-meta dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--qa-ink);
+  font: 12px/1.5 Consolas, "SF Mono", Menlo, monospace;
+  word-break: break-all;
+}
+
+/* 顶部上下文：截图时这张图能自己说明是哪一问的证据 */
+#tab-agent-qa .evidence-context {
+  margin: 0 0 10px;
+  color: var(--qa-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 滑杆与读数对齐一点，截图更整齐 */
+#tab-agent-qa .qa-evidence-toolbar { gap: 10px; }
+#tab-agent-qa .qa-evidence-toolbar input[type="range"] { accent-color: var(--qa-ink); }

@@ -43,13 +43,14 @@ class AgentController:
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
             state = runtime.run(question, thread_id=session_id, cancel=cancel)
-            result = self._project(session_id, state, turn_index)
+            result = self._project(session_id, state, turn_index, question)
         except Exception as error:
             logger.exception("Agent controller failed: session_id=%s", session_id)
             message = str(error).strip() or f"{type(error).__name__}: {error!r}"
             result = {
                 "success": False,
                 "sessionId": session_id,
+                "question": str(question or ""),
                 "answerText": "暂时无法完成视频检索。",
                 "conclusion": "",
                 "state": "error",
@@ -88,13 +89,14 @@ class AgentController:
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
             state = runtime.resume(decision, thread_id=session_id, feedback=feedback, cancel=cancel)
-            result = self._project(session_id, state, turn_index)
+            result = self._project(session_id, state, turn_index, question)
         except Exception as error:
             logger.exception("Agent controller resume failed: session_id=%s", session_id)
             message = str(error).strip() or f"{type(error).__name__}: {error!r}"
             result = {
                 "success": False,
                 "sessionId": session_id,
+                "question": str(question or ""),
                 "answerText": "确认后仍无法完成这一步。",
                 "conclusion": "",
                 "state": "error",
@@ -113,7 +115,7 @@ class AgentController:
         result["turnIndex"] = self.repository.append_turn(session_id, question, result)
         return result
 
-    def _project(self, session_id: str, state: dict[str, Any], turn_index: int = 1) -> dict[str, Any]:
+    def _project(self, session_id: str, state: dict[str, Any], turn_index: int = 1, question: str = "") -> dict[str, Any]:
         """把一轮的内部状态投成对外结果，并把工具调用落进 qa_rounds / qa_evidence。
 
         ``turn_index`` 必须进主键：runtime 的轮次编号是**单轮内**计数（1..N），只按它拼 id 的话，
@@ -157,6 +159,8 @@ class AgentController:
             # 两者都不算成功，前端据此弹卡片或标失败，而不是渲染成正常回答
             "success": run_state not in {"error", "cancelled", "awaiting_confirmation", "delegation_timeout"},
             "sessionId": session_id,
+            # 带上问句：证据面板用它显示 "Evidence for: …"，截图进论文时这张图能自证是哪一问
+            "question": str(question or ""),
             "answerText": answer,
             "conclusion": answer,
             "state": run_state,
