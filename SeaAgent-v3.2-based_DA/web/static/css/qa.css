@@ -1216,3 +1216,62 @@
 
 #tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb { background: #c4c4c4; border-color: #fff; }
 #tab-agent-qa .qa-inspector { scrollbar-color: #c4c4c4 #fff; }
+
+/* 答案面板的 Markdown 元素：字号仍然统一 13px（层级靠字重与左边线），
+   只有标题按 Codex 的做法给出 600 字重 + 上间距。 */
+#tab-agent-qa .qa-answer-text h2,
+#tab-agent-qa .qa-answer-text h3,
+#tab-agent-qa .qa-answer-text h4,
+#tab-agent-qa .qa-answer-text h5,
+#tab-agent-qa .qa-answer-text h6 {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--qa-ink);
+}
+
+#tab-agent-qa .qa-answer-text h2:first-child,
+#tab-agent-qa .qa-answer-text h3:first-child { margin-top: 0; }
+
+#tab-agent-qa .qa-answer-text p { margin: 0 0 10px; }
+#tab-agent-qa .qa-answer-text p:last-child { margin-bottom: 0; }
+
+#tab-agent-qa .qa-answer-text ul,
+#tab-agent-qa .qa-answer-text ol { margin: 0 0 10px; padding-left: 20px; }
+#tab-agent-qa .qa-answer-text li { margin-bottom: 4px; }
+#tab-agent-qa .qa-answer-text li:last-child { margin-bottom: 0; }
+
+#tab-agent-qa .qa-answer-text strong { font-weight: 600; color: var(--qa-ink); }
+
+#tab-agent-qa .qa-answer-text blockquote {
+  margin: 0 0 10px;
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--qa-line-strong);
+  color: var(--qa-muted);
+}
+
+#tab-agent-qa .qa-answer-text hr { margin: 14px 0; border: 0; border-top: 1px solid var(--qa-line); }
+
+#tab-agent-qa .qa-answer-text code {
+  padding: 1px 5px;
+  border: 1px solid var(--qa-line);
+  border-radius: 4px;
+  background: var(--qa-subtle);
+  font: 12px/1.5 Consolas, "SF Mono", Menlo, monospace;
+  word-break: break-all;
+}
+
+#tab-agent-qa .qa-answer-text pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--qa-line);
+  border-radius: 8px;
+  background: var(--qa-subtle);
+  font: 12px/1.6 Consolas, "SF Mono", Menlo, monospace;
+}
+
+#tab-agent-qa .qa-answer-text pre code { padding: 0; border: 0; background: none; }
+
+#tab-agent-qa .qa-answer-text a { color: var(--qa-ink); text-decoration: underline; text-underline-offset: 2px; }

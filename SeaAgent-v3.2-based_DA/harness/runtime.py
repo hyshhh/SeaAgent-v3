@@ -26,6 +26,7 @@ from typing import Any, Self
 from config import project_root
 
 from .evidence import build_evidence_payload
+from .thinking_text import strip_thinking
 from .subagent_trace import SubagentTraceCallback
 from .middleware import build_middleware
 from .model import build_model
@@ -363,11 +364,13 @@ class _Trace:
                     self.event({"type": "model", "title": "模型决策", "message": "已选择工具", "tools": round_tools, "agent": subagent})
                 elif kind in {"ai", "assistant"} and _text(message).strip():
                     if subagent:
-                        # 从智能体的文本是它的中间稿：进事件流供人查看，但绝不能成为最终回答
+                        # 从智能体的文本是它的中间稿：进事件流供人查看，但绝不能成为最终回答，
+                        # 也**不剥思考** —— 那一行就是给人看它在想什么的
                         self.event({"type": "model", "title": "子智能体输出", "message": _text(message), "agent": subagent})
                     else:
-                        # 纯文本的主智能体输出即当前答案，后续更完整的输出会覆盖它
-                        self.answer = _text(message)
+                        # 纯文本的主智能体输出即当前答案，后续更完整的输出会覆盖它。
+                        # 这里要剥掉模型泄漏的思考（`...`），否则答案开头会出现它的内心独白。
+                        self.answer = strip_thinking(_text(message))
                         self.event({"type": "model", "title": "模型输出已更新", "message": "模型已完成一次公开输出更新"})
                 if kind == "tool":
                     # 工具结果回填：按 call_id 找回请求记录，把参数、结果、状态凑成一条完整记录。
@@ -463,7 +466,15 @@ class _Trace:
         # 不能退回最后一条消息本身：那可能是工具结果（例如被驳回的
         # 「Tool call limit exceeded」），会把它当成回答展示给用户。
         answer = self.answer or next(
-            (_text(message) for message in reversed(self.messages) if _message_kind(message) in {"ai", "assistant"} and _text(message).strip()),
+            (
+                stripped
+                for stripped in (
+                    strip_thinking(_text(message))
+                    for message in reversed(self.messages)
+                    if _message_kind(message) in {"ai", "assistant"} and _text(message).strip()
+                )
+                if stripped
+            ),
             "",
         )
         return {

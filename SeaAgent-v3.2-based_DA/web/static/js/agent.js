@@ -824,6 +824,69 @@ function renderToolRecords(records) {
   node.innerHTML = items.length ? items.map((item) => `<article class="qa-trace-record"><strong>${escapeHtml(item.label || item.tool || 'tool')}</strong><code>${escapeHtml(compact(item.result || item.arguments || {}, 220))}</code><span>${escapeHtml(item.status || '')}</span></article>`).join('') : '<div class="qa-inspector-empty">No tool records.</div>';
 }
 
+/* ---------------------------------------------------------------------------
+ * 答案的 Markdown 渲染
+ * 顺序很重要：**先转义再解析**。这样模型或文件名里的 < > & 只会是文本，
+ * 不可能变成标签；代码块与行内代码用占位符取出，避免其中的 # - * 被当成 Markdown。
+ * ------------------------------------------------------------------------- */
+const MD_TOKEN = '\u0000';
+
+function renderMarkdown(source) {
+  const raw = String(source ?? '');
+  if (!raw.trim()) return '';
+  const codes = [];
+  let text = raw.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_match, body) => {
+    codes.push(`<pre>${escapeHtml(body.replace(/\n$/, ''))}</pre>`);
+    return `${MD_TOKEN}C${codes.length - 1}${MD_TOKEN}`;
+  });
+  text = escapeHtml(text);
+  const inlines = [];
+  text = text.replace(/`([^`\n]+)`/g, (_match, body) => {
+    inlines.push(`<code>${body}</code>`);
+    return `${MD_TOKEN}I${inlines.length - 1}${MD_TOKEN}`;
+  });
+  text = text
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+  const lines = text.split('\n');
+  const html = [];
+  let list = null;
+  const closeList = () => { if (list) { html.push(`</${list}>`); list = null; } };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) { closeList(); continue; }
+    const heading = /^(#{1,4})\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      closeList();
+      const level = Math.min(6, heading[1].length + 1); // 正文 13px，所以 # 从 h2 起，别跳太大
+      html.push(`<h${level}>${heading[2]}</h${level}>`);
+      continue;
+    }
+    if (/^([-*_])\1{2,}$/.test(trimmed)) { closeList(); html.push('<hr>'); continue; }
+    const bullet = /^[-*]\s+(.*)$/.exec(trimmed);
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(trimmed);
+    if (bullet || numbered) {
+      const want = bullet ? 'ul' : 'ol';
+      if (list !== want) { closeList(); html.push(`<${want}>`); list = want; }
+      html.push(`<li>${(bullet || numbered)[1]}</li>`);
+      continue;
+    }
+    if (/^&gt;\s?/.test(trimmed)) { closeList(); html.push(`<blockquote>${trimmed.replace(/^&gt;\s?/, '')}</blockquote>`); continue; }
+    closeList();
+    // 代码块已经是块级元素，不要再包一层 <p>
+    if (trimmed.startsWith(`${MD_TOKEN}C`)) html.push(trimmed);
+    else html.push(`<p>${trimmed}</p>`);
+  }
+  closeList();
+  let out = html.join('');
+  out = out.replace(new RegExp(`${MD_TOKEN}I(\\d+)${MD_TOKEN}`, 'g'), (_m, index) => inlines[Number(index)] || '');
+  out = out.replace(new RegExp(`${MD_TOKEN}C(\\d+)${MD_TOKEN}`, 'g'), (_m, index) => codes[Number(index)] || '');
+  return out;
+}
+
 function renderAgentAnswer(result) {
   const view = document.getElementById('agentFinalView');
   const answer = document.getElementById('agentAnswer');
@@ -836,7 +899,9 @@ function renderAgentAnswer(result) {
   if (view) view.hidden = false;
   if (answer) {
     const text = payload.answerText || payload.answer;
-    if (text) answer.textContent = text;
+    // 答案按 Markdown 渲染：模型输出的是 ## 结论 / **粗体** 这类结构，纯文本显示很难看。
+    // renderMarkdown 内部先转义再解析，所以不会因为模型输出尖括号而注入标签。
+    if (text) answer.innerHTML = renderMarkdown(text);
     else if (cancelled) answer.textContent = '本轮已停止。';
     else if (stalled) answer.textContent = '本轮工具调用没有推进（重复或连续失败），已按现有结果收尾。';
     else if (malformed) answer.textContent = '本轮结果载荷异常，未能显示回答；请在「轨迹」页查看执行过程。';
