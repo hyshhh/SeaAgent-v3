@@ -498,7 +498,8 @@
 #tab-agent-qa .qa-evidence-toolbar label { display: grid; gap: 2px; color: #929da7; font-size: 8px; }
 #tab-agent-qa .qa-evidence-toolbar input { width: 100%; accent-color: var(--qa-blue); }
 #tab-agent-qa .qa-evidence-toolbar output { color: #6e7e8c; font-size: 8px; }
-#tab-agent-qa .qa-evidence-gallery { display: grid; gap: 7px; max-height: 355px; overflow-y: auto; }
+#tab-agent-qa .qa-evidence-gallery { display: grid; gap: 10px; }
+/* 证据不再关进独立滚动框：随右栏一起滚，高度自然铺开，能看多少看多少 */
 #tab-agent-qa .qa-evidence-gallery:has(.evidence-card) { grid-template-columns: repeat(2,minmax(0,1fr)); }
 #tab-agent-qa .qa-evidence-gallery .evidence-card { min-width: 0; display: block; overflow: hidden; color: #637486; border: 1px solid #e1e7ec; border-radius: 8px; background: #fbfcfd; text-decoration: none; }
 #tab-agent-qa .qa-evidence-gallery .evidence-card img { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; background: #eff3f5; }
@@ -570,13 +571,31 @@
 #tab-agent-qa .qa-dot-system { background: #b6bec7; }
 #tab-agent-qa .qa-dot-error { background: var(--qa-red); }
 
+/* 卡片网格：之前那条 repeat(2, ...) 打在 gallery 上，而卡片在 group-grid 里，
+   等于没生效；这里落在真正的网格容器上，并做成自适应多列。 */
+#tab-agent-qa .qa-evidence-gallery .evidence-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 7px;
+}
+
+/* 图片尺寸：跟着滑杆走，但留出下限（小屏不被挤没）与上限（大屏不占满一列）。
+   视频默认系数更小，因为要的是"能看出是哪段"，不是看清每一帧。 */
 #tab-agent-qa .qa-evidence-gallery .evidence-card img {
-  width: calc(100% * var(--qa-image-scale, .5));
+  width: clamp(72px, calc(100% * var(--qa-image-scale, .5)), 100%);
   max-width: 100%;
   margin-inline: auto;
 }
+
 #tab-agent-qa .qa-evidence-gallery .evidence-group:nth-child(2) .evidence-card img {
-  width: calc(100% * var(--qa-video-scale, .25));
+  width: clamp(64px, calc(100% * var(--qa-video-scale, .25)), 100%);
+}
+
+/* 卡片本身别撑破格子 */
+#tab-agent-qa .qa-evidence-gallery .evidence-card {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* Final QA polish: keep the composer centered in the main column and use a restrained monochrome Codex palette. */
@@ -910,33 +929,29 @@
 
 /* ---------------------------------------------------------------- 右栏滚动条
    默认细条在窄栏里很难抓，这里显式加宽：Firefox 用 scrollbar-width，
-   WebKit/Blink 用 ::-webkit-scrollbar。证据列表同宽，避免两条粗细不一。 */
-#tab-agent-qa .qa-inspector,
-#tab-agent-qa .qa-evidence-gallery {
+   WebKit/Blink 用 ::-webkit-scrollbar。
+   只给右栏设 —— 证据列表现在不独立滚动（随右栏一起滚），给它设会多出一条轨道。 */
+#tab-agent-qa .qa-inspector {
   scrollbar-width: auto;
   scrollbar-color: #b7c1cc #eef1f4;
 }
 
-#tab-agent-qa .qa-inspector::-webkit-scrollbar,
-#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar {
+#tab-agent-qa .qa-inspector::-webkit-scrollbar {
   width: 12px;
 }
 
-#tab-agent-qa .qa-inspector::-webkit-scrollbar-track,
-#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar-track {
+#tab-agent-qa .qa-inspector::-webkit-scrollbar-track {
   border-radius: 8px;
   background: #eef1f4;
 }
 
-#tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb,
-#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar-thumb {
+#tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb {
   min-height: 40px;
   border: 2px solid #eef1f4;
   border-radius: 8px;
   background: #b7c1cc;
 }
 
-#tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb:hover,
-#tab-agent-qa .qa-evidence-gallery::-webkit-scrollbar-thumb:hover {
+#tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb:hover {
   background: #93a1ae;
 }
