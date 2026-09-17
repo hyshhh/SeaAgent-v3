@@ -11,22 +11,60 @@ def _enter(handler, name="planner", run_id="d1"):
     handler.on_tool_start({"name": TASK}, "", run_id=run_id, inputs={"subagent_type": name})
 
 
-def test_model_output_is_forwarded_chunk_by_chunk():
-    """流式块要变成事件——这是「子智能体在想什么」的唯一来源。"""
+def test_model_output_is_forwarded_in_batches_not_per_token():
+    """流式输出要攒成块发——逐 token 发会把轨迹页刷成「一个字一行」。"""
     events = []
     handler = SubagentTraceCallback(events.append)
     _enter(handler)
     handler.on_chat_model_start({}, [[]], run_id="l1")
-    for chunk in ("我应该", "先读技能", "再解析时间"):
-        handler.on_llm_new_token(chunk, run_id="l1")
-    handler.on_llm_end(_response(usage={"input_tokens": 120, "output_tokens": 9}), run_id="l1")
+    # 逐字吐 60 个字符：应当明显少于 60 条事件
+    for index in range(60):
+        handler.on_llm_new_token("字", run_id="l1")
+    handler.on_llm_end(_response(usage={"input_tokens": 120, "output_tokens": 60}), run_id="l1")
 
     outputs = [event for event in events if event["type"] == "model" and event["title"] == "子智能体输出"]
-    assert [event["message"] for event in outputs] == ["我应该", "先读技能", "再解析时间"]
-    assert all(event["agent"] == "planner" for event in outputs)
+    assert 0 < len(outputs) < 10, f"攒块没生效：{len(outputs)} 条"
+    assert all(event.get("append") and event.get("streamKey") == "l1" for event in outputs), "块要带合并标记"
+    assert "".join(event["message"] for event in outputs) == "字" * 60, "攒块不能丢字"
 
     done = next(event for event in events if event["title"] == "模型响应完成")
-    assert "输入 120" in done["message"] and "输出 9" in done["message"]
+    assert "输入 120" in done["message"] and "输出 60" in done["message"]
+
+
+def test_each_round_leaves_a_readable_thought():
+    """每轮结束要留一条完整思考：否则「planner 在完善哪一步」对外还是黑盒。"""
+    events = []
+    handler = SubagentTraceCallback(events.append)
+    _enter(handler)
+    handler.on_chat_model_start({}, [[]], run_id="l1")
+    handler.on_llm_new_token("我先读 planning/intent 确认操作类型", run_id="l1")
+    handler.on_llm_end(_response(), run_id="l1")
+
+    # 正文可能走流式（子智能体输出）或补发（子智能体思考），两者有其一即可
+    thoughts = [
+        event for event in events
+        if event.get("type") == "model"
+        and event.get("title") in ("子智能体输出", "子智能体思考")
+        and "planning/intent" in str(event.get("message", ""))
+    ]
+    assert thoughts, "轮次结束应当留下可读的思考正文"
+    assert all(event["agent"] == "planner" for event in thoughts)
+
+
+def test_a_final_answer_is_not_duplicated_as_a_thought():
+    """没有正文的轮次（例如纯工具调用）不该凭空多出一条思考。"""
+    events = []
+    handler = SubagentTraceCallback(events.append)
+    _enter(handler)
+    handler.on_chat_model_start({}, [[]], run_id="l1")
+    handler.on_llm_end(_response(), run_id="l1")
+    # on_chat_model_start 会先发一条「正在等待模型响应」，那是等待提示不是思考正文；
+    # 这里只要求「没有第二轮思考正文」，即正文为空时不再补发
+    bodies = [
+        event for event in events
+        if event["title"] == "子智能体思考" and event.get("message") not in ("正在等待模型响应",)
+    ]
+    assert not bodies, f"空正文的轮次不该补发思考：{bodies}"
 
 
 def _beat_once(handler):

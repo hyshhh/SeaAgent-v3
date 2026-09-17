@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -26,7 +27,12 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 # 标记：告诉回调「现在开始/结束一次委派」，以及委派给谁
 DELEGATION_TOOL = "task"
-# 流式正文在事件里的单条上限（轨迹页是看进度，不是读全文）
+# 计划由 planner 产出：它的模型输出里带 plan 步骤，运行时就地广播成前端清单
+# 流式正文：攒够这么多字符才发一块，避免一个字一条事件把轨迹页刷爆
+FLUSH_CHARS = 48
+# 距上次发送超过这么久也发一块：慢速模型下也要有可见的进度
+FLUSH_SECONDS = 0.8
+# 单块上限（轨迹页是看进度，不是读全文）
 DELTA_LIMIT = 240
 
 
@@ -58,6 +64,25 @@ def _text_of(chunk: Any) -> str:
     return str(content or "")
 
 
+def _json_block_of(text: str) -> Any:
+    """从子智能体的输出里取出 JSON：优先代码块，其次整段。
+
+    模型偶尔会漏掉围栏或前后加话，所以先找 ```json 块，再退化为第一个 {...}。
+    取不到就返回 None，由调用方按散文处理（绝不猜）。
+    """
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    candidate = fenced.group(1) if fenced else None
+    if candidate is None:
+        start, end = text.find("{"), text.rfind("}")
+        candidate = text[start:end + 1] if 0 <= start < end else None
+    if not candidate:
+        return None
+    try:
+        return json.loads(candidate)
+    except (TypeError, ValueError):
+        return None
+
+
 def _preview(value: Any, limit: int = 400) -> Any:
     """回调拿到的输入输出可能是任意对象：能结构化就结构化，否则截断成字符串。"""
     if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
@@ -82,8 +107,12 @@ class SubagentTraceCallback(BaseCallbackHandler):
         self._calls: dict[str, dict[str, Any]] = {}
         # run_id -> 正在等的模型/工具（有心跳的那种）
         self._waiting: dict[str, dict[str, Any]] = {}
-        # 模型流式正文：run_id -> 已累积的文字
+        # 模型流式正文：run_id -> 已累积的文字（整段，on_llm_end 时给出长度）
         self._buffers: dict[str, list[str]] = {}
+        # run_id -> 尚未发出的待发块与发送时间，用于攒批
+        self._pending_text: dict[str, dict[str, Any]] = {}
+        # run_id -> 已经流式发出去的片段，用来判断"正文是否已完整送达"，避免重复补发
+        self._emitted: dict[str, list[dict[str, Any]]] = {}
         self._beater: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -243,27 +272,51 @@ class SubagentTraceCallback(BaseCallbackHandler):
         self._ensure_beater()
 
     def on_llm_new_token(self, token: str, *, run_id: Any = None, **kwargs: Any) -> None:
-        """模型流式输出的每一块：这是「子智能体到底在想什么」的唯一来源。
+        """模型流式输出：攒成块再外发。
 
-        内容会累积起来，但只按块外发（前端逐行追加）—— 轨迹页要的是可见性，
-        不是完整正文；最终正文由 on_llm_end 的摘要给出。
+        逐 token 发事件会把轨迹页刷成「一个字一行」，所以这里先攒：
+        攒够 FLUSH_CHARS 个字符、或距上次发送超过 FLUSH_SECONDS，才发一块。
+        每块带 ``append`` 与 ``streamKey``，前端把同一段输出的块合并进一行。
         """
         agent = self.active
         if not agent or not token:
             return
         call_id = str(run_id or "")
+        now = time.monotonic()
         with self._lock:
             buffer = self._buffers.setdefault(call_id, [])
             buffer.append(str(token))
             # 一旦开始出字，就不再算「等模型响应」——它在动
             self._waiting.pop(call_id, None)
-        chunk = str(token)
+            pending = self._pending_text.setdefault(call_id, {"text": "", "sent_at": now})
+            pending["text"] += str(token)
+            should_flush = len(pending["text"]) >= FLUSH_CHARS or (now - pending["sent_at"]) >= FLUSH_SECONDS
+            chunk = pending["text"] if should_flush else ""
+            if should_flush:
+                pending["text"] = ""
+                pending["sent_at"] = now
+        if chunk:
+            self._emit_text(agent, call_id, chunk)
+
+    def _emit_text(self, agent: str, call_id: str, chunk: str) -> None:
+        with self._lock:
+            self._emitted.setdefault(call_id, []).append({"chars": chunk})
         self.event({
             "type": "model",
             "title": "子智能体输出",
             "message": chunk if len(chunk) <= DELTA_LIMIT else chunk[:DELTA_LIMIT],
             "agent": agent,
+            # 前端据此把同一段输出的多块合并到一行，而不是每块新建一行
+            "append": True,
+            "streamKey": call_id,
         })
+
+    def _flush_pending(self, call_id: str, agent: str) -> None:
+        """把还没发出去的尾巴发掉（模型输出结束时调用）。"""
+        with self._lock:
+            pending = self._pending_text.pop(call_id, None)
+        if pending and pending.get("text"):
+            self._emit_text(agent, call_id, pending["text"])
 
     def on_llm_end(self, response: Any, *, run_id: Any = None, **kwargs: Any) -> None:
         """模型调用收尾：给出正文长度与 token 用量，便于区分「慢」与「死」。"""
@@ -274,13 +327,26 @@ class SubagentTraceCallback(BaseCallbackHandler):
             buffer = self._buffers.pop(call_id, None)
         if not agent:
             return
-        length = len("".join(buffer)) if buffer else 0
+        self._flush_pending(call_id, agent)  # 尾巴也要发出去，否则最后几个字会丢
+        emitted = self._emitted.pop(call_id, [])
+        body = "".join(buffer) if buffer else ""
+        length = len(body)
         usage: dict[str, Any] = {}
         try:
             message = response.generations[0][0].message
             usage = dict(getattr(message, "usage_metadata", None) or {})
         except Exception:
             usage = {}
+        # 本体正文：工具轮里它是"我打算先做什么"的说明，最能看出它在完善哪一步。
+        # 但流式通常已经把它逐块发完了，再补一条就是同一段话出现两次 —— 只在没发全时才补。
+        streamed = sum(len(item.get("chars", "")) for item in emitted)
+        if body.strip() and streamed < len(body.strip()):
+            self.event({
+                "type": "model",
+                "title": "子智能体思考",
+                "message": _preview(body.strip(), 600),
+                "agent": agent,
+            })
         detail = f"模型响应完成（正文 {length} 字"
         if usage:
             detail += f"，输入 {usage.get('input_tokens', '?')} / 输出 {usage.get('output_tokens', '?')} token"
@@ -300,6 +366,7 @@ class SubagentTraceCallback(BaseCallbackHandler):
             self._buffers.pop(call_id, None)
         if not agent:
             return
+        self._flush_pending(call_id, agent)  # 失败前已吐出的内容也别丢
         self.event({
             "type": "status",
             "title": "子智能体模型调用失败",

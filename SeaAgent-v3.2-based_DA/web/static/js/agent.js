@@ -19,6 +19,9 @@ let harnessEvidence = null;
 let harnessEventCount = 0;
 let harnessToolCount = 0;
 const harnessToolCards = new Map();
+// 流式输出按段合并：同一段输出（agent + streamKey）只占一行，后续块追加进正文。
+// 放在顶部是因为重置函数在下面，避免「用在前、声明在后」的时序问题。
+const streamingRows = new Map();
 const harnessSkillNames = new Set();
 let harnessSkillActivityCard = null;
 let qaView = 'chat';           // 主列当前显示的子页：chat（对话）/ trace（轨迹）
@@ -135,6 +138,7 @@ function resetActivityDom() {
   if (summary) summary.textContent = 'Waiting for completion';
   harnessEventCount = 0;
   harnessToolCount = 0;
+  streamingRows.clear();  // 新一轮开始，别把上一段的流式正文接下去
   harnessToolCards.clear();
   harnessSkillNames.clear();
   harnessSkillActivityCard = null;
@@ -713,6 +717,26 @@ function isEvidencePayload(result) {
   return !!result && typeof result === 'object' && ['shownKeyframeIds', 'shownShipSegmentIds', 'shownRegistryReferenceIds'].some((key) => Array.isArray(result[key]));
 }
 
+function appendStreamingEvent(event, kind, icon, label) {
+  const stream = document.getElementById('agentActivityStream');
+  if (!stream) return;
+  const key = `${event.agent || ''}:${event.streamKey || ''}`;
+  const existing = streamingRows.get(key);
+  if (existing && existing.isConnected) {
+    const body = existing.querySelector('.qa-event-message');
+    if (body) body.textContent += event.message || '';
+    return existing;
+  }
+  stream.querySelector('.qa-empty-state')?.remove();
+  const row = document.createElement('article');
+  row.className = `qa-event-row qa-${kind}`;
+  row.dataset.streamKey = key;
+  row.innerHTML = `<span class="qa-event-icon" aria-hidden="true">${icon}</span><div class="qa-event-main"><div class="qa-event-title"><span>${escapeHtml(event.title || label)}</span><em class="qa-event-label">${escapeHtml(label)}${event.agent ? ' · ' + escapeHtml(event.agent) : ''}</em></div><div class="qa-event-message">${escapeHtml(event.message || '')}</div></div><time class="qa-event-meta">${formatEventTime()}</time>`;
+  stream.appendChild(row);
+  streamingRows.set(key, row);
+  return row;
+}
+
 function appendHarnessEvent(event) {
   if (!event || !event.type) return;
   harnessEventCount += 1;
@@ -729,7 +753,12 @@ function appendHarnessEvent(event) {
     if (isEvidencePayload(event.result)) renderEvidence(event.result);
     setHarnessState('Tool complete', 'running');
   } else if (event.type === 'model') {
-    appendStandardEvent(event, 'model', '◌', 'MODEL', event.message || 'Public model step updated');
+    if (event.append && event.streamKey) {
+      // 流式正文：同一段输出合并进一行
+      appendStreamingEvent(event, 'model', '◌', 'MODEL');
+    } else {
+      appendStandardEvent(event, 'model', '◌', 'MODEL', event.message || 'Public model step updated');
+    }
     setHarnessState('Model response', 'running');
   } else if (event.type === 'status') {
     appendStandardEvent(event, 'status', '◈', 'SYSTEM', event.message || 'Harness ready');
