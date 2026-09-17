@@ -678,7 +678,12 @@ function createToolEvent(event) {
   const item = document.createElement('article');
   item.className = 'qa-tool-event is-running';
   item.dataset.callId = callId;
-  item.innerHTML = `<div class="qa-tool-event-head"><span class="qa-event-icon" aria-hidden="true">↗</span><div class="qa-event-main"><div class="qa-event-title"><span>${escapeHtml(tool)}</span><em class="qa-event-label">TOOL</em></div><div class="qa-event-message">${escapeHtml(event.message || 'Tool call submitted')}</div></div><span class="qa-tool-status">Running</span></div><details><summary>View input</summary><pre>${escapeHtml(compact(event.arguments || {}, 1800))}</pre></details>`;
+  // 一个工具调用只占一行：名称 + 参数摘要 + 状态。原来的「图标/标题/说明/折叠块」四层
+  // 让每一次调用占掉三四行，十个调用就刷满一屏。参数放进 <details> 里按需展开。
+  const args = event.arguments && Object.keys(event.arguments).length
+    ? compact(event.arguments, 160).replace(/\s+/g, ' ')
+    : '';
+  item.innerHTML = `<div class="qa-tool-event-head"><span class="qa-tool-dot" aria-hidden="true"></span><span class="qa-tool-name">${escapeHtml(tool)}</span><span class="qa-tool-args">${escapeHtml(args)}</span><span class="qa-tool-status">Running</span></div><details><summary>View input</summary><pre>${escapeHtml(compact(event.arguments || {}, 1800))}</pre></details>`;
   stream.appendChild(item);
   harnessToolCards.set(callId, item);
   harnessToolCount += 1;
@@ -698,9 +703,7 @@ function completeToolEvent(event) {
   target.classList.remove('is-running');
   target.classList.add(failed ? 'is-error' : 'is-complete');
   const status = target.querySelector('.qa-tool-status');
-  if (status) status.textContent = failed ? 'Failed' : 'Complete';
-  const message = target.querySelector('.qa-event-message');
-  if (message) message.textContent = event.message || 'Tool call complete';
+  if (status) status.textContent = failed ? 'Failed' : 'Done';
   const details = target.querySelector('details');
   if (details && event.result !== undefined) {
     details.querySelector('summary').textContent = 'View output';

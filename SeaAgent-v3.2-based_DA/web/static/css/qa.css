@@ -1375,3 +1375,97 @@
 /* 滑杆与读数对齐一点，截图更整齐 */
 #tab-agent-qa .qa-evidence-toolbar { gap: 10px; }
 #tab-agent-qa .qa-evidence-toolbar input[type="range"] { accent-color: var(--qa-ink); }
+
+/* ---------------------------------------------------------------- 工具行（codex 式紧凑 + 流光）
+   一次调用只占一行：圆点 · 名称 · 参数摘要 · 状态。运行中整行有一道高光扫过，
+   替代原来的四层结构（图标/标题/说明/折叠块），十个调用不再刷满一屏。 */
+#tab-agent-qa .qa-tool-event { padding: 0; border-bottom: 1px solid var(--qa-line); }
+
+#tab-agent-qa .qa-tool-event-head {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 2px;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+#tab-agent-qa .qa-tool-dot {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--qa-faint);
+}
+
+#tab-agent-qa .qa-tool-event.is-running .qa-tool-dot { background: var(--qa-ink); animation: qaDotPulse 1s ease-in-out infinite; }
+#tab-agent-qa .qa-tool-event.is-error .qa-tool-dot { background: var(--qa-ink); }
+
+#tab-agent-qa .qa-tool-name { flex: 0 0 auto; font-weight: 600; color: var(--qa-ink); }
+
+#tab-agent-qa .qa-tool-args {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--qa-muted);
+  font: 12px/1.5 Consolas, "SF Mono", Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#tab-agent-qa .qa-tool-status {
+  flex: 0 0 auto;
+  color: var(--qa-muted);
+  font-size: 12px;
+}
+
+#tab-agent-qa .qa-tool-event.is-complete .qa-tool-status { color: var(--qa-ink); }
+
+/* 流光：一道 40% 宽的高光横向扫过，只在运行中出现 */
+#tab-agent-qa .qa-tool-event.is-running .qa-tool-event-head::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(10, 10, 10, .055) 50%, transparent 70%);
+  animation: qaShimmer 1.4s linear infinite;
+}
+
+@keyframes qaShimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes qaDotPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tab-agent-qa .qa-tool-event.is-running .qa-tool-event-head::after { animation: none; opacity: 0; }
+  #tab-agent-qa .qa-tool-event.is-running .qa-tool-dot { animation: none; }
+}
+
+#tab-agent-qa .qa-tool-event details { padding: 0 2px 6px 14px; }
+#tab-agent-qa .qa-tool-event details summary {
+  color: var(--qa-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+#tab-agent-qa .qa-tool-event details pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--qa-line);
+  border-radius: 6px;
+  background: var(--qa-subtle);
+  font: 12px/1.55 Consolas, "SF Mono", Menlo, monospace;
+}
+
+/* 计划项的状态切换加一点过渡，逐项推进时能看出来 */
+#tab-agent-qa .qa-plan-item { transition: color .18s ease, opacity .18s ease; }
+#tab-agent-qa .qa-plan-text { transition: color .18s ease; }
+#tab-agent-qa .qa-plan-mark { transition: color .18s ease; }
