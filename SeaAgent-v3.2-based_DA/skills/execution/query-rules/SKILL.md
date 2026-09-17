@@ -5,6 +5,8 @@ description: "Use before running a tool, to run it the way its domain requires a
 
 # Sea-Video Query Rules
 
+**Never invent a time range.** A window like `[0, ...]` is January 1970 and matches nothing — it looks like a range but guarantees an empty result. If the question gives no time expression, ask the user for one instead of substituting a placeholder, and say in the answer that the range is what you are waiting for.
+
 **Tracks.** Always carry a time window or a page limit; an unfiltered full scan is the most expensive call here. A hull-number filter only matches tracks whose recognition already agreed with that number — empty means "no track was recognised as this hull", never "the vessel was absent". When it comes back empty, change the filter instead of repeating the call.
 
 **Keyframes / dedup.** Per-track work: feed at most about twenty tracks per call. Frames with no vector come back as discarded and a track left with nothing searchable is reported as unsearchable — carry that into the answer rather than dropping the track.

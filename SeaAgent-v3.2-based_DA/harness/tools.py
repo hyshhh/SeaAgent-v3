@@ -43,9 +43,45 @@ def _coerce_string_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
+def _coerce_float_pair(value: Any) -> tuple[float, float]:
+    """Accept JSON strings as well as native arrays for a two-number argument.
+
+    OpenAI-compatible providers occasionally serialize an array-valued tool argument as a JSON
+    string (observed with `time_range`), which would otherwise fail validation with
+    "Input should be a valid tuple" and cost the model a whole wasted tool call. The public
+    contract stays `tuple[float, float]`; this only normalises that transport variation.
+    """
+    import json
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError("expected a pair of numbers")
+        if candidate.startswith("["):
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError as error:
+                raise ValueError("expected a JSON array of two numbers") from error
+        elif "," in candidate:
+            try:
+                value = [float(part) for part in candidate.split(",")]
+            except ValueError as error:
+                raise ValueError("expected two comma-separated numbers") from error
+        else:
+            raise ValueError("expected a pair of numbers, got a single string")
+    if isinstance(value, (list, tuple)):
+        if len(value) != 2:
+            raise ValueError("expected exactly two numbers")
+        try:
+            return (float(value[0]), float(value[1]))
+        except (TypeError, ValueError) as error:
+            raise ValueError("expected two numbers") from error
+    raise ValueError("expected a pair of numbers")
+
+
 def _type_for(spec: dict[str, Any]) -> Any:
     """把 yaml 的类型名映射成 Python 注解；未声明的类型退化为 Any，即不拦截参数。"""
-    return {"string": str, "integer": int, "number": float, "string_list": Annotated[list[str], BeforeValidator(_coerce_string_list)], "tuple_float": tuple[float, float], "json": Any}.get(str(spec.get("type", "json")), Any)
+    return {"string": str, "integer": int, "number": float, "string_list": Annotated[list[str], BeforeValidator(_coerce_string_list)], "tuple_float": Annotated[tuple[float, float], BeforeValidator(_coerce_float_pair)], "json": Any}.get(str(spec.get("type", "json")), Any)
 
 def _build_schema(name: str, arguments: dict[str, Any]):
     """按声明动态生成 pydantic 参数模型，交给 LangChain 当工具的 args_schema。
