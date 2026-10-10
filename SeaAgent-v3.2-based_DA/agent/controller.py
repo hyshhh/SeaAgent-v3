@@ -1,4 +1,4 @@
-"""Thin HTTP/application boundary for the single-agent harness."""
+"""Thin HTTP/application boundary for the evidence-state multi-agent harness."""
 from __future__ import annotations
 
 import logging
@@ -168,6 +168,7 @@ class AgentController:
             "rounds": state.get("rounds") or [],
             "toolChain": state.get("tool_chain") or [],
             "toolRecords": records,
+            "sharedState": state.get("shared_state") or {},
             "executionMode": str(harness_settings.get("execution_mode", "single-agent-harness")),
         }
         if state.get("error"):

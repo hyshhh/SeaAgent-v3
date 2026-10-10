@@ -30,11 +30,13 @@ def test_three_phase_mode_is_switched_by_config_not_by_editing_prompts():
     钉住的是「换形态必须改配置」——不能靠往禁用名单里塞 task 来假装没有委派。
     """
     harness = load_config()["harness"]
-    assert harness["execution_mode"] == "three-phase-subagents"
+    assert harness["execution_mode"] == "evidence-state-multi-agent"
     assert harness["subagents_enabled"] is True
     assert str(harness["subagents_file"]).endswith("subagents.yaml")
-    assert str(harness["planner_prompt_file"]).endswith("planner.md")
     assert "task" not in harness["disabled_deepagent_tools"]
+    assert harness["shared_state_file"]
+    assert int(harness["max_iterations"]) >= 1
+    assert int(harness["reconnect_attempts"]) >= 0
 
 
 def test_model_round_limit_is_gone():

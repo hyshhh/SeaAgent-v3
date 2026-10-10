@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Awaitable, Callable
 from typing import Any, Iterable
 
@@ -34,9 +35,10 @@ def _signature(name: str, arguments: Any) -> str:
 class RepeatToolCallMiddleware(AgentMiddleware):
     """拦截重复的相同调用，返回提示而不是执行。"""
 
-    def __init__(self, exempt: Iterable[str] = ("task",)) -> None:
+    def __init__(self, exempt: Iterable[str] = ("task",), ledger: "CallLedger | None" = None, scope: str = "") -> None:
         self.exempt = {str(name) for name in exempt}
-        self._seen: set[str] = set()
+        self._ledger = ledger or CallLedger()
+        self._scope = str(scope or "")
 
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         blocked = self._blocked_message(request)
@@ -52,8 +54,23 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         if not name or name in self.exempt:
             return None
         key = _signature(name, call.get("args") or {})
-        if key not in self._seen:
-            self._seen.add(key)
+        if self._ledger.first(self._scope, key):
             return None
         # status 用 success：这不是"失败"，只是被跳过；否则会误触发连续失败守卫
         return ToolMessage(content=REPEAT_HINT, tool_call_id=str(call.get("id") or ""), name=name, status="success")
+
+
+class CallLedger:
+    """Thread-safe duplicate ledger shared by all rebuilt agent instances."""
+
+    def __init__(self) -> None:
+        self._seen: set[tuple[str, str]] = set()
+        self._lock = threading.Lock()
+
+    def first(self, scope: str, signature: str) -> bool:
+        key = (str(scope), str(signature))
+        with self._lock:
+            if key in self._seen:
+                return False
+            self._seen.add(key)
+            return True

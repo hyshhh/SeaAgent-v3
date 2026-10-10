@@ -30,6 +30,8 @@ from .thinking_text import strip_thinking
 from .subagent_trace import SubagentTraceCallback
 from .middleware import build_middleware
 from .model import build_model
+from .shared_state import SharedStateStore, SharedTaskState
+from .state_tools import build_state_tools
 from .tools import build_tools
 
 logger = logging.getLogger(__name__)
@@ -150,13 +152,23 @@ class _Trace:
     本类不依赖 agent 的返回值，只吃 stream 的帧：run 与 stream 因此可以共用同一套逻辑。
     """
 
-    def __init__(self, emit: Callable[[dict[str, Any]], None] | None, event_limit: int, evidence_tool: str, tool_labels: dict[str, str] | None = None, subagent_tools: dict[str, str] | None = None):
+    def __init__(
+        self,
+        emit: Callable[[dict[str, Any]], None] | None,
+        event_limit: int,
+        evidence_tool: str,
+        tool_labels: dict[str, str] | None = None,
+        subagent_tools: dict[str, str] | None = None,
+        shared_state: SharedTaskState | None = None,
+    ):
         # —— 输入侧：来自配置与调用方 ——
         self.emit = emit  # 事件外发回调；为 None 时只记账、不广播（离线跑法）
         self.event_limit = event_limit  # 单条事件载荷上限（字符）
         self.evidence_tool = evidence_tool  # 哪个工具的结果算「证据」（配置项 evidence_tool）
         self.tool_labels = tool_labels or {}  # 工具名 -> 中文标签，仅用于展示
         self.subagent_tools = subagent_tools or {}  # 工具名 -> 从智能体名，用于认领命名空间
+        self.shared_state = shared_state
+        self.agent_texts: dict[str, str] = {}
 
         # —— 账本一：回答 ——
         self.messages: list[Any] = []  # 去重后的原始消息，answer 兜底时取最后一条
@@ -300,7 +312,7 @@ class _Trace:
             "completed": done,
         })
 
-    def consume(self, update: Any, namespace: tuple[str, ...] = ()) -> None:
+    def consume(self, update: Any, namespace: tuple[str, ...] = (), agent_name: str = "") -> None:
         """消费一帧 stream 输出，这是本类唯一的入口。
 
         帧有两种形态：裸 state（顶层就有 messages），或 {节点名: state}。这里统一展开成
@@ -321,7 +333,7 @@ class _Trace:
             return
         states = [update] if isinstance(update.get("messages"), list) else list(update.values())
         frames = [state for state in states if isinstance(state, dict)]
-        subagent = self._resolve_subagent(namespace, frames)
+        subagent = str(agent_name or self._resolve_subagent(namespace, frames))
         for state in frames:
             self.consume_skills(state)  # skill 回执可能出现在任一节点的 state 里
             self.consume_todos(state)  # 待办清单同理，可能出现在任一节点的 state 里
@@ -363,6 +375,7 @@ class _Trace:
                     self.rounds.append({"round": round_no, "toolChain": round_tools})
                     self.event({"type": "model", "title": "模型决策", "message": "已选择工具", "tools": round_tools, "agent": subagent})
                 elif kind in {"ai", "assistant"} and _text(message).strip():
+                    self.agent_texts[subagent] = _text(message)
                     if subagent:
                         # 从智能体的文本是它的中间稿：进事件流供人查看，但绝不能成为最终回答，
                         # 也**不剥思考** —— 那一行就是给人看它在想什么的
@@ -390,6 +403,16 @@ class _Trace:
                     # 连续失败计数：成功一次就清零，只有「一直失败」才算失控
                     self.error_streak = self.error_streak + 1 if failed else 0
                     record.update({"tool": effective_name, "label": self.tool_labels.get(effective_name, record.get("label", effective_name)), "result": result, "status": "error" if failed else "completed"})
+                    if (
+                        self.shared_state is not None
+                        and subagent == "executor"
+                        and effective_name not in {
+                            "read_shared_state", "update_execution_state",
+                        }
+                    ):
+                        self.shared_state.record_tool_result(
+                            subagent, effective_name, call_id, result, "error" if failed else "completed"
+                        )
                     if effective_name == "task" and record.get("arguments", {}).get("subagent_type") in self._pending_delegations:
                         # 委派结束：把它从「进行中」摘掉，后续帧不再归到它头上
                         self._pending_delegations.remove(record["arguments"]["subagent_type"])
@@ -477,7 +500,7 @@ class _Trace:
             ),
             "",
         )
-        return {
+        result = {
             "session_id": thread_id,
             answer_field: answer,
             state_field: state,
@@ -490,6 +513,9 @@ class _Trace:
             # 前端证据面板按它一次渲染完（见 harness/evidence.py 的说明）。
             enriched_field: build_evidence_payload(self.records),
         }
+        if self.shared_state is not None:
+            result["shared_state"] = self.shared_state.snapshot()
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -603,23 +629,7 @@ def _read_scope_paths(sources: list[str]) -> list[str]:
 
 
 def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: Any) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    """按 ``config/subagents.yaml`` 装配三阶段从智能体：规划 / 执行 / 反思。
-
-    返回（从智能体规格, 主智能体工具白名单, 主智能体技能组, 主智能体的人工确认配置）。
-
-    几条硬约束都来自 Deep Agents 官方语义：
-      · ``tools`` 不写就继承主智能体全部工具——所以逐个按名字显式取，名字写错就当场报错；
-      · ``skills`` 不继承，不写就一条技能都看不到，需要技能的从智能体必须自己声明组名；
-      · 从智能体默认隔离（只看得到 task 里那段描述），所以 system_prompt 必须自带输出契约，
-        再叠一个 ``response_format`` 让父方直接收到 JSON。
-
-    与旧版主从协同的关键区别：**按阶段切，不按数据切**。执行智能体一个人拿全部领域工具
-    与四个技能组（轨迹 / 先验库 / 视觉 / 执行），不再拆成三个数据分身；规划与反思只拿
-    各自阶段需要的窄工具面。
-
-    主智能体工具白名单（``master_tools``）只留 ``show_evidence``：证据必须回到主事件流，
-    否则前端证据面板永远是空的。
-    """
+    """Load independent planner, executor and reflector specifications."""
     import yaml
 
     from langchain.agents.middleware import ToolCallLimitMiddleware
@@ -633,7 +643,8 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
     raw = yaml.safe_load(spec_path.read_text(encoding="utf-8")) or {}
     by_name = {str(getattr(tool, "name", "")): tool for tool in tools}
     subagents: list[dict[str, Any]] = []
-    for spec in raw.get("subagents") or []:
+    raw_specs = raw.get("agents") or raw.get("subagents") or []
+    for spec in raw_specs:
         name = str(spec.get("name") or "").strip()
         if not name:
             raise ValueError("从智能体缺少 name")
@@ -654,24 +665,18 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
         permissions = _readonly_permissions(scope, permission_type, deny_when_empty=not scope)
         if permissions is not None:
             built["permissions"] = permissions
-        # 从智能体必须自带守卫：框架只给它们 summarization + filesystem + patch_tool_calls，
-        # 主智能体的限流/重复守卫**不会**继承下去。实测缺了这两样时，一个从智能体会用同一份
-        # 参数把同一个工具调到天荒地老（一次委派就是一段无人管的 ReAct）。
+        # 每个独立 Agent 都有自己的调用上限和重复调用守卫。
         built["middleware"] = [
             RepeatToolCallMiddleware(),
-            ToolCallLimitMiddleware(run_limit=max(1, int(harness.get("subagent_tool_calls", 12)))),
+            ToolCallLimitMiddleware(
+                run_limit=max(1, int(harness.get("subagent_tool_calls", 12))),
+                thread_limit=max(1, int(harness.get("tool_calls_per_thread", 400))),
+            ),
         ]
-        # 结构化返回：明确拒绝。框架的实现是把 schema 绑成一个「工具」，而 4B 模型在思考模式下
-        # 会一次回复里调它十几次；框架按 ToolStrategy 默认的 handle_errors=True 反复重试，
-        # 直到烧光这个子智能体的工具预算——对外表现就是「委派卡住」。返回格式改由提示词约定。
         if spec.get("response_format"):
             raise ValueError(
-                f"从智能体 {name} 不该配 response_format（当前值：{spec['response_format']}）。"
-                "框架的结构化返回会被模型重复调用并触发重试死循环；请改在 system_prompt 里约定 JSON 块。"
+                f"Agent {name} 不应配置 response_format；请使用状态更新工具和 JSON 文本契约。"
             )
-        # 人工确认：把 YAML 的 interrupt_on 原样交给框架，它会在编译这个从智能体时
-        # 自动加上 HumanInTheLoopMiddleware（见 deepagents graph.py 的 interrupt_on 处理）。
-        # 漏搬这一个字段的表现是「配了也不中断」——写库会直接执行，没有任何确认。
         interrupt_on = spec.get("interrupt_on")
         if isinstance(interrupt_on, dict) and interrupt_on:
             built["interrupt_on"] = interrupt_on
@@ -680,9 +685,9 @@ def _load_subagents(config: dict[str, Any], tools: list[Any], permission_type: A
         raise ValueError(f"开启了三阶段协同但 {spec_path} 里没有 subagents")
     return (
         subagents,
-        [str(item) for item in (raw.get("master_tools") or [])],
-        [str(item) for item in (raw.get("master_skills") or [])],
-        raw.get("interrupt_on") if isinstance(raw.get("interrupt_on"), dict) else {},
+        [],
+        [],
+        {},
     )
 
 
@@ -692,46 +697,62 @@ def _filesystem_permissions(harness: dict[str, Any], permission_type: Any) -> li
 
 
 class SeaVideoHarness:
-    """Build and run one Deep Agents main agent with configured tools and middleware.
-
-    一个实例对应一次运行：构造时就把 agent 装好，``run`` / ``stream`` 结束后释放
-    SQLite 检查点连接（也可用 with 语句托管）。
-    """
+    """Run three independent agents over one versioned shared task state."""
 
     def __init__(self, config: dict[str, Any], service: Any, model: Any = None, event_handler: Callable[[dict[str, Any]], None] | None = None):
         self.config = config
         self.service = service
         self.event_handler = event_handler
-        # 只有带 bind_tools 的对象才算可用模型；注入无效时回退到配置构建，不静默接受
         self.model = model if model is not None and callable(getattr(model, "bind_tools", None)) else build_model(config)
         self.tools = build_tools(config, service)
         harness = config.get("harness", {})
-        # 三阶段协同：规划 / 执行 / 反思各挂一个从智能体，主智能体只规划、委派与落证据。
-        # 关掉开关即退回单智能体（不传 subagents ⇒ 根本没有 task 工具），三阶段由主智能体自己跑。
-        self.subagents, master_tools, master_skills, self.master_interrupts = ([], [], [], {})
-        if harness.get("subagents_enabled"):
-            from deepagents import FilesystemPermission
+        self.shared_enabled = bool(harness.get("subagents_enabled", True))
+        from .tool_guard import CallLedger
 
-            self.subagents, master_tools, master_skills, self.master_interrupts = _load_subagents(config, self.tools, FilesystemPermission)
-        self.agent_tools = [tool for tool in self.tools if str(getattr(tool, "name", "")) in master_tools] if self.subagents else self.tools
-        # 协同时主智能体改读「规划者」提示词：它只规划、委派与汇总，不亲自查数据。
-        prompt_file = str(harness.get("planner_prompt_file", "harness/planner.md")) if self.subagents else str(harness.get("system_prompt_file", "harness/system.md"))
-        prompt_path = project_root() / prompt_file
-        self.system_prompt = prompt_path.read_text(encoding="utf-8")  # 系统提示词是文件而非配置项
-        # 技能分组：单智能体读全部组；三阶段协同时只读 master_skills 指定的组，
-        # 且**空列表就是"不挂技能"**——不能再 or 一个兜底，否则空配置会被当成未配置，
-        # 主智能体又把所有技能组挂回去（这正是"技能读不完"屡修不止的原因）。
-        if self.subagents:
-            groups = master_skills
-        else:
-            groups = [path.name for path in sorted((project_root() / str(harness.get("skills_dir", "skills"))).iterdir()) if path.is_dir()]
-        self.skill_sources = _skill_sources(harness, groups)
+        self._call_ledger = CallLedger()
+        self.state_store = SharedStateStore(project_root() / str(
+            harness.get("shared_state_file", "data/memory/shared_task_state.json")
+        ))
+        self.shared_state: SharedTaskState | None = None
+        self.subagents: list[dict[str, Any]] = []
+        self.agent_specs: dict[str, dict[str, Any]] = {}
+        self.agents: dict[str, Any] = {}
+        self.agent = None
         self._connection: sqlite3.Connection | None = None
-        self._released = False  # 跑完一轮后连接已释放，恢复时要重新装配 agent
-        self.agent = self._build_agent()  # 构造即装配，后续多次调用共用同一 agent
+        self._released = False
+        self._pending_agent = "executor"
+        if getattr(self, "shared_enabled", False):
+            self._prepare_specs()
+            self._build_agents()
+        else:
+            self._build_legacy_agent()
+            self.agent = self.agents["executor"]
 
-    def _build_agent(self) -> Any:
-        """装配主智能体：注册 harness profile、开检查点、挂 skills，最后交给 create_deep_agent。"""
+    def _prepare_specs(self) -> None:
+        from deepagents import FilesystemPermission
+
+        self.subagents, _, _, _ = _load_subagents(
+            self.config,
+            self.tools + build_state_tools(SharedTaskState("")),
+            FilesystemPermission,
+        )
+        self.agent_specs = {str(item["name"]): item for item in self.subagents}
+        missing = {"planner", "executor", "reflector"} - set(self.agent_specs)
+        if missing:
+            raise ValueError(f"三阶段协同缺少 Agent：{', '.join(sorted(missing))}")
+
+    def _open_checkpoint(self) -> Any:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        checkpoint = project_root() / str(
+            self.config.get("harness", {}).get("checkpointer", "data/memory/checkpoints.sqlite")
+        )
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        if self._connection is None:
+            self._connection = sqlite3.connect(str(checkpoint), check_same_thread=False)
+        return SqliteSaver(self._connection)
+
+    def _build_agent_graph(self, name: str, state: SharedTaskState) -> Any:
         try:
             from deepagents import (
                 FilesystemPermission,
@@ -741,61 +762,96 @@ class SeaVideoHarness:
                 register_harness_profile,
             )
             from deepagents.backends import FilesystemBackend
-            from langgraph.checkpoint.sqlite import SqliteSaver
         except ModuleNotFoundError as error:
             if error.name == "deepagents":
-                raise RuntimeError(
-                    "缺少 deepagents 依赖，请使用启动服务的同一 Python 执行 "
-                    "python -m pip install -e ."
-                ) from error
+                raise RuntimeError("缺少 deepagents 依赖，请安装项目生产依赖") from error
             raise
 
+        spec = self.agent_specs[name]
+        tools_by_name = {
+            str(getattr(tool, "name", "")): tool
+            for tool in self.tools + build_state_tools(state)
+        }
+        selected = [tools_by_name[str(getattr(item, "name", item))] for item in spec["tools"]]
         harness = self.config.get("harness", {})
-        # 检查点连接由实例自己持有，run/stream 结束时统一 close()，避免句柄泄漏
-        checkpoint = project_root() / str(harness.get("checkpointer", "data/memory/checkpoints.sqlite"))
-        checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(str(checkpoint), check_same_thread=False)
-        saver = SqliteSaver(self._connection)
-        # 「单智能体」在这里固化：禁用写入与 shell 工具、关掉通用子智能体，
-        # 使 ReAct 循环只发生在主智能体内部。profile 以 openai:<模型名> 为键注册，
-        # 若改了 llm.model 却没同步这个键，上述禁用会静默失效。
-        disabled_tools = frozenset(str(item) for item in (harness.get("disabled_deepagent_tools") or []))
-        profile = HarnessProfile(excluded_tools=disabled_tools, general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False))
+        sources = list(spec.get("skills") or [])
+        permissions = _readonly_permissions(
+            _read_scope_paths(sources),
+            FilesystemPermission,
+            deny_when_empty=True,
+        )
+        profile = HarnessProfile(
+            excluded_tools=frozenset(str(item) for item in (harness.get("disabled_deepagent_tools") or [])),
+            general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+        )
         model_name = str(self.config.get("llm", {}).get("model", ""))
         if model_name:
             register_harness_profile(f"openai:{model_name}", profile)
-        # FilesystemBackend 把项目根暴露成虚拟文件系统，skills 才能按需读到 SKILL.md
-        backend = FilesystemBackend(root_dir=project_root())
-        # 读取工具（read_file / ls / glob / grep）留给模型，否则框架的 skills 渐进式披露
-        # 断在第二步——它能看见技能名与 description，却打不开 SKILL.md 正文。开放的同时用权限
-        # 规则把读取面收敛到白名单：协同模式下主智能体没挂技能 ⇒ 一律拒绝（它没有要读的文件）；
-        # 单智能体模式走 harness.readonly_paths（默认只放 /skills）。
-        if self.subagents:
-            permissions = _readonly_permissions(_read_scope_paths(self.skill_sources), FilesystemPermission, deny_when_empty=True)
-        else:
-            permissions = _filesystem_permissions(harness, FilesystemPermission)
-        # 渐进式披露：技能源按组交给框架。协同时主智能体默认**不挂**技能（master_skills 为空），
-        # 它的规则全在 planner.md 里——4B 模型看到技能目录会把"把技能读完"当成任务本身。
-        skills_attached = bool(self.skill_sources)
+        return create_deep_agent(
+            model=self.model,
+            tools=selected,
+            system_prompt=str(spec["system_prompt"]),
+            skills=sources or None,
+            backend=FilesystemBackend(root_dir=project_root()),
+            permissions=permissions,
+            interrupt_on=spec.get("interrupt_on") or None,
+            middleware=build_middleware(
+                self.config,
+                self.model,
+                skills_attached=bool(sources),
+                evidence_tool="show_evidence" if name == "reflector" else "",
+                repeat_ledger=self._call_ledger,
+                agent_name=name,
+                tool_limit=int(harness.get("subagent_tool_calls", 12)),
+            ),
+            checkpointer=self._open_checkpoint(),
+            name=f"sea_video_{name}",
+        )
+
+    def _build_agents(self) -> None:
+        state = self.shared_state or SharedTaskState("")
+        self.agents = {name: self._build_agent_graph(name, state) for name in self.agent_specs}
+        self._released = False
+
+    def _build_legacy_agent(self) -> None:
         try:
-            return create_deep_agent(
-                model=self.model,
-                tools=self.agent_tools,
-                system_prompt=self.system_prompt,
-                skills=self.skill_sources or None,
-                backend=backend,
-                permissions=permissions,
-                subagents=self.subagents or None,
-                # 人工确认：主智能体现在直接持有写入工具，中断要配在它身上
-                interrupt_on=self.master_interrupts or None,
-                middleware=build_middleware(self.config, self.model, skills_attached=skills_attached),
-                checkpointer=saver,
-                name="sea_video_harness",
+            from deepagents import (
+                FilesystemPermission,
+                GeneralPurposeSubagentProfile,
+                HarnessProfile,
+                create_deep_agent,
+                register_harness_profile,
             )
-        except Exception:
-            logger.exception("Harness assembly failed")
-            self.close()
+            from deepagents.backends import FilesystemBackend
+        except ModuleNotFoundError as error:
+            if error.name == "deepagents":
+                raise RuntimeError("缺少 deepagents 依赖，请安装项目生产依赖") from error
             raise
+
+        harness = self.config.get("harness", {})
+        profile = HarnessProfile(
+            excluded_tools=frozenset(str(item) for item in (harness.get("disabled_deepagent_tools") or [])),
+            general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+        )
+        model_name = str(self.config.get("llm", {}).get("model", ""))
+        if model_name:
+            register_harness_profile(f"openai:{model_name}", profile)
+        skills_dir = project_root() / str(harness.get("skills_dir", "skills"))
+        sources = _skill_sources(harness, [path.name for path in sorted(skills_dir.iterdir()) if path.is_dir()])
+        self.agent_tools = self.tools
+        self.skill_sources = sources
+        self.agent = create_deep_agent(
+            model=self.model,
+            tools=self.tools,
+            system_prompt=(project_root() / str(harness.get("system_prompt_file", "harness/system.md"))).read_text(encoding="utf-8"),
+            skills=sources or None,
+            backend=FilesystemBackend(root_dir=project_root()),
+            permissions=_filesystem_permissions(harness, FilesystemPermission),
+            middleware=build_middleware(self.config, self.model, skills_attached=bool(sources)),
+            checkpointer=self._open_checkpoint(),
+            name="sea_video_harness",
+        )
+        self.agents = {"executor": self.agent}
 
     def _start_heartbeat(self, trace: _Trace, question: str) -> Any:
         """跑起来之后每隔一段时间报一次「还在跑」。
@@ -858,6 +914,143 @@ class SeaVideoHarness:
         if isinstance(values, dict):
             trace.consume_skills(values)
             trace.consume_todos(values)
+
+    def _agent_prompt(self, role: str, question: str) -> str:
+        state = json.dumps(self.shared_state.snapshot(), ensure_ascii=False, default=str)
+        return (
+            f"用户问题：{question}\n"
+            f"当前角色：{role}\n"
+            f"共享任务状态（先读工具确认，下面只是启动快照）：\n{state}\n"
+            "只维护你负责的状态字段，完成后必须调用对应的状态更新工具。"
+        )
+
+    def _reconnect_agent(self, role: str) -> None:
+        """Rebuild one agent while keeping its checkpoint and shared state."""
+        if not self.shared_state:
+            return
+        self.agents[role] = self._build_agent_graph(role, self.shared_state)
+        self.agent = self.agents.get("executor")
+
+    def _run_agent_steps(
+        self,
+        role: str,
+        question: str,
+        thread_id: str,
+        trace: _Trace,
+        cancel: Any = None,
+        resume_payload: Any = None,
+    ) -> Iterator[None]:
+        harness = self.config.get("harness", {})
+        retries = max(0, int(harness.get("reconnect_attempts", 2)))
+        backoff = max(0.0, float(harness.get("reconnect_backoff_seconds", 1.0)))
+        timeout = float(harness.get("delegation_timeout_seconds", 0) or 0)
+        payload = resume_payload or {"messages": [{"role": "user", "content": self._agent_prompt(role, question)}]}
+        agent_thread = f"{thread_id}:{role}"
+        attempt = 0
+        while True:
+            started = time.monotonic()
+            try:
+                agent = self.agents[role]
+                for frame in agent.stream(
+                    payload,
+                    config={"configurable": {"thread_id": agent_thread}},
+                    stream_mode=harness.get("stream_mode", "updates"),
+                    subgraphs=False,
+                ):
+                    if cancel is not None and cancel.is_set():
+                        self.shared_state.runtime_update({"task_status": "cancelled", "pending_agent": role})
+                        self.state_store.save(thread_id, self.shared_state)
+                        return {"state": "cancelled"}
+                    if timeout > 0 and time.monotonic() - started > timeout:
+                        self.shared_state.runtime_update({"task_status": "stalled", "pending_agent": role})
+                        self.state_store.save(thread_id, self.shared_state)
+                        return {"state": "delegation_timeout", "subagent": role, "stalled_seconds": int(time.monotonic() - started)}
+                    interrupts = _interrupt_payload(frame)
+                    if interrupts:
+                        self._pending_agent = role
+                        self.shared_state.runtime_update({"task_status": "awaiting_confirmation", "pending_agent": role})
+                        self.state_store.save(thread_id, self.shared_state)
+                        return {"state": "awaiting_confirmation", "confirmation": _confirmation_from(interrupts)}
+                    trace.consume(frame, agent_name=role)
+                    if len(trace.records) >= int(harness.get("tool_calls_per_run", 40)):
+                        return {"state": "stalled", "reason": "本轮工具调用已达到上限"}
+                    self.state_store.save(thread_id, self.shared_state)
+                    yield None
+                text = trace.agent_texts.get(role, "")
+                self.shared_state.apply_agent_text(role, text)
+                self.shared_state.runtime_update({"pending_agent": None})
+                self.state_store.save(thread_id, self.shared_state)
+                return {"state": "completed"}
+            except Exception as error:
+                if attempt >= retries:
+                    logger.exception("Agent failed: role=%s thread_id=%s", role, thread_id)
+                    return {"state": "error", "error": error}
+                attempt += 1
+                trace.event({
+                    "type": "status",
+                    "title": "Agent 正在重连",
+                    "message": f"{role} 第 {attempt} 次重连",
+                    "agent": role,
+                })
+                yield None
+                if backoff:
+                    time.sleep(backoff * attempt)
+                self._reconnect_agent(role)
+                payload = {"messages": [{"role": "user", "content": self._agent_prompt(role, question)}]}
+
+    def _drive_multi_steps(
+        self,
+        question: str,
+        thread_id: str,
+        trace: _Trace,
+        cancel: Any = None,
+        resume_payload: Any = None,
+    ) -> Iterator[None]:
+        harness = self.config.get("harness", {})
+        max_iterations = max(1, int(harness.get("max_iterations", 4)))
+        if self.shared_state is None:
+            return {"state": "error", "error": RuntimeError("shared state is not initialized")}
+        self.shared_state.runtime_update({
+            "question": question or self.shared_state.snapshot().get("question", ""),
+            "task_status": "running",
+            "pending_agent": self._pending_agent,
+        })
+        start_role = self._pending_agent if resume_payload is not None else "planner"
+        for iteration in range(max_iterations):
+            self.shared_state.runtime_update({"iteration": iteration + 1, "pending_agent": start_role})
+            roles = ["planner", "executor", "reflector"]
+            if resume_payload is not None:
+                roles = [start_role, "reflector"]
+            for role in roles:
+                trace.event({
+                    "type": "status",
+                    "title": f"{role} 开始工作",
+                    "message": "读取共享状态并维护负责字段",
+                    "agent": role,
+                })
+                payload = resume_payload if role == start_role and resume_payload is not None else None
+                outcome = yield from self._run_agent_steps(role, question, thread_id, trace, cancel, payload)
+                if outcome["state"] != "completed":
+                    return outcome
+                start_role = "planner"
+            decision = str(self.shared_state.snapshot().get("decision") or "replan").lower()
+            if decision == "terminate":
+                self.shared_state.runtime_update({"task_status": "completed", "pending_agent": None})
+                return {"state": "completed"}
+            if decision == "failed":
+                self.shared_state.runtime_update({"task_status": "failed", "pending_agent": None})
+                return {"state": "stalled", "reason": "反思阶段判定任务无法继续"}
+            self.shared_state.runtime_update({"task_status": "running", "pending_agent": "planner"})
+        self.shared_state.runtime_update({"task_status": "stalled", "pending_agent": None})
+        return {"state": "stalled", "reason": f"已达到最大迭代次数 {max_iterations}"}
+
+    @staticmethod
+    def _consume_driver(driver: Iterator[None]) -> dict[str, Any]:
+        while True:
+            try:
+                next(driver)
+            except StopIteration as stopped:
+                return stopped.value if isinstance(stopped.value, dict) else {"state": "error", "error": RuntimeError("运行结果为空")}
 
     def _drive(self, payload: Any, thread_id: str, trace: _Trace, cancel: Any = None) -> dict[str, Any]:
         """把一次 agent.stream 跑完：消费帧、发事件、按失控阈值收尾。
@@ -935,23 +1128,33 @@ class SeaVideoHarness:
         # thread_id 同时是检查点的会话键：复用同一 id 即续接历史，缺省则视为全新问答
         thread_id = thread_id or uuid.uuid4().hex
         harness = self.config.get("harness", {})
+        if getattr(self, "shared_enabled", False):
+            self.shared_state = self.state_store.load(thread_id, question)
+            if self.shared_state.snapshot().get("question") != str(question or ""):
+                self.shared_state = SharedTaskState(str(question or ""))
+            self._build_agents()
         trace = _Trace(
             self.event_handler,
             int(harness.get("event_payload_max_chars", 4000)),
             str(harness.get("evidence_tool", "")),
             _tool_labels(self.config),
             self._subagent_tool_owners(),
+            self.shared_state,
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
         self._seed_skills_from_checkpoint(trace, thread_id)
         heartbeat = self._start_heartbeat(trace, question)
         try:
-            outcome = self._drive({"messages": [{"role": "user", "content": question}]}, thread_id, trace, cancel)
+            if getattr(self, "shared_enabled", False):
+                driver = self._drive_multi_steps(question, thread_id, trace, cancel)
+                outcome = self._consume_driver(driver)
+            else:
+                outcome = self._drive({"messages": [{"role": "user", "content": question}]}, thread_id, trace, cancel)
         finally:
             if heartbeat is not None:
                 heartbeat.set()
             self.close()
-        return self._finish(trace, thread_id, outcome)
+        return self._finish(trace, thread_id, outcome if isinstance(outcome, dict) else {"state": "error", "error": RuntimeError("运行结果为空")})
 
     def resume(self, decision: str, thread_id: str, feedback: str = "", cancel: Any = None) -> dict[str, Any]:
         """人工拍板后继续上一轮：批准则执行那个工具，拒绝则把理由交回模型换个做法。
@@ -966,35 +1169,61 @@ class SeaVideoHarness:
             raise ValueError(f"decision 只能是 approve 或 reject，收到：{decision!r}")
         thread_id = thread_id or uuid.uuid4().hex
         harness = self.config.get("harness", {})
+        if getattr(self, "shared_enabled", False):
+            self.shared_state = self.state_store.load(thread_id)
+            self._build_agents()
         trace = _Trace(
             self.event_handler,
             int(harness.get("event_payload_max_chars", 4000)),
             str(harness.get("evidence_tool", "")),
             _tool_labels(self.config),
             self._subagent_tool_owners(),
+            self.shared_state,
         )
         trace.event({"type": "status", "title": "Harness 已启动", "message": "已挂载 Skills、工具和记忆检查点"})
         self._seed_skills_from_checkpoint(trace, thread_id)
         self._resume_agent()
         heartbeat = self._start_heartbeat(trace, "resume")
         try:
-            outcome = self._drive(_resume_command(normalized, feedback), thread_id, trace, cancel)
+            if getattr(self, "shared_enabled", False):
+                driver = self._drive_multi_steps(
+                    str(self.shared_state.snapshot().get("question") or "人工确认后继续"),
+                    thread_id,
+                    trace,
+                    cancel,
+                    _resume_command(normalized, feedback),
+                )
+                outcome = self._consume_driver(driver)
+            else:
+                outcome = self._drive(_resume_command(normalized, feedback), thread_id, trace, cancel)
         finally:
             if heartbeat is not None:
                 heartbeat.set()
             self.close()
-        return self._finish(trace, thread_id, outcome)
+        return self._finish(trace, thread_id, outcome if isinstance(outcome, dict) else {"state": "error", "error": RuntimeError("运行结果为空")})
 
     def _resume_agent(self) -> None:
         """恢复前重新装配 agent：上一轮结束时检查点连接已释放。"""
         if getattr(self, "_released", False):
-            self.agent = self._build_agent()
+            if getattr(self, "shared_enabled", False):
+                self._build_agents()
+            else:
+                self._build_legacy_agent()
             self._released = False
 
     def _finish(self, trace: _Trace, thread_id: str, outcome: dict[str, Any]) -> dict[str, Any]:
         """run / stream / resume 三条路径共用的收尾：把驱动结果翻成对外事件与结果。"""
         harness = self.config.get("harness", {})
         state = outcome.get("state")
+        if self.shared_state is not None:
+            current = self.shared_state.snapshot()
+            assessment = current.get("assessment") if isinstance(current.get("assessment"), dict) else {}
+            trace.answer = str(
+                assessment.get("final_answer")
+                or assessment.get("summary")
+                or trace.answer
+                or ""
+            )
         if state == "awaiting_confirmation":
             result = trace.result(thread_id, self.config, state="awaiting_confirmation")
             result["confirmation"] = outcome.get("confirmation") or {}
@@ -1052,12 +1281,61 @@ class SeaVideoHarness:
         trace.event({"type": "complete", "title": "Harness 完成", "message": "回答与证据已生成", "result": result})
         return result
 
+    def _stream_multi(self, question: str, thread_id: str) -> Iterator[dict[str, Any]]:
+        harness = self.config.get("harness", {})
+        self.shared_state = self.state_store.load(thread_id, question)
+        if self.shared_state.snapshot().get("question") != str(question or ""):
+            self.shared_state = SharedTaskState(str(question or ""))
+        self._build_agents()
+        pending: list[dict[str, Any]] = []
+
+        def emit(event: dict[str, Any]) -> None:
+            pending.append(event)
+            if self.event_handler:
+                self.event_handler(event)
+
+        trace = _Trace(
+            emit,
+            int(harness.get("event_payload_max_chars", 4000)),
+            str(harness.get("evidence_tool", "")),
+            _tool_labels(self.config),
+            self._subagent_tool_owners(),
+            self.shared_state,
+        )
+        trace.event({"type": "status", "title": "Harness 已启动", "message": "三 Agent 已连接共享状态"})
+        heartbeat = self._start_heartbeat(trace, question)
+        driver = self._drive_multi_steps(question, thread_id, trace)
+        try:
+            while True:
+                try:
+                    next(driver)
+                except StopIteration as stopped:
+                    outcome = stopped.value if isinstance(stopped.value, dict) else {"state": "error", "error": RuntimeError("运行结果为空")}
+                    break
+                while pending:
+                    yield pending.pop(0)
+            result = self._finish(trace, thread_id, outcome)
+            while pending:
+                yield pending.pop(0)
+        except Exception as error:
+            logger.exception("Harness multi-agent stream failed: thread_id=%s", thread_id)
+            result = trace.result(thread_id, self.config, state="error")
+            result["error"] = _error_message(error, trace.event_limit)
+            yield {"type": "error", "title": "Harness 执行失败", "message": result["error"], "result": result}
+        finally:
+            if heartbeat is not None:
+                heartbeat.set()
+            self.close()
+
     def stream(self, question: str, thread_id: str | None = None) -> Iterator[dict[str, Any]]:
         """Yield the same public event contract as ``run`` without raw model state.
 
         与 run 的差别只在交付方式：事件边产生边 yield，适合 NDJSON / SSE 推送。
         """
         thread_id = thread_id or uuid.uuid4().hex
+        if getattr(self, "shared_enabled", False):
+            yield from self._stream_multi(question, thread_id)
+            return
         harness = self.config.get("harness", {})
         # _Trace 的回调是同步的，而本函数是生成器：事件先入队，再在 yield 点按序吐出
         pending: list[dict[str, Any]] = []

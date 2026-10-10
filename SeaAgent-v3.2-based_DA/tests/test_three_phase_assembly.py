@@ -66,39 +66,38 @@ def _runtime(tmp_path):
 # ---------------------------------------------------------------- 三个阶段的形状
 
 
-def test_two_subagents_beside_the_executing_main_agent():
-    """主智能体本人就是执行者，所以只有规划与反思两个从智能体。"""
+def test_three_independent_agents_are_loaded():
+    """Planner、Executor、Reflector 都是独立 Agent。"""
     subagents, _, _ = _specs()
-    assert [spec["name"] for spec in subagents] == ["planner", "reflector"]
+    assert [spec["name"] for spec in subagents] == ["planner", "executor", "reflector"]
 
 
-def test_the_main_agent_is_the_executor():
-    """主智能体 = 执行者：全部领域工具 + 执行类技能都在它手里，不再多一层委派。"""
-    _, master_tools, master_skills = _specs()
-    configured = [str(item["name"]) for item in load_config()["tools"]]
-    # 顺序无关：配置里 show_evidence 排在业务工具之前
-    assert sorted(master_tools) == sorted(configured), "主智能体应当拿全部领域工具"
-    assert len(configured) == 12
-    assert "add_registry_vessel" in master_tools, "写库工具也在执行者手里"
-    assert master_skills == ["execution", "track", "registry", "visual", "answer"]
+def test_executor_owns_domain_tools():
+    """Executor 独立持有领域工具，主 Agent 不再承载执行阶段。"""
+    subagents, master_tools, master_skills = _specs()
+    executor = _by_name(subagents)["executor"]
+    configured = {str(item["name"]) for item in load_config()["tools"]}
+    assert {str(tool.name) for tool in executor["tools"]} == configured - {"show_evidence"}
+    assert master_tools == []
+    assert master_skills == []
 
 
 def test_planner_plans_without_touching_data():
     """规划阶段只解析意图与验收清单，不拿任何领域工具。"""
     subagents, _, _ = _specs()
     planner = _by_name(subagents)["planner"]
-    assert planner["tools"] == []
+    assert [str(tool.name) for tool in planner["tools"]] == ["read_shared_state", "update_planner_state"]
     assert planner["skills"] == ["/skills/planning"]
-    assert "```json" in planner["system_prompt"], "规划阶段要约定返回的 JSON 块"
+    assert "JSON" in planner["system_prompt"], "规划阶段要约定返回的 JSON 块"
 
 
 def test_reflector_audits_and_lands_the_evidence():
     """反思阶段要能落证据（show_evidence）并查库核对，返回验收判定契约。"""
     subagents, _, _ = _specs()
     reflector = _by_name(subagents)["reflector"]
-    assert [str(tool.name) for tool in reflector["tools"]] == ["show_evidence", "get_registry", "list_registry"]
+    assert [str(tool.name) for tool in reflector["tools"]] == ["read_shared_state", "update_reflection_state", "show_evidence", "get_registry", "list_registry"]
     assert reflector["skills"] == ["/skills/reflection", "/skills/answer"]
-    assert "```json" in reflector["system_prompt"], "反思阶段要约定返回的 JSON 块"
+    assert "JSON" in reflector["system_prompt"], "反思阶段要约定返回的 JSON 块"
 
 
 def test_no_phase_uses_structured_response_format():
@@ -136,22 +135,21 @@ def test_each_phase_carries_its_own_guards_and_read_scope():
 
 
 def test_the_reflector_keeps_its_narrow_tool_set():
-    """反思阶段只拿证据与查库工具；show_evidence 主智能体也持有（证据要落到主事件流）。"""
+    """反思阶段只拿状态、证据和查库工具。"""
     subagents, master_tools, _ = _specs()
     reflector = _by_name(subagents)["reflector"]
-    assert [str(tool.name) for tool in reflector["tools"]] == ["show_evidence", "get_registry", "list_registry"]
-    assert "show_evidence" in master_tools
+    assert [str(tool.name) for tool in reflector["tools"]] == ["read_shared_state", "update_reflection_state", "show_evidence", "get_registry", "list_registry"]
+    assert master_tools == []
 
 
-def test_master_assembly_carries_the_domain_tools(tmp_path):
-    """装配结果：主智能体拿全领域工具与执行类技能，中断配置也在它身上。"""
+def test_three_agent_assembly_has_no_master_executor(tmp_path):
+    """三个角色独立存在，写库中断配置挂在 executor 上。"""
     runtime = _runtime(tmp_path)
     try:
-        configured = [str(item["name"]) for item in load_config()["tools"]]
-        assert [str(tool.name) for tool in runtime.agent_tools] == configured
-        assert runtime.skill_sources == ["/skills/execution", "/skills/track", "/skills/registry", "/skills/visual", "/skills/answer"]
-        assert runtime.master_interrupts == {"add_registry_vessel": {"allowed_decisions": ["approve", "reject"]}}
-        assert [spec["name"] for spec in runtime.subagents] == ["planner", "reflector"]
+        assert set(runtime.agents) == {"planner", "executor", "reflector"}
+        executor = _by_name(runtime.subagents)["executor"]
+        assert executor["interrupt_on"] == {"add_registry_vessel": {"allowed_decisions": ["approve", "reject"]}}
+        assert [spec["name"] for spec in runtime.subagents] == ["planner", "executor", "reflector"]
     finally:
         runtime.close()
 

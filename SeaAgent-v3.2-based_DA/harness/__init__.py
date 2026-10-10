@@ -1,12 +1,19 @@
-"""Sea-Video-Harness public API.
-
-harness 包对外的唯一出口：主类 SeaVideoHarness、一次性入口 run_harness，
-以及三个可独立装配的构建函数（模型 / 工具 / 中间件）。拆开导出是为了测试时能单独替换，
-而不必起一个完整 harness。
-"""
-from .middleware import build_middleware
-from .model import build_model
-from .runtime import SeaVideoHarness, run_harness
-from .tools import build_tools
+"""Public harness API with lazy imports for lightweight state/config tooling."""
 
 __all__ = ["SeaVideoHarness", "build_middleware", "build_model", "build_tools", "run_harness"]
+
+
+def __getattr__(name: str):
+    if name == "SeaVideoHarness" or name == "run_harness":
+        from .runtime import SeaVideoHarness, run_harness
+        return SeaVideoHarness if name == "SeaVideoHarness" else run_harness
+    if name == "build_middleware":
+        from .middleware import build_middleware
+        return build_middleware
+    if name == "build_model":
+        from .model import build_model
+        return build_model
+    if name == "build_tools":
+        from .tools import build_tools
+        return build_tools
+    raise AttributeError(name)
