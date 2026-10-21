@@ -16,3 +16,14 @@ def test_tools_are_config_driven():
     ]
     result = tools[0].invoke({"time_range": [1.0, 2.0], "hull_number": "0857"})
     assert result["kwargs"] == {"timeRange": (1.0, 2.0), "hullNumber": "0857", "offset": 0, "limit": 0}
+
+
+def test_match_text_requires_and_explains_its_gallery():
+    tools = {tool.name: tool for tool in build_tools(load_config(), Service())}
+    tool = tools["match_text"]
+    schema = tool.args_schema.model_json_schema()
+
+    assert "gallery_images" in schema["required"]
+    assert "keyframes" in schema["properties"]["gallery_images"]["description"]
+    assert "registryReferences" in schema["properties"]["gallery_images"]["description"]
+    assert "不得只传 description" in tool.description

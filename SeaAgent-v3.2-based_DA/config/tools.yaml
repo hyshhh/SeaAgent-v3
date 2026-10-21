@@ -48,10 +48,23 @@ tools:
   - name: match_text
     label: 文本检索
     method: matchText
-    description: 用外观描述检索先验库或关键帧图像。
+    description: >-
+      按外观描述检索一个明确且非空的图像集合。检索视频证据前先 get_frames，
+      并把返回的 keyframes 作为 gallery_images；检索先验库前先 list_registry
+      或 get_registry，并把 registryReferences 作为 gallery_images。
+      不得只传 description，不得混用视频关键帧与先验库参考图，也不得使用空图库调用。
     arguments:
-      description: {type: string, required: true}
-      gallery_images: {type: json, required: false, target: galleryImages}
+      description:
+        type: string
+        required: true
+        description: 要检索的外观描述，例如“黄色无人艇”。
+      gallery_images:
+        type: json
+        required: true
+        target: galleryImages
+        description: >-
+          必填的非空图像数组。视频检索传 get_frames 返回的 keyframes；
+          先验库检索传 list_registry 或 get_registry 返回的 registryReferences。
       top_k: {type: integer, required: false, target: topK}
   - name: match_image
     label: 图像检索
