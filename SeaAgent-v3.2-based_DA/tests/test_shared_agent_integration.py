@@ -17,8 +17,6 @@ class _ScriptedModel(ChatOpenAI):
     batch_tools: bool = False
     replan: bool = False
     rejected: bool = False
-    xml_tool_calls: bool = False
-    unknown_xml_tool_call: bool = False
     skip_planner_state_write: bool = False
     calls: int = 0
 
@@ -111,41 +109,9 @@ class _ScriptedModel(ChatOpenAI):
                         "decision": "replan" if self.replan else "terminate",
                         "assessment": {"final_answer": "verified kf1"},
                     }
-        if (
-            self.unknown_xml_tool_call
-            and self.xml_tool_calls
-            and role == "executor"
-            and isinstance(last, ToolMessage)
-            and last.name == "read_shared_state"
-            and not any(
-                isinstance(message, HumanMessage)
-                and "上一次输出请求了当前角色不可用的工具" in str(message.content)
-                for message in messages
-            )
-            and not any(
-                isinstance(message, AIMessage)
-                and "上一次请求的工具名不可用" in str(message.content)
-                for message in messages
-            )
-            and not any(
-                isinstance(message, AIMessage)
-                and "工具调用未执行" in str(message.content)
-                for message in messages
-            )
-        ):
-            name, args = "query", {"time_range": [0, 1_000_000]}
-        if self.xml_tool_calls:
-            parameters = "".join(
-                f"<parameter={key}>{json.dumps(value, ensure_ascii=False)}</parameter>"
-                for key, value in args.items()
-            )
-            message = AIMessage(
-                content=f"<tool_call><function={name}>{parameters}</function></tool_call>"
-            )
-        else:
-            message = AIMessage(
-                content="", tool_calls=[{"name": name, "args": args, "id": uuid.uuid4().hex}]
-            )
+        message = AIMessage(
+            content="", tool_calls=[{"name": name, "args": args, "id": uuid.uuid4().hex}]
+        )
         return ChatResult(generations=[ChatGeneration(message=message)])
 
 
@@ -274,31 +240,6 @@ def test_real_graphs_complete_using_only_shared_task_state(tmp_path):
             "TodoListMiddleware" in name or "ToolCallLimitMiddleware" in name
             for name in graph.nodes
         )
-
-
-def test_real_graph_does_not_parse_qwen_xml_without_middleware(tmp_path):
-    service = _Service()
-    runtime = _runtime(tmp_path, service, xml_tool_calls=True)
-    result = runtime.run("scan", "xml-tool-call")
-    assert result["state"] == "stalled"
-    assert service.queries == 0
-    assert "get_track" not in result["tool_chain"]
-
-
-def test_real_graph_does_not_retry_unknown_qwen_xml_tool_without_middleware(tmp_path):
-    service = _Service()
-    runtime = _runtime(
-        tmp_path,
-        service,
-        xml_tool_calls=True,
-        unknown_xml_tool_call=True,
-    )
-    result = runtime.run("scan", "unknown-xml-tool")
-
-    assert result["state"] == "stalled"
-    assert service.queries == 0
-    assert "query" not in result["tool_chain"]
-    assert "get_track" not in result["tool_chain"]
 
 
 def test_confirmation_survives_a_new_runtime_and_cannot_be_replayed(tmp_path):

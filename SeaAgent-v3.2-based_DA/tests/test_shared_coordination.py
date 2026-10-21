@@ -120,12 +120,26 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     patch_schema = schema["$defs"][patch_ref]
     assert patch_schema["additionalProperties"] is False
     assert set(patch_schema["properties"]) == {"requirements", "plan", "next_action"}
+    plan_schema = next(
+        item for item in patch_schema["properties"]["plan"]["anyOf"] if item.get("type") == "array"
+    )
+    step_ref = next(item["$ref"] for item in plan_schema["items"]["anyOf"] if "$ref" in item)
+    step_schema = schema["$defs"][step_ref.rsplit("/", 1)[-1]]
+    evidence_schema = step_schema["properties"]["required_evidence"]
+    assert evidence_schema["type"] == "array"
+    assert evidence_schema["items"]["type"] == "string"
 
     snapshot = state.view()
     patch = {
         **snapshot,
         "requirements": ["verify target"],
-        "plan": [{"id": "scan", "content": "scan tracks"}],
+        "plan": [
+            {
+                "id": "scan",
+                "content": "scan tracks",
+                "required_evidence": "track result",
+            }
+        ],
         "next_action": "execute",
         "task_status": "completed",
     }
@@ -137,6 +151,7 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     assert result["ok"] is True
     assert {"task_status", "tool_results", "version"} <= set(result["ignored_fields"])
     assert updated["requirements"] == ["verify target"]
+    assert updated["plan"][0]["required_evidence"] == ["track result"]
     assert updated["task_status"] == "running"
     assert updated["tool_results"] == []
 

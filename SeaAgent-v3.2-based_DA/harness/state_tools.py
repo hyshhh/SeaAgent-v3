@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _StatePatch(BaseModel):
@@ -14,9 +14,30 @@ class _StatePatch(BaseModel):
     )
 
 
+class _PlanStep(BaseModel):
+    """一个可执行计划步骤；schema 明确告诉模型证据要求是字符串数组。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = None
+    content: str
+    required_evidence: list[str] = Field(
+        default_factory=list,
+        description="完成该步骤所需的证据类型；必须是字符串数组。",
+    )
+
+    @field_validator("required_evidence", mode="before")
+    @classmethod
+    def _accept_single_evidence(cls, value: Any) -> Any:
+        """兼容模型偶尔把唯一证据写成字符串，但 schema 仍声明为数组。"""
+        if value is None:
+            return []
+        return [value] if isinstance(value, str) else value
+
+
 class _PlannerPatch(_StatePatch):
     requirements: list[str] | None = None
-    plan: list[str | dict[str, Any]] | None = None
+    plan: list[_PlanStep | str] | None = None
     next_action: str | dict[str, Any] | None = None
 
 

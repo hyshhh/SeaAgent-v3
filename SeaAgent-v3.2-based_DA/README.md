@@ -30,7 +30,7 @@ tool_results / evidence / call_history / 调用计数 Runtime 自动记账
 
 状态更新工具必须提交最近读取的 `expected_version`；旧版本更新会被拒绝。状态按 `thread_id` 存入 `data/memory/shared_task_state.sqlite`，保存时另外校验存储修订号，避免多个运行时互相覆盖。旧的同名 JSON 存档首次启动时导入，原文件保留；删除后的会话不会再次导入。
 
-`plan` 中每步包含 `id`、`content`、`required_evidence`，Executor 用独立的 `step_status` 维护进度。前端 `plan` 事件完全由这两项生成，内部不装配 TodoList，也不从模型回答的 JSON 反向恢复状态。最终回答只取 `assessment.final_answer`。框架检查点仍保存消息、技能元数据和人工确认中断，这些是执行记录，不维护另一份业务计划。
+`plan` 中每步包含 `id`、`content`、`required_evidence`，其中 `required_evidence` 是字符串数组，Executor 用独立的 `step_status` 维护进度。前端 `plan` 事件完全由这两项生成，内部不装配 TodoList，也不从模型回答的 JSON 反向恢复状态。最终回答只取 `assessment.final_answer`。框架检查点仍保存消息、技能元数据和人工确认中断，这些是执行记录，不维护另一份业务计划。
 
 ## 运行保护
 
