@@ -147,7 +147,7 @@ class AgentController:
         evidence = state.get(evidence_key) or state.get("evidence") or {}
         harness_settings = self.config.get("harness", {})
         result = {
-            # 确认等待由前端弹卡；预算收敛是完成状态，并用 partial 标明证据边界。
+            # 确认等待由前端弹卡；未完成的运行以 stalled 状态呈现。
             "success": run_state == "completed",
             "sessionId": session_id,
             # 带上问句：证据面板用它显示 "Evidence for: …"，截图进论文时这张图能自证是哪一问
@@ -161,7 +161,6 @@ class AgentController:
             "toolRecords": records,
             "sharedState": state.get("shared_state") or {},
             "partial": bool(state.get("partial", False)),
-            "convergence": state.get("convergence") or [],
             "executionMode": str(harness_settings.get("execution_mode", "evidence-state-multi-agent")),
         }
         if state.get("error"):

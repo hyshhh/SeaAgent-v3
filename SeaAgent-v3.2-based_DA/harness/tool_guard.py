@@ -11,10 +11,14 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from .convergence import ConvergenceRequired
 from .shared_state import STATE_TOOLS, SharedTaskState
 
 REPEAT_HINT = "Skipped: this exact call was already made. Reuse its recorded result; do not repeat the same tool and arguments."
+FREE_TOOLS = STATE_TOOLS | {"read_file", "show_evidence"}
+
+
+class AgentCancelled(RuntimeError):
+    """Stop an in-flight agent before it starts another model request."""
 
 
 class _ToolTimeout(TimeoutError):
@@ -43,7 +47,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         persist: Callable[[], None] | None = None,
         allowed_tools: set[str] | None = None,
         cancelled: Callable[[], bool] | None = None,
-        convergence_reason: Callable[[], str] | None = None,
         model_timeout: Callable[[], float] | None = None,
         tool_timeout: Callable[[], float] | None = None,
     ):
@@ -53,26 +56,21 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         self.persist = persist
         self.allowed_tools = allowed_tools
         self.cancelled = cancelled
-        self.convergence_reason = convergence_reason
         self.model_timeout = model_timeout
         self.tool_timeout = tool_timeout
 
-    # 2.1.2 请求前检查预算并限制可见工具
+    # 2.1.2 请求前检查取消状态、预算可见范围与工具权限
     def _model_request(self, request: Any) -> Any:
         if self.cancelled and self.cancelled():
-            raise ConvergenceRequired("cancelled")
-        reason = (
-            self.convergence_reason()
-            if self.convergence_reason
-            else self.state.limit_reason(self.scope, self.limits)
-        )
-        if reason:
-            raise ConvergenceRequired(reason)
+            raise AgentCancelled("cancelled")
         overrides = {}
+        tools = list(request.tools or [])
         if self.allowed_tools is not None:
-            overrides["tools"] = [
-                tool for tool in request.tools if getattr(tool, "name", None) in self.allowed_tools
-            ]
+            tools = [tool for tool in tools if getattr(tool, "name", None) in self.allowed_tools]
+        if self.state.limit_reason(self.scope, self.limits):
+            tools = [tool for tool in tools if getattr(tool, "name", None) in FREE_TOOLS]
+        if request.tools is not None or self.allowed_tools is not None:
+            overrides["tools"] = tools
         if self.model_timeout is not None:
             # 每次请求和重试使用模型配置的超时。
             overrides["model_settings"] = {
@@ -94,7 +92,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         if self.persist:
             self.persist()
 
-    # 2.1.6 执行前校验权限与预算，复用缓存或阻止重复写入
+    # 2.1.6 执行前原子占用预算，复用缓存或阻止重复写入
     def _prepare(self, request: Any) -> tuple[str | None, ToolMessage | None]:
         call = request.tool_call
         name = str(call.get("name") or "")
@@ -110,37 +108,26 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         key = None if name in STATE_TOOLS else _signature(name, call.get("args") or {})
         if name == "read_file":
             key = f"{self.scope}:{self.state.snapshot()['iteration']}:{key}"
-        reason = self.convergence_reason() if self.convergence_reason else ""
-        # 状态与技能读取登记调用签名，但不消耗整轮或单 Agent 工具预算。
-        budgeted = name not in STATE_TOOLS and name != "read_file"
-        if reason:
-            record = {"blocked": reason}
-        else:
-            try:
-                record = self.state.claim_call(
-                    self.scope,
-                    key,
-                    self.limits,
-                    write=name == "add_registry_vessel",
-                    count=budgeted,
-                )
-            except TypeError as error:
-                if "count" not in str(error):
-                    raise
-                limits = self.limits if budgeted else {**self.limits, "run": 0, "thread": 0, "agent": 0}
-                record = self.state.claim_call(
-                    self.scope, key, limits, write=name == "add_registry_vessel"
-                )
+        budgeted = name not in FREE_TOOLS
+        record = self.state.claim_call(
+            self.scope,
+            key,
+            self.limits,
+            write=name == "add_registry_vessel",
+            count=budgeted,
+        )
         self._save()
         if record.get("execute"):
             return key, None
         artifact = {"replayed": True}
         if record.get("blocked"):
-            content, status = (
-                "Execution budget reached. Stop tools and converge using existing evidence.",
-                "success",
+            reason = str(record["blocked"])
+            content = (
+                f"领域工具预算已耗尽（{reason}）。请基于已取得的信息更新你负责的共享状态，"
+                "不要声称未验证的步骤已经完成。"
             )
-            artifact["convergence_required"] = True
+            status = "success"
+            artifact = {"budget_exhausted": reason}
         elif record.get("status") == "error" and not record.get("write"):
             content = json.dumps(
                 {
@@ -257,7 +244,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         try:
             response = (
                 self._run_sync(handler, request)
-                if name not in STATE_TOOLS and name != "read_file"
+                if name not in FREE_TOOLS
                 else handler(request)
             )
         except _ToolTimeout as error:
@@ -282,7 +269,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             return blocked
         name = str(request.tool_call.get("name") or "")
         try:
-            if name not in STATE_TOOLS and name != "read_file" and self._timeout_seconds() > 0:
+            if name not in FREE_TOOLS and self._timeout_seconds() > 0:
                 response = await asyncio.wait_for(handler(request), self._timeout_seconds())
             else:
                 response = await handler(request)

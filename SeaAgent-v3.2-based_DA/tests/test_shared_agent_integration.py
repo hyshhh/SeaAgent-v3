@@ -4,10 +4,9 @@ import json
 import uuid
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_openai import ChatOpenAI
-from pydantic import Field
 
 from config import load_config
 from harness.runtime import SeaVideoHarness
@@ -19,20 +18,13 @@ class _ScriptedModel(ChatOpenAI):
     replan: bool = False
     rejected: bool = False
     xml_tool_calls: bool = False
-    summaries: list[str] = Field(default_factory=list)
+    unknown_xml_tool_call: bool = False
+    skip_planner_state_write: bool = False
+    calls: int = 0
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.calls += 1
         system = str(messages[0].content)
-        if "进入强制收敛" in system:
-            assert not kwargs.get("tools")
-            assert self.root_client.max_retries == 0
-            state = json.loads(messages[-1].content)
-            self.summaries.append(state["role"])
-            return ChatResult(
-                generations=[
-                    ChatGeneration(message=AIMessage(content="已取得 kf1；剩余验证无法确认。"))
-                ]
-            )
         role = (
             "planner"
             if "你是 Planner Agent" in system
@@ -41,7 +33,21 @@ class _ScriptedModel(ChatOpenAI):
             else "reflector"
         )
         last = messages[-1]
-        if self.batch_tools and role == "executor":
+        budget_was_hit = any(
+            isinstance(message, ToolMessage)
+            and isinstance(getattr(message, "artifact", None), dict)
+            and message.artifact.get("budget_exhausted")
+            for message in messages
+        )
+        if self.skip_planner_state_write and role == "planner" and (
+            (isinstance(last, ToolMessage) and last.name == "read_shared_state")
+            or (
+                isinstance(last, HumanMessage)
+                and "本角色必须先把真实进展写入共享状态" in str(last.content)
+            )
+        ):
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="未提交状态"))])
+        if self.batch_tools and role == "executor" and not budget_was_hit:
             calls = [
                 {
                     "name": "get_track",
@@ -105,6 +111,29 @@ class _ScriptedModel(ChatOpenAI):
                         "decision": "replan" if self.replan else "terminate",
                         "assessment": {"final_answer": "verified kf1"},
                     }
+        if (
+            self.unknown_xml_tool_call
+            and self.xml_tool_calls
+            and role == "executor"
+            and isinstance(last, ToolMessage)
+            and last.name == "read_shared_state"
+            and not any(
+                isinstance(message, HumanMessage)
+                and "上一次输出请求了当前角色不可用的工具" in str(message.content)
+                for message in messages
+            )
+            and not any(
+                isinstance(message, AIMessage)
+                and "上一次请求的工具名不可用" in str(message.content)
+                for message in messages
+            )
+            and not any(
+                isinstance(message, AIMessage)
+                and "工具调用未执行" in str(message.content)
+                for message in messages
+            )
+        ):
+            name, args = "query", {"time_range": [0, 1_000_000]}
         if self.xml_tool_calls:
             parameters = "".join(
                 f"<parameter={key}>{json.dumps(value, ensure_ascii=False)}</parameter>"
@@ -163,13 +192,13 @@ def _runtime(tmp_path, service, write=False, tool_limit=12, **model_settings):
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_real_graph_stops_at_four_then_summarizes_once_per_agent(tmp_path, stream):
+def test_real_graph_completes_with_tool_budget_and_state_updates(tmp_path, stream):
     runtime = _runtime(tmp_path, _Service(), tool_limit=4)
     result = list(runtime.stream("scan", "t"))[-1]["result"] if stream else runtime.run("scan", "t")
     assert result["state"] == "completed" and not result["partial"]
-    assert runtime.model.summaries == []
+    assert runtime.model.calls > 0
     assert result["shared_state"]["agent_calls"]["executor"] == 1
-    assert result["convergence"] == []
+    assert "convergence" not in result["shared_state"]
     assert result["evidence"]["shownKeyframeIds"] == ["kf1"]
     assert runtime._connection is None
 
@@ -178,9 +207,9 @@ def test_real_graph_parallel_batch_cannot_exceed_budget(tmp_path):
     service = _Service()
     runtime = _runtime(tmp_path, service, tool_limit=4, batch_tools=True)
     result = runtime.run("scan", "t")
-    assert result["state"] == "completed" and result["partial"]
+    assert result["state"] == "completed" and not result["partial"]
     assert service.queries == 4
-    assert runtime.model.summaries == ["executor"]
+    assert runtime.model.calls > 1
     assert result["shared_state"]["agent_calls"]["executor"] == 4
     assert (
         len(
@@ -188,21 +217,34 @@ def test_real_graph_parallel_batch_cannot_exceed_budget(tmp_path):
         )
         == 4
     )
-    assert result["shared_state"]["step_status"] == {"step-1": "pending"}
+    assert result["shared_state"]["step_status"] == {"step-1": "completed"}
 
 
 @pytest.mark.parametrize("limit", ["tool_calls_per_run", "max_iterations"])
-def test_real_graph_outer_limits_produce_one_final_summary(tmp_path, limit):
-    runtime = _runtime(tmp_path, _Service(), replan=True)
-    runtime.config["harness"][limit] = 4 if limit == "tool_calls_per_run" else 1
+def test_real_graph_outer_limits_do_not_start_a_summary_request(tmp_path, limit):
+    runtime = _runtime(tmp_path, _Service(), replan=limit == "max_iterations")
+    runtime.config["harness"][limit] = 1
     result = runtime.run("scan", "t")
-    assert result["state"] == "completed" and result["partial"]
-    assert runtime.model.summaries == ["task"]
-    assert result["shared_state"]["decision"] == "terminate"
+    if limit == "tool_calls_per_run":
+        assert result["state"] == "completed" and not result["partial"]
+        assert result["shared_state"]["decision"] == "terminate"
+    else:
+        assert result["state"] == "stalled" and result["partial"]
+        assert result["shared_state"]["decision"] == "replan"
     assert result["shared_state"]["pending_agent"] is None
     assert result["evidence"]["shownKeyframeIds"] == ["kf1"]
     if limit == "tool_calls_per_run":
-        assert result["shared_state"]["tool_calls_run"] == 2
+        assert result["shared_state"]["tool_calls_run"] == 1
+
+
+def test_agent_without_state_write_gets_one_forced_repair_turn(tmp_path):
+    runtime = _runtime(tmp_path, _Service(), skip_planner_state_write=True)
+
+    result = runtime.run("scan", "missing-state-write")
+
+    assert result["state"] == "stalled"
+    assert "planner 未提交负责的共享状态" in result["error"]
+    assert runtime.model.calls >= 3
 
 
 @pytest.mark.parametrize("decision,writes", [("approve", 1), ("reject", 0)])
@@ -222,7 +264,7 @@ def test_four_call_limit_preserves_confirmation_and_prevents_replay(tmp_path, de
 def test_real_graphs_complete_using_only_shared_task_state(tmp_path):
     runtime = _runtime(tmp_path, _Service())
     result = runtime.run("scan", "t")
-    assert result["state"] == "completed"
+    assert result["state"] == "completed", result.get("error")
     assert result["answer"] == "verified kf1"
     assert result["shared_state"]["step_status"] == {"step-1": "completed"}
     assert runtime.state_store.load("t").snapshot()["task_status"] == "completed"
@@ -248,6 +290,23 @@ def test_real_graph_executes_qwen_xml_tool_calls_instead_of_stalling(tmp_path):
         "show_evidence",
         "update_reflection_state",
     } <= set(result["tool_chain"])
+
+
+def test_real_graph_recovers_from_unknown_qwen_xml_tool_name(tmp_path):
+    service = _Service()
+    runtime = _runtime(
+        tmp_path,
+        service,
+        xml_tool_calls=True,
+        unknown_xml_tool_call=True,
+    )
+    result = runtime.run("scan", "unknown-xml-tool")
+
+    assert result["state"] == "completed", result.get("error")
+    assert result["answer"] == "verified kf1"
+    assert service.queries == 1
+    assert "query" not in result["tool_chain"]
+    assert result["tool_chain"].count("get_track") == 1
 
 
 def test_confirmation_survives_a_new_runtime_and_cannot_be_replayed(tmp_path):

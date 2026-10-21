@@ -1,4 +1,4 @@
-"""中间件装配：上下文压缩、共享调用预算、重试与证据守卫。"""
+"""中间件装配：上下文压缩、工具预算、状态写入、重试与证据守卫。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ def build_middleware(
     persist: Any = None,
     allowed_tools: set[str] | None = None,
     cancelled: Any = None,
-    convergence_reason: Any = None,
     model_timeout: Any = None,
     agent_name: str = "",
     tool_limit: int | None = None,
@@ -32,10 +31,10 @@ def build_middleware(
 
     from config import project_root
 
-    from .convergence import ConvergenceRequired
     from .disclosure import SkillDisclosureMiddleware
     from .qwen_tool_calls import QwenXmlToolCallMiddleware
-    from .tool_guard import RepeatToolCallMiddleware
+    from .state_write import StateWriteMiddleware
+    from .tool_guard import AgentCancelled, RepeatToolCallMiddleware
     from .wrapup import EvidenceWrapUpMiddleware
 
     settings = config.get("harness", {})
@@ -52,11 +51,15 @@ def build_middleware(
         initial_delay=float(settings.get("retry_delay_seconds", 1.0)),
     )
     retryable = model_retry.retry_on
-    model_retry.retry_on = lambda error: (
-        not isinstance(error, ConvergenceRequired) and retryable(error)
-    )
+    model_retry.retry_on = lambda error: not isinstance(error, AgentCancelled) and retryable(error)
+    limits = {
+        "run": int(settings.get("tool_calls_per_run", 40)),
+        "agent": int(
+            tool_limit if tool_limit is not None else settings.get("subagent_tool_calls", 6)
+        ),
+        "attempts": 1 + max(0, int(settings.get("retry_attempts", 2))),
+    }
     stack: list[Any] = [
-        QwenXmlToolCallMiddleware(allowed_tools),
         # 重试包在预算守卫外，每次实际尝试都先占用共享预算。
         ToolRetryMiddleware(
             tools=[
@@ -68,25 +71,22 @@ def build_middleware(
             max_retries=int(settings.get("retry_attempts", 2)),
             initial_delay=float(settings.get("retry_delay_seconds", 1.0)),
         ),
-        model_retry,  # 模型重试也放在预算守卫外；收敛信号直接传回 runtime。
+        model_retry,  # 模型重试包在工具守卫外；取消信号直接返回 Runtime。
         RepeatToolCallMiddleware(
             state=shared_state,
             scope=agent_name,
             persist=persist,
             allowed_tools=allowed_tools,
             cancelled=cancelled,
-            convergence_reason=convergence_reason,
             model_timeout=model_timeout,
             tool_timeout=lambda: tool_timeout_seconds,
-            limits={
-                "run": int(settings.get("tool_calls_per_run", 40)),
-                "agent": int(
-                    tool_limit if tool_limit is not None else settings.get("subagent_tool_calls", 6)
-                ),
-                "attempts": 1 + max(0, int(settings.get("retry_attempts", 2))),
-            },
+            limits=limits,
         ),
     ]
+    if shared_state is not None and agent_name in {"planner", "executor", "reflector"}:
+        stack.append(StateWriteMiddleware(agent_name, shared_state, limits, allowed_tools))
+    # Parse against the tool list after role and budget filters have been applied.
+    stack.append(QwenXmlToolCallMiddleware(allowed_tools))
     if skills_attached:
         stack.append(
             SkillDisclosureMiddleware(

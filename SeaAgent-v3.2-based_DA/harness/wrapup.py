@@ -78,7 +78,7 @@ class EvidenceWrapUpMiddleware(AgentMiddleware):
             and not (
                 isinstance(getattr(message, "artifact", None), dict)
                 and (
-                    getattr(message, "artifact", {}).get("convergence_required")
+                    getattr(message, "artifact", {}).get("budget_exhausted")
                     or getattr(message, "artifact", {}).get("replayed")
                 )
             )

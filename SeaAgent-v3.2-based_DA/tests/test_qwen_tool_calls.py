@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from langchain.agents.middleware import ModelResponse
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 
 from harness.qwen_tool_calls import QwenXmlToolCallMiddleware, parse_qwen_xml_tool_calls
@@ -67,3 +67,70 @@ def test_middleware_rewrites_xml_into_native_tool_calls():
     assert isinstance(message, AIMessage)
     assert message.content == ""
     assert message.tool_calls[0]["name"] == "read_shared_state"
+
+
+def test_middleware_retries_unknown_xml_tool_with_available_names():
+    class Request:
+        def __init__(self, tools, messages=None):
+            self.tools = tools
+            self.messages = messages or []
+
+        def override(self, **updates):
+            return Request(
+                updates.get("tools", self.tools), updates.get("messages", self.messages)
+            )
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        content = (
+            "<tool_call><function=query><parameter=time_range>[0, 1000000]"
+            "</parameter></function></tool_call>"
+            if len(requests) == 1
+            else "<tool_call><function=read_shared_state></function></tool_call>"
+        )
+        return ModelResponse(result=[AIMessage(content=content)])
+
+    request = Request([_read_tool()])
+    response = QwenXmlToolCallMiddleware({"read_shared_state"}).wrap_model_call(
+        request, handler
+    )
+
+    assert len(requests) == 2
+    retry_messages = requests[1].messages
+    assert isinstance(retry_messages[-2], AIMessage)
+    assert isinstance(retry_messages[-1], HumanMessage)
+    assert "query" in retry_messages[-1].content
+    assert "read_shared_state" in retry_messages[-1].content
+    assert isinstance(response.result[-2], HumanMessage)
+    assert "read_shared_state" in response.result[-2].content
+    assert response.result[-1].tool_calls[0]["name"] == "read_shared_state"
+
+
+def test_middleware_explains_when_retry_still_requests_unknown_tool():
+    class Request:
+        def __init__(self):
+            self.tools = [_read_tool()]
+            self.messages = []
+
+        def override(self, **updates):
+            return self
+
+    calls = 0
+
+    def handler(_request):
+        nonlocal calls
+        calls += 1
+        return ModelResponse(
+            result=[AIMessage(content="<tool_call><function=query></function></tool_call>")]
+        )
+
+    response = QwenXmlToolCallMiddleware({"read_shared_state"}).wrap_model_call(
+        Request(), handler
+    )
+
+    assert calls == 2
+    assert "工具调用未执行" in response.result[-1].content
+    assert "query" in response.result[-1].content
+    assert not response.result[-1].tool_calls

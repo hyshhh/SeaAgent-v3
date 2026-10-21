@@ -17,10 +17,10 @@ from harness.wrapup import EvidenceWrapUpMiddleware
 def test_official_middleware_stack():
     stack = build_middleware(load_config(), FakeListChatModel(responses=["ok"]))
     assert [type(item) for item in stack] == [
-        QwenXmlToolCallMiddleware,
         ToolRetryMiddleware,
         ModelRetryMiddleware,
         RepeatToolCallMiddleware,
+        QwenXmlToolCallMiddleware,
         SkillDisclosureMiddleware,
         SummarizationMiddleware,
         EvidenceWrapUpMiddleware,

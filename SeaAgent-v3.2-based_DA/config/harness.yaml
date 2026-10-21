@@ -9,10 +9,10 @@ harness:
   shared_state_file: data/memory/shared_task_state.sqlite
   max_iterations: 4
   skills_dir: skills
-  # 模型轮次不单独计数；工具次数耗尽时，统一转入一次无工具收敛。
-  # 工具调用上限在共享状态中统一计数，执行前拦截；重连或人工确认不清零。
+  # 工具预算只限制领域工具；状态写入、共享状态读取、技能读取和证据展示不计入。
+  # 预算由共享状态在工具执行前原子检查；重连或人工确认不清零。
   tool_calls_per_run: 40
-  # 每个独立 Agent 的工具调用预算；总预算和迭代预算由 Runtime 再兜底。
+  # 每个独立 Agent 阶段的领域工具调用预算。
   subagent_tool_calls: 6
   reconnect_attempts: 2
   reconnect_backoff_seconds: 1.0
@@ -24,8 +24,6 @@ harness:
   stream_mode: updates
   # 外部领域工具有独立超时；同步超时后底层线程无法被强制终止，结果不会回写。
   tool_timeout_seconds: 60
-  # 达到工具调用上限后，另留一次无工具 LLM 调用完成收敛；不自动重试。
-  convergence_timeout_seconds: 60
   # 心跳：每隔这么多秒发一条「仍在执行」状态，避免看起来像卡死；0 表示关闭。
   heartbeat_seconds: 15
   output:

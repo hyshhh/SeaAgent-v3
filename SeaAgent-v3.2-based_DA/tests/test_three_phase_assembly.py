@@ -260,10 +260,10 @@ def test_middleware_is_framework_guards_only():
         for item in build_middleware(config, _Model(responses=["ok"]), skills_attached=True)
     ]
     assert names == [
-        "QwenXmlToolCallMiddleware",
         "ToolRetryMiddleware",
         "ModelRetryMiddleware",
         "RepeatToolCallMiddleware",
+        "QwenXmlToolCallMiddleware",
         "SkillDisclosureMiddleware",
         "SummarizationMiddleware",
         "EvidenceWrapUpMiddleware",

@@ -331,6 +331,5 @@ class _Trace:
         }
         if self.shared_state is not None:
             result["shared_state"] = self.shared_state.view()
-            result["partial"] = bool(shared["convergence"])
-            result["convergence"] = shared["convergence"]
+            result["partial"] = state == "stalled"
         return result

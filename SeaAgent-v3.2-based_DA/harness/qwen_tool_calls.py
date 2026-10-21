@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelResponse
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from .thinking_text import strip_thinking
 
@@ -33,6 +33,14 @@ def _tool_schema(tool: Any) -> tuple[str, dict[str, Any]]:
     if hasattr(schema, "model_json_schema"):
         schema = schema.model_json_schema()
     return name, schema if isinstance(schema, dict) else {}
+
+
+def _xml_tool_names(content: str) -> list[str]:
+    text = strip_thinking(content).strip()
+    matches = list(_TOOL_CALL.finditer(text))
+    if not matches or _TOOL_CALL.sub("", text).strip():
+        return []
+    return [match.group(1) for match in matches]
 
 
 def _decode_value(value: str, schema: dict[str, Any]) -> Any:
@@ -107,13 +115,97 @@ class QwenXmlToolCallMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         response = handler(request)
+        retry_request = self._invalid_tool_retry(response, request)
+        if retry_request is not None:
+            response = handler(retry_request)
+            response = self._reject_repeated_invalid_tool(response, request)
+            response = self._normalize_response(response, retry_request)
+            response = self._retain_retry_context(response, retry_request)
+            return response
         return self._normalize_response(response, request)
 
     async def awrap_model_call(
         self, request: Any, handler: Callable[[Any], Awaitable[Any]]
     ) -> Any:
         response = await handler(request)
+        retry_request = self._invalid_tool_retry(response, request)
+        if retry_request is not None:
+            response = await handler(retry_request)
+            response = self._reject_repeated_invalid_tool(response, request)
+            response = self._normalize_response(response, retry_request)
+            response = self._retain_retry_context(response, retry_request)
+            return response
         return self._normalize_response(response, request)
+
+    @staticmethod
+    def _retain_retry_context(response: Any, request: Any) -> Any:
+        if not isinstance(response, ModelResponse) or not response.result:
+            return response
+        messages = list(request.messages or [])
+        feedback = messages[-1] if messages else None
+        if not isinstance(feedback, HumanMessage):
+            return response
+        return ModelResponse(
+            result=[feedback, *response.result],
+            structured_response=response.structured_response,
+        )
+
+    def _invalid_tool_retry(self, response: Any, request: Any) -> Any:
+        if not isinstance(response, ModelResponse) or not response.result:
+            return None
+        message = response.result[-1]
+        if not isinstance(message, AIMessage) or message.tool_calls or not isinstance(message.content, str):
+            return None
+
+        requested_tools = request.tools or []
+        requested_names = {
+            name for tool in requested_tools if (name := _tool_schema(tool)[0])
+        }
+        available_tools = set(self.allowed_tools) & requested_names
+        unknown_names = sorted(set(_xml_tool_names(message.content)) - available_tools)
+        if not unknown_names:
+            return None
+
+        available = ", ".join(sorted(available_tools)) or "（当前角色没有可调用工具）"
+        feedback = (
+            f"上一次输出请求了当前角色不可用的工具：{', '.join(unknown_names)}。\n"
+            f"当前可用工具名：{available}。\n"
+            "请根据已提供的工具说明和参数 schema 重新选择，并使用完全一致的工具名；"
+            "不要猜测或改写工具名。如果没有合适工具，请说明无法执行，不要伪造调用。"
+        )
+        messages = [*request.messages, message, HumanMessage(content=feedback)]
+        return request.override(messages=messages)
+
+    def _reject_repeated_invalid_tool(self, response: Any, request: Any) -> Any:
+        if not isinstance(response, ModelResponse) or not response.result:
+            return response
+        message = response.result[-1]
+        if not isinstance(message, AIMessage) or message.tool_calls or not isinstance(message.content, str):
+            return response
+
+        requested_names = {
+            name
+            for tool in request.tools or []
+            if (name := _tool_schema(tool)[0])
+        }
+        available = set(self.allowed_tools) & requested_names
+        unknown_names = sorted(set(_xml_tool_names(message.content)) - available)
+        if not unknown_names:
+            return response
+
+        available_text = ", ".join(sorted(available)) or "（当前角色没有可调用工具）"
+        result = list(response.result)
+        result[-1] = message.model_copy(
+            update={
+                "content": (
+                    f"工具调用未执行：模型请求了当前角色不可用的工具 {', '.join(unknown_names)}。"
+                    f"当前可用工具：{available_text}。"
+                ),
+                "tool_calls": [],
+                "invalid_tool_calls": [],
+            }
+        )
+        return ModelResponse(result=result, structured_response=response.structured_response)
 
     def _normalize_response(self, response: Any, request: Any) -> Any:
         if not isinstance(response, ModelResponse) or not response.result:

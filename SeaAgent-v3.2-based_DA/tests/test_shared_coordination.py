@@ -338,7 +338,7 @@ def test_retry_attempts_consume_the_shared_budget():
     req.tool = None
     result = retry.wrap_tool_call(req, lambda value: guard.wrap_tool_call(value, handler))
     assert result.status == "success"
-    assert result.artifact["convergence_required"] is True
+    assert result.artifact["budget_exhausted"] == "run_tool_limit"
     assert len(calls) == state.snapshot()["tool_calls_run"] == 2
 
 

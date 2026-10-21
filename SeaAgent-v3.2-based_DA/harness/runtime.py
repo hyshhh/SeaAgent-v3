@@ -14,7 +14,6 @@ from typing import Any, Self
 
 from config import project_root
 
-from .convergence import ConvergenceRequired, summarize_once
 from .middleware import build_middleware
 from .model import build_model
 from .shared_state import (
@@ -24,6 +23,8 @@ from .shared_state import (
     StateConflictError,
 )
 from .state_tools import build_state_tools
+from .state_write import MissingStateWrite
+from .tool_guard import AgentCancelled
 from .tools import build_tools
 from .trace import _Trace
 
@@ -316,7 +317,6 @@ class SeaVideoHarness:
                 shared_state=state,
                 allowed_tools={str(tool.name) for tool in selected} | {"read_file"},
                 cancelled=lambda: self._cancel is not None and self._cancel.is_set(),
-                convergence_reason=lambda: self._convergence_reason(name),
                 model_timeout=self._model_timeout_seconds,
                 persist=lambda: (
                     self.state_store.save(self._thread_id, state) if self._thread_id else None
@@ -443,111 +443,9 @@ class SeaVideoHarness:
             return
         self.agents[role] = self._build_agent_graph(role, self.shared_state)
 
-    # 3.1.12.1 检查整轮和单 Agent 工具预算
-    def _convergence_reason(self, role: str) -> str:
-        requested = getattr(getattr(self, "_cancel", None), "convergence_requested", "")
-        if requested:
-            return str(requested)
-        settings = self.config.get("harness", {})
-        return self.shared_state.limit_reason(
-            role,
-            {
-                "run": int(settings.get("tool_calls_per_run", 40)),
-                "agent": int(settings.get("subagent_tool_calls", 6)),
-            },
-        )
-
-    # 3.1.12.1.1 模型请求只使用模型自身超时. 配置信息传到中间件的胶水层
+    # 3.1.12.1 模型请求只使用模型自身超时；工具预算由调用守卫执行
     def _model_timeout_seconds(self) -> float:
         return max(0.001, float(self.config.get("llm", {}).get("timeout_seconds", 60)))
-
-    # 3.1.12.2 预算耗尽后每阶段只收敛一次；不追加工具、不伪造步骤完成
-    def _converge(self, role: str, reason: str, thread_id: str, trace: _Trace) -> dict[str, Any]:
-        cancel = getattr(self, "_cancel", None)
-        if cancel is not None and cancel.is_set():
-            return {"state": "cancelled"}
-        self.shared_state.collect_evidence()
-        snapshot = self.shared_state.snapshot()
-        history = snapshot["convergence"]
-        previous = next(
-            (
-                item
-                for item in history
-                if item["role"] == role and item["iteration"] == snapshot["iteration"]
-            ),
-            None,
-        )
-        if previous is None:
-            entry = {
-                "role": role,
-                "reason": reason,
-                "iteration": snapshot["iteration"],
-                "status": "pending",
-            }
-            self.shared_state.runtime_update({"convergence": history + [entry]})
-            self.state_store.save(thread_id, self.shared_state)
-            trace.event(
-                {
-                    "type": "status",
-                    "title": "正在收敛",
-                    "message": f"{role}：{reason}，汇集已有证据并进行一次无工具总结",
-                    "agent": role,
-                }
-            )
-            timeout = max(
-                1.0, float(self.config.get("harness", {}).get("convergence_timeout_seconds", 60))
-            )
-            summary, model_ok = summarize_once(   #收敛一次
-                self.model, self.shared_state.view(), role, reason, timeout
-            )
-            entry.update(summary=summary, status="completed" if model_ok else "fallback")
-            history = self.shared_state.snapshot()["convergence"]
-            self.shared_state.runtime_update(
-                {
-                    "convergence": [
-                        entry
-                        if item["role"] == role and item["iteration"] == entry["iteration"]
-                        else item
-                        for item in history
-                    ]
-                }
-            )
-        else:
-            summary = (
-                previous.get("summary")
-                or "先前收敛调用未完成；仅保留已取得的证据，未完成验证仍无法确认。"
-            )
-            if previous["status"] == "pending":
-                previous.update(summary=summary, status="fallback")
-                self.shared_state.runtime_update({"convergence": history})
-        if cancel is not None and cancel.is_set():
-            return {"state": "cancelled"}
-        current = self.shared_state.snapshot()
-        if role == "planner":
-            patch = {"next_action": summary}
-        elif role == "executor":
-            # 保留真实步骤状态；达到预算不等于执行成功。
-            patch = {
-                "execution_status": current["execution_status"]
-                if current["execution_status"] != "idle"
-                else "running"
-            }
-        else:
-            patch = {
-                "decision": "terminate",
-                "assessment": {
-                    "final_answer": summary,
-                    "partial": True,
-                    "termination_reason": reason,
-                },
-            }
-        owner = "reflector" if role == "task" else role
-        result = self.shared_state.update(owner, patch, current["version"])
-        if not result["ok"] and result.get("error") != "no_state_change":
-            raise StateConflictError("收敛时共享状态版本已变化")
-        self.state_store.save(thread_id, self.shared_state)
-        trace.consume_plan()
-        return {"state": "completed"}
 
     # 3.1.13 驱动单个角色，处理重连、取消与人工确认
     def _run_agent_steps(
@@ -574,9 +472,6 @@ class SeaVideoHarness:
         while True:
             if cancel is not None and cancel.is_set():
                 return {"state": "cancelled"}
-            reason = self._convergence_reason(role)  # 预算耗尽就转收敛，不再让模型硬试
-            if reason:
-                return {"state": "converge", "reason": reason}
             try:
                 if attempt:   #重连计数
                     self._reconnect_agent(role)  # 只重建这个角色，检查点不动
@@ -607,31 +502,23 @@ class SeaVideoHarness:
                             "confirmation": _confirmation_from(interrupts),
                         }
                     trace.consume(frame, agent_name=role)  #给这帧产生的所有事件和记录打上角色标记。
-                    reason = self._convergence_reason(role)  # 每帧都查：预算可能刚被某个工具用光
-                    if reason:
-                        self.state_store.save(thread_id, self.shared_state)
-                        return {"state": "converge", "reason": reason}
                     self.state_store.save(
                         thread_id, self.shared_state
                     )  # 每帧落盘，换个 runtime 也能接着跑
                     yield None
                 trace.consume_plan()  # 流正常结束：补发最终的计划快照
-                reason = self._convergence_reason(role)
-                return {"state": "converge", "reason": reason} if reason else {"state": "completed"}
+                return {"state": "completed"}
             except Exception as error:  #这一段执行中抛出的任何普通异常，都会被这里接住
                 from langgraph.errors import (  # LangGraph 的一个保护异常。图有一个递归上限（默认 25 步左右），
                     GraphRecursionError,
                 )
                 #一次执行超过这个步数就抛它——防止图在 model ⇄ tools 循环里无限转下去。
-                reason = (
-                    str(error) #异常本身是 ConvergenceRequired（预算耗尽信号），它自带说明文本，直接 str(error) 拿来用
-                    if isinstance(error, ConvergenceRequired)
-                    else self._convergence_reason(role)  # 非收敛信号时再检查一次共享预算
-                )
-                if isinstance(error, GraphRecursionError):  # 图自己转太多圈，同样转收敛
-                    reason = "graph_recursion_limit"
-                if reason:
-                    return {"state": "converge", "reason": reason}
+                if isinstance(error, AgentCancelled):
+                    return {"state": "cancelled"}
+                if isinstance(error, MissingStateWrite):
+                    return {"state": "stalled", "reason": str(error)}
+                if isinstance(error, GraphRecursionError):
+                    return {"state": "stalled", "reason": f"{role} 超过图执行步数上限，未完成本阶段。"}
                 if isinstance(error, (StateConflictError, ValueError, TypeError)):  # 硬错误，重试也没用
                     return {"state": "error", "error": error}
                 if attempt >= retries:
@@ -682,7 +569,6 @@ class SeaVideoHarness:
                 if resume_payload is None and not continuing:
                     self.shared_state.start_agent(role)
                 continuing = False  # 恢复待执行角色时保留原计数；之后才开始新阶段。
-                previous_version = self.shared_state.snapshot()["role_versions"].get(role, 0)
                 trace.event(
                     {
                         "type": "status",
@@ -698,23 +584,8 @@ class SeaVideoHarness:
                     role, question, thread_id, trace, cancel, payload
                 )
                 resume_payload = None  # 确认只消费一次，下一轮重新规划。
-                converged = False
-                if outcome["state"] == "converge":  #预算不足情况
-                    if outcome["reason"] == "run_tool_limit":  #runtime 预算不足
-                        return outcome
-                    outcome = self._converge(role, outcome["reason"], thread_id, trace)   #Agent内部预算不足结束，收敛一次
-                    converged = outcome["state"] == "completed"   #状态标记为完成
                 if outcome["state"] != "completed":
                     return outcome
-                role_state = self.shared_state.snapshot()
-                if not converged and role_state["role_versions"].get(role, 0) <= previous_version: #角色跑完但未向共享状态中写东西
-                    return {
-                        "state": "stalled",
-                        "reason": (
-                            f"{role} 未更新共享状态；模型没有提交必需的结构化工具调用。"
-                            "请检查模型输出格式及可用工具。"
-                        ),
-                    }
                 next_index = all_roles.index(role) + 1  #计算下一个跑哪个角色
                 self.shared_state.runtime_update(
                     {"pending_agent": all_roles[next_index] if next_index < 3 else None}  #下一个没有了就取none
@@ -735,7 +606,10 @@ class SeaVideoHarness:
             self.shared_state.runtime_update({"task_status": "running", "pending_agent": "planner"})
             start_role = "planner"
             iteration += 1
-        return {"state": "converge", "reason": f"已达到最大迭代次数 {max_iterations}"}
+        return {
+            "state": "stalled",
+            "reason": f"已达到最大迭代次数 {max_iterations}，反思结果仍要求继续或重规划。",
+        }
 
     # 3.1.15 消费驱动生成器并取得终态
     @staticmethod
@@ -831,14 +705,14 @@ class SeaVideoHarness:
     # 3.1.20 保存终态并生成结果与终局事件
     def _finish(self, trace: _Trace, thread_id: str, outcome: dict[str, Any]) -> dict[str, Any]:
         harness = self.config.get("harness", {})
-        if outcome.get("state") == "converge":
-            outcome = self._converge("task", outcome["reason"], thread_id, trace)
-            if outcome["state"] == "completed":
-                self.shared_state.runtime_update({"pending_agent": None})
         state = outcome.get("state")
         if self.shared_state is not None:
-            if self.shared_state.snapshot()["task_status"] != "failed":
-                self.shared_state.runtime_update({"task_status": state})
+            current = self.shared_state.snapshot()
+            if current["task_status"] != "failed":
+                patch = {"task_status": state}
+                if state in {"completed", "stalled", "error", "cancelled"}:
+                    patch["pending_agent"] = None
+                self.shared_state.runtime_update(patch)
             try:
                 self.state_store.save(thread_id, self.shared_state)
             except StateConflictError as error:

@@ -21,7 +21,7 @@ OWNER_FIELDS = {
     "planner": {"requirements", "plan", "next_action"},
     "executor": {"evidence_ids", "step_status", "execution_status"},
     "reflector": {"assessment", "evidence_gaps", "conflicts", "decision"},
-    "runtime": {"question", "task_status", "iteration", "pending_agent", "convergence"},
+    "runtime": {"question", "task_status", "iteration", "pending_agent"},
 }
 STATE_TOOLS = frozenset(   #状态工具独立，不可变
     {
@@ -190,8 +190,8 @@ class SharedTaskState:
             "agent_calls": {},
             "call_history": {},
             "role_versions": {},
+            "agent_start_versions": {},
             "evidence": {},
-            "convergence": [],
         }
         if values:
             original_result_refs = self._external_refs(values.get("tool_results", []))
@@ -217,7 +217,7 @@ class SharedTaskState:
             return {
                 key: deepcopy(value)
                 for key, value in self._values.items()
-                if key not in {"call_history", "role_versions"}
+                if key not in {"call_history", "role_versions", "agent_start_versions"}
             }
 
     # 2.1.4 推进业务版本号
@@ -365,6 +365,7 @@ class SharedTaskState:
         with self._lock:
             self._values["pending_agent"] = role
             self._values["agent_calls"][role] = 0
+            self._values["agent_start_versions"][role] = self._values["role_versions"].get(role, 0)
             if role == "reflector":
                 self._values["decision"] = None
                 self._values["assessment"] = {}
@@ -387,15 +388,7 @@ class SharedTaskState:
                     return key
         return ""
 
-    # 2.1.9.2 收敛时只汇集已有结果，展示证据由运行时维护
-    def collect_evidence(self) -> None:
-        from .convergence import collected_evidence
-
-        with self._lock:
-            self._values["evidence"] = collected_evidence(self._values)
-            self._changed()
-
-    # 2.1.10 执行前占用三级预算，登记请求并限制读取重试
+    # 2.1.10 执行前原子占用工具预算并登记请求
     def claim_call(
         self,
         role: str,
@@ -407,12 +400,16 @@ class SharedTaskState:
         """在执行前原子占用预算并登记请求，重连不能重复写入。"""
         with self._lock:
             if count:
-                for used, limit in (
-                    (self._values["tool_calls_run"], limits.get("run", 0)),
-                    (self._values["agent_calls"].get(role, 0), limits.get("agent", 0)),
+                for reason, used, limit in (
+                    ("run_tool_limit", self._values["tool_calls_run"], limits.get("run", 0)),
+                    (
+                        "agent_tool_limit",
+                        self._values["agent_calls"].get(role, 0),
+                        limits.get("agent", 0),
+                    ),
                 ):
                     if limit > 0 and used >= limit:
-                        return {"blocked": "tool_call_limit"}
+                        return {"blocked": reason}
                 self._values["tool_calls_run"] += 1
                 self._values["agent_calls"][role] = self._values["agent_calls"].get(role, 0) + 1
             previous = self._values["call_history"].get(key) if key else None
