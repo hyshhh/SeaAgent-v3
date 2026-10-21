@@ -112,6 +112,43 @@ def test_state_tools_can_read_again_and_require_the_latest_version():
     )
 
 
+def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
+    state = SharedTaskState("q")
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+    schema = tools["update_planner_state"].args_schema.model_json_schema()
+    patch_ref = schema["properties"]["patch"]["$ref"].rsplit("/", 1)[-1]
+    patch_schema = schema["$defs"][patch_ref]
+    assert patch_schema["additionalProperties"] is False
+    assert set(patch_schema["properties"]) == {"requirements", "plan", "next_action"}
+
+    snapshot = state.view()
+    patch = {
+        **snapshot,
+        "requirements": ["verify target"],
+        "plan": [{"id": "scan", "content": "scan tracks"}],
+        "next_action": "execute",
+        "task_status": "completed",
+    }
+    result = tools["update_planner_state"].invoke(
+        {"patch": patch, "expected_version": snapshot["version"]}
+    )
+
+    updated = state.snapshot()
+    assert result["ok"] is True
+    assert {"task_status", "tool_results", "version"} <= set(result["ignored_fields"])
+    assert updated["requirements"] == ["verify target"]
+    assert updated["task_status"] == "running"
+    assert updated["tool_results"] == []
+
+    rejected = tools["update_planner_state"].invoke(
+        {"patch": {"task_status": "completed", "version": 100}, "expected_version": updated["version"]}
+    )
+    assert rejected["ok"] is False
+    assert rejected["error"] == "no_owned_fields"
+    assert rejected["ignored_fields"] == ["task_status", "version"]
+    assert state.snapshot() == updated
+
+
 def test_domain_results_are_reused_across_roles_and_reload(tmp_path):
     store = SharedStateStore(tmp_path / "state.sqlite")
     state = store.load("t", "q")

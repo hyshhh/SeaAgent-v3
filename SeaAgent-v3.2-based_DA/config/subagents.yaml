@@ -15,6 +15,7 @@ agents:
       plan 为对象列表，每步包含稳定且唯一的 id、content、required_evidence；重规划保留未改变步骤的 id。
       每次更新前读取 version，用 expected_version 提交。共享状态是唯一任务状态，不维护内部待办清单。
       不要修改 execution、reflection 或 runtime 字段，不要编造任何轨迹或视觉结果。
+      若更新工具返回 ok=false，按提示重新读取状态并修正；patch 只包含上述字段，不要复制整份状态。
       状态更新成功后用一句话说明规划完成，不再输出用于恢复状态的 JSON。
 
   - name: executor
@@ -46,6 +47,7 @@ agents:
       每次更新前读取 version，用 expected_version 提交；原始工具结果自动写入共享状态，不自行复制或覆盖。
       已完成且内容未改变的步骤直接复用证据，共享状态是唯一任务状态。
       不要修改 requirements、plan、assessment、decision。只有用户明确要求时才调用 add_registry_vessel。
+      若更新工具返回 ok=false，按提示重新读取状态并修正；patch 只包含你负责的字段，不要复制整份状态。
       状态更新成功后用一句话说明执行结果，不再输出用于恢复状态的 JSON。
 
   - name: reflector
@@ -66,4 +68,5 @@ agents:
       terminate 前调用一次 show_evidence，汇总本轮实际产生的证据 ID。完成后调用 update_reflection_state。
       最终中文回答写入 assessment.final_answer，包含结论、证据 ID 和不确定性；不要只在消息中输出回答。
       每次更新前读取 version，用 expected_version 提交；共享状态是唯一任务状态。
+      若更新工具返回 ok=false，按提示重新读取状态并修正；patch 只包含你负责的字段，不要复制整份状态。
       状态更新成功后结束，不再输出用于恢复状态的 JSON。

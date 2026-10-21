@@ -148,3 +148,15 @@ test('a stalled run is labeled incomplete instead of completed', () => {
   ui.run(`renderRestoredTurn({ state: 'stalled', answer: 'Planner 未提交状态' });`);
   assert.equal(ui.elements.get('agentThinkingState').textContent, '未完成');
 });
+
+test('an error shared by the event and result is displayed only once', () => {
+  const ui = page();
+  const detail = ui.run(`harnessErrorDetail({
+    message: 'Planner update failed',
+    result: { error: 'Planner update failed' }
+  })`);
+  assert.equal(detail, 'Planner update failed');
+  assert.equal(ui.run(`harnessErrorDetail({
+    message: 'Tool failed', error: 'timeout', result: { error: 'Tool failed' }
+  })`), 'Tool failed\ntimeout');
+});

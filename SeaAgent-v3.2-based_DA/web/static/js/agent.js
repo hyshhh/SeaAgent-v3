@@ -795,6 +795,11 @@ function finishAgentLines() {
   }
 }
 
+function harnessErrorDetail(event) {
+  return [...new Set([event.message, event.error, event.result?.error]
+    .filter(Boolean).map((value) => String(value)))].join('\n');
+}
+
 function appendHarnessEvent(event) {
   if (!event || !event.type) return;
   harnessEventCount += 1;
@@ -844,7 +849,7 @@ function appendHarnessEvent(event) {
     renderAgentConfirmation(event);
     setHarnessState('等待确认', 'running');
   } else if (event.type === 'error') {
-    const detail = [event.message, event.error, event.result?.error].filter(Boolean).join('\n');
+    const detail = harnessErrorDetail(event);
     appendStandardEvent(event, 'error', '!', 'ERROR', detail || 'Harness failed');
     setHarnessState('Failed', 'failed');
   }
