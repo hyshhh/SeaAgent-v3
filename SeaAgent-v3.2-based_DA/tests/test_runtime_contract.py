@@ -226,6 +226,24 @@ def test_role_steps_complete_without_a_cancel_signal():
     assert runtime.shared_state.snapshot()["assessment"] == {}
 
 
+def test_stalled_role_is_reported_as_incomplete_not_as_a_finished_answer():
+    events = []
+    runtime = _runtime_with_agent(_FakeAgent())
+    trace = _Trace(events.append, event_limit=4000, shared_state=runtime.shared_state)
+
+    result = runtime._finish(
+        trace,
+        "thread-x",
+        {"state": "stalled", "reason": "planner 未更新共享状态"},
+    )
+
+    assert result["state"] == "stalled"
+    assert result["answer"] == "planner 未更新共享状态"
+    assert result["error"] == "planner 未更新共享状态"
+    assert events[-1]["type"] == "error"
+    assert events[-1]["title"] == "本轮未能完成"
+
+
 def test_agent_input_uses_checkpoint_for_reconnect_without_repeating_prompt():
     snapshot = type("_Snapshot", (), {"next": ("model",), "tasks": ()})()
     agent = _CheckpointAgent(snapshot=snapshot)

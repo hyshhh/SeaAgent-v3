@@ -708,7 +708,13 @@ class SeaVideoHarness:
                     return outcome
                 role_state = self.shared_state.snapshot()
                 if not converged and role_state["role_versions"].get(role, 0) <= previous_version: #角色跑完但未向共享状态中写东西
-                    return {"state": "stalled", "reason": f"{role} 未通过状态工具提交结果"}
+                    return {
+                        "state": "stalled",
+                        "reason": (
+                            f"{role} 未更新共享状态；模型没有提交必需的结构化工具调用。"
+                            "请检查模型输出格式及可用工具。"
+                        ),
+                    }
                 next_index = all_roles.index(role) + 1  #计算下一个跑哪个角色
                 self.shared_state.runtime_update(
                     {"pending_agent": all_roles[next_index] if next_index < 3 else None}  #下一个没有了就取none
@@ -868,23 +874,14 @@ class SeaVideoHarness:
             answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
             reason = str(outcome.get("reason") or "")
             if not str(result.get(answer_field) or "").strip():
-                result[answer_field] = (
-                    f"{reason}，已按现有结果收尾。"
-                    if reason
-                    else "本轮未能继续推进，已按现有结果收尾。"
-                )
+                result[answer_field] = reason or "本轮未能继续推进。"
+            result["error"] = reason or "未能生成有效结果"
             trace.event(
                 {
-                    "type": "status",
-                    "title": "本轮已收尾",
-                    "message": f"{reason}，已停止继续尝试",
-                }
-            )
-            trace.event(
-                {
-                    "type": "complete",
-                    "title": "Harness 已收尾",
-                    "message": "本轮未能继续推进，已在现有结果上收尾",
+                    "type": "error",
+                    "title": "本轮未能完成",
+                    "message": reason or "未能生成有效结果",
+                    "errorType": "AgentStalled",
                     "result": result,
                 }
             )

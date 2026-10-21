@@ -34,6 +34,7 @@ def build_middleware(
 
     from .convergence import ConvergenceRequired
     from .disclosure import SkillDisclosureMiddleware
+    from .qwen_tool_calls import QwenXmlToolCallMiddleware
     from .tool_guard import RepeatToolCallMiddleware
     from .wrapup import EvidenceWrapUpMiddleware
 
@@ -55,6 +56,7 @@ def build_middleware(
         not isinstance(error, ConvergenceRequired) and retryable(error)
     )
     stack: list[Any] = [
+        QwenXmlToolCallMiddleware(allowed_tools),
         # 重试包在预算守卫外，每次实际尝试都先占用共享预算。
         ToolRetryMiddleware(
             tools=[

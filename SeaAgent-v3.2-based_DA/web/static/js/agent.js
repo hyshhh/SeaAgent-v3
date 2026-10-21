@@ -518,7 +518,7 @@ function renderSessionHistory(turns) {
 function turnAnswer(turn) {
   if (turn?.answer) return turn.answer;
   if (turn?.state === 'cancelled') return '（这一轮已停止）';
-  if (turn?.state === 'stalled') return '（这一轮未能继续推进，已按现有结果收尾）';
+  if (turn?.state === 'stalled') return '（这一轮未完成，未生成有效结论）';
   return turn?.state || '（该轮未留下回答）';
 }
 
@@ -545,8 +545,9 @@ function renderRestoredTurn(turn) {
       : '<div class="qa-inspector-empty">这轮没有留下工具调用记录。</div>';
   }
   renderEvidence(turn?.evidence || null);
-  const state = turn?.state === 'error' ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : turn?.partial ? '已按现有证据收尾' : 'Restored';
-  setHarnessState(state, turn?.state === 'error' ? 'failed' : turn?.state === 'cancelled' ? '' : 'complete');
+  const failed = turn?.state === 'error' || turn?.state === 'stalled';
+  const state = turn?.state === 'stalled' ? '未完成' : failed ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : turn?.partial ? '已按现有证据收尾' : 'Restored';
+  setHarnessState(state, failed ? 'failed' : turn?.state === 'cancelled' ? '' : 'complete');
 }
 
 /* 一轮结束后由运行结果收尾；客户端提前断开时用占位结果补齐。 */
@@ -946,14 +947,14 @@ function renderAgentAnswer(result) {
     // renderMarkdown 内部先转义再解析，所以不会因为模型输出尖括号而注入标签。
     if (text) answer.innerHTML = renderMarkdown(text);
     else if (cancelled) answer.textContent = '本轮已停止。';
-    else if (stalled) answer.textContent = '本轮未能继续推进，已按现有结果收尾。';
+    else if (stalled) answer.textContent = '本轮未完成，未生成有效结论。';
     else if (malformed) answer.textContent = '本轮结果载荷异常，未能显示回答；请在「轨迹」页查看执行过程。';
     else answer.textContent = '未生成回答。';
   }
   renderToolRecords(payload.toolRecords || payload.tool_records);
   renderEvidence(payload.evidence || null);
   if (cancelled) setHarnessState('Stopped', '');
-  else if (stalled) setHarnessState('已收尾', 'complete');
+  else if (stalled) setHarnessState('未完成', 'failed');
   else if (payload.partial && payload.success !== false) setHarnessState('已按现有证据收尾', 'complete');
   else setHarnessState(payload.success === false ? 'Failed' : 'Complete', payload.success === false ? 'failed' : 'complete');
   scrollActivity(true);
@@ -1118,6 +1119,7 @@ async function askAgent() {
       run.error = '已停止';
     } else {
       run.status = 'error';
+      run.result = error.result || run.result;
       run.error = error.message;
       if (!error.harnessEventRendered && currentSessionId === sessionId) {
         appendHarnessEvent({type: 'error', title: 'Harness 执行失败', message: error.message});

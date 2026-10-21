@@ -139,3 +139,12 @@ test('a converged answer is labeled partial and preserves unfinished steps', () 
     answer: '已取得 kf1，尚未验证目标' });`);
   assert.equal(ui.elements.get('agentThinkingState').textContent, '已按现有证据收尾');
 });
+
+test('a stalled run is labeled incomplete instead of completed', () => {
+  const ui = page();
+  ui.run(`renderAgentAnswer({ state: 'stalled', answerText: 'Planner 未提交状态' });`);
+  assert.match(ui.elements.get('agentAnswer').innerHTML, /Planner 未提交状态/);
+  assert.equal(ui.elements.get('agentThinkingState').textContent, '未完成');
+  ui.run(`renderRestoredTurn({ state: 'stalled', answer: 'Planner 未提交状态' });`);
+  assert.equal(ui.elements.get('agentThinkingState').textContent, '未完成');
+});

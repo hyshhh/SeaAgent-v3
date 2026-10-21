@@ -18,6 +18,7 @@ class _ScriptedModel(ChatOpenAI):
     batch_tools: bool = False
     replan: bool = False
     rejected: bool = False
+    xml_tool_calls: bool = False
     summaries: list[str] = Field(default_factory=list)
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -104,9 +105,18 @@ class _ScriptedModel(ChatOpenAI):
                         "decision": "replan" if self.replan else "terminate",
                         "assessment": {"final_answer": "verified kf1"},
                     }
-        message = AIMessage(
-            content="", tool_calls=[{"name": name, "args": args, "id": uuid.uuid4().hex}]
-        )
+        if self.xml_tool_calls:
+            parameters = "".join(
+                f"<parameter={key}>{json.dumps(value, ensure_ascii=False)}</parameter>"
+                for key, value in args.items()
+            )
+            message = AIMessage(
+                content=f"<tool_call><function={name}>{parameters}</function></tool_call>"
+            )
+        else:
+            message = AIMessage(
+                content="", tool_calls=[{"name": name, "args": args, "id": uuid.uuid4().hex}]
+            )
         return ChatResult(generations=[ChatGeneration(message=message)])
 
 
@@ -222,6 +232,22 @@ def test_real_graphs_complete_using_only_shared_task_state(tmp_path):
             "TodoListMiddleware" in name or "ToolCallLimitMiddleware" in name
             for name in graph.nodes
         )
+
+
+def test_real_graph_executes_qwen_xml_tool_calls_instead_of_stalling(tmp_path):
+    service = _Service()
+    runtime = _runtime(tmp_path, service, xml_tool_calls=True)
+    result = runtime.run("scan", "xml-tool-call")
+    assert result["state"] == "completed"
+    assert result["answer"] == "verified kf1"
+    assert service.queries == 1
+    assert {
+        "update_planner_state",
+        "get_track",
+        "update_execution_state",
+        "show_evidence",
+        "update_reflection_state",
+    } <= set(result["tool_chain"])
 
 
 def test_confirmation_survives_a_new_runtime_and_cannot_be_replayed(tmp_path):
