@@ -263,7 +263,6 @@ def test_middleware_is_framework_guards_only():
         "ToolRetryMiddleware",
         "ModelRetryMiddleware",
         "RepeatToolCallMiddleware",
-        "QwenXmlToolCallMiddleware",
         "SkillDisclosureMiddleware",
         "SummarizationMiddleware",
         "EvidenceWrapUpMiddleware",

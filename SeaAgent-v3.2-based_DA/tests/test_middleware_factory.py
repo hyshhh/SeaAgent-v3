@@ -8,7 +8,6 @@ from langchain_core.language_models import FakeListChatModel
 from config import load_config
 from harness.disclosure import SkillDisclosureMiddleware
 from harness.middleware import build_middleware
-from harness.qwen_tool_calls import QwenXmlToolCallMiddleware
 from harness.shared_state import SharedTaskState
 from harness.tool_guard import RepeatToolCallMiddleware
 from harness.wrapup import EvidenceWrapUpMiddleware
@@ -20,7 +19,6 @@ def test_official_middleware_stack():
         ToolRetryMiddleware,
         ModelRetryMiddleware,
         RepeatToolCallMiddleware,
-        QwenXmlToolCallMiddleware,
         SkillDisclosureMiddleware,
         SummarizationMiddleware,
         EvidenceWrapUpMiddleware,

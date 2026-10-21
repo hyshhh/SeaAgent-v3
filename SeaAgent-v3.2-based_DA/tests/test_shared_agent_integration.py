@@ -276,23 +276,16 @@ def test_real_graphs_complete_using_only_shared_task_state(tmp_path):
         )
 
 
-def test_real_graph_executes_qwen_xml_tool_calls_instead_of_stalling(tmp_path):
+def test_real_graph_does_not_parse_qwen_xml_without_middleware(tmp_path):
     service = _Service()
     runtime = _runtime(tmp_path, service, xml_tool_calls=True)
     result = runtime.run("scan", "xml-tool-call")
-    assert result["state"] == "completed"
-    assert result["answer"] == "verified kf1"
-    assert service.queries == 1
-    assert {
-        "update_planner_state",
-        "get_track",
-        "update_execution_state",
-        "show_evidence",
-        "update_reflection_state",
-    } <= set(result["tool_chain"])
+    assert result["state"] == "stalled"
+    assert service.queries == 0
+    assert "get_track" not in result["tool_chain"]
 
 
-def test_real_graph_recovers_from_unknown_qwen_xml_tool_name(tmp_path):
+def test_real_graph_does_not_retry_unknown_qwen_xml_tool_without_middleware(tmp_path):
     service = _Service()
     runtime = _runtime(
         tmp_path,
@@ -302,11 +295,10 @@ def test_real_graph_recovers_from_unknown_qwen_xml_tool_name(tmp_path):
     )
     result = runtime.run("scan", "unknown-xml-tool")
 
-    assert result["state"] == "completed", result.get("error")
-    assert result["answer"] == "verified kf1"
-    assert service.queries == 1
+    assert result["state"] == "stalled"
+    assert service.queries == 0
     assert "query" not in result["tool_chain"]
-    assert result["tool_chain"].count("get_track") == 1
+    assert "get_track" not in result["tool_chain"]
 
 
 def test_confirmation_survives_a_new_runtime_and_cannot_be_replayed(tmp_path):

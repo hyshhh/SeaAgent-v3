@@ -32,7 +32,6 @@ def build_middleware(
     from config import project_root
 
     from .disclosure import SkillDisclosureMiddleware
-    from .qwen_tool_calls import QwenXmlToolCallMiddleware
     from .state_write import StateWriteMiddleware
     from .tool_guard import AgentCancelled, RepeatToolCallMiddleware
     from .wrapup import EvidenceWrapUpMiddleware
@@ -85,8 +84,6 @@ def build_middleware(
     ]
     if shared_state is not None and agent_name in {"planner", "executor", "reflector"}:
         stack.append(StateWriteMiddleware(agent_name, shared_state, limits, allowed_tools))
-    # Parse against the tool list after role and budget filters have been applied.
-    stack.append(QwenXmlToolCallMiddleware(allowed_tools))
     if skills_attached:
         stack.append(
             SkillDisclosureMiddleware(
