@@ -65,7 +65,6 @@ class _ScriptedModel(ChatOpenAI):
                 return ChatResult(generations=[ChatGeneration(message=AIMessage(content="done"))])
             if last.name == "read_shared_state":
                 state = json.loads(last.content)
-                args = {"expected_version": state["version"]}
                 if role == "planner":
                     name = "update_planner_state"
                     args["patch"] = {

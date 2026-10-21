@@ -272,6 +272,52 @@ def test_agent_input_resumes_human_interrupt_and_only_prompts_for_fresh_state():
     assert payload["messages"][0]["content"].startswith("用户问题：问题")
 
 
+def test_new_turn_discards_stale_checkpoint_but_keeps_completed_history():
+    snapshot = type(
+        "_Snapshot",
+        (),
+        {
+            "next": ("tools",),
+            "tasks": (),
+            "values": {
+                "messages": [
+                    AIMessage(content="上一轮回答", id="previous-answer"),
+                    {
+                        "role": "user",
+                        "content": "用户问题：本轮问题\n当前角色：executor",
+                    },
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "update_execution_state",
+                                "args": {"patch": {}, "expected_version": 3},
+                                "id": "stale-update",
+                            }
+                        ],
+                    ),
+                ]
+            },
+        },
+    )()
+    runtime = _runtime_with_agent(_CheckpointAgent(snapshot=snapshot))
+    runtime._stale_checkpoint_roles = {"executor"}
+    deleted = []
+    runtime._open_checkpoint = lambda: type(
+        "_Saver", (), {"delete_thread": lambda _self, thread: deleted.append(thread)}
+    )()
+
+    payload = runtime._agent_input_for_attempt(
+        "executor", "本轮问题", "thread-x:executor"
+    )
+
+    assert deleted == ["thread-x:executor"]
+    assert len(payload["messages"]) == 2
+    assert payload["messages"][0].content == "上一轮回答"
+    assert payload["messages"][1]["content"].startswith("用户问题：本轮问题")
+    assert runtime._stale_checkpoint_roles == set()
+
+
 def test_reconnect_uses_the_same_checkpoint_input_decision():
     fresh = type("_Snapshot", (), {"next": (), "tasks": ()})()
     initial = _CheckpointAgent(error=RuntimeError("connection lost"), snapshot=fresh)

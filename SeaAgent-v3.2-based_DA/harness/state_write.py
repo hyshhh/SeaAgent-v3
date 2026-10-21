@@ -15,7 +15,7 @@ ROLE_UPDATE_TOOLS = {
 }
 
 STATE_WRITE_REMINDER = (
-    "本角色必须先把真实进展写入共享状态，再结束。请调用 read_shared_state 获取当前 version，"
+    "本角色必须先把真实进展写入共享状态，再结束。请调用 read_shared_state 确认当前状态，"
     "然后调用你负责的状态更新工具；只记录已确认内容，不得把未验证步骤标为完成。"
 )
 

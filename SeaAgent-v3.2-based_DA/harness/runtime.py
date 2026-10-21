@@ -224,6 +224,7 @@ class SeaVideoHarness:
         self._connection: sqlite3.Connection | None = None
         self._thread_id: str | None = None
         self._cancel: Any = None
+        self._stale_checkpoint_roles: set[str] = set()
         self._prepare_specs()
 
     # 3.1.2 注入状态工具，校验角色与字段维护权限
@@ -397,7 +398,7 @@ class SeaVideoHarness:
             f"用户问题：{question}\n"
             f"当前角色：{role}\n"
             "先调用 read_shared_state 读取唯一任务状态。只维护你负责的字段，"
-            "完成后用当前 expected_version 调用对应的状态更新工具。"
+            "完成后调用对应的状态更新工具；任务版本由运行时内部维护。"
         )
 
     # 3.1.11.1 统一选择新输入、检查点续接或人工确认恢复载荷
@@ -408,9 +409,12 @@ class SeaVideoHarness:
         agent_thread: str,
         resume_payload: Any = None,
     ) -> Any:
-        def new_input() -> dict[str, Any]:
+        def new_input(history: list[Any] | None = None) -> dict[str, Any]:
             return {
-                "messages": [{"role": "user", "content": self._agent_prompt(role, question)}]
+                "messages": [
+                    *(history or []),
+                    {"role": "user", "content": self._agent_prompt(role, question)},
+                ]
             }
 
         try:
@@ -433,9 +437,73 @@ class SeaVideoHarness:
         )
         if interrupted and resume_payload is not None:
             return resume_payload
+        reset_requested = role in getattr(self, "_stale_checkpoint_roles", set())
+        legacy_update = recoverable and self._checkpoint_has_legacy_version_arg(snapshot)
+        if recoverable and (reset_requested or (legacy_update and resume_payload is None)):
+            history = self._history_before_current_prompt(snapshot)
+            self._open_checkpoint().delete_thread(agent_thread)
+            logger.info(
+                "Discarded stale agent checkpoint: role=%s thread_id=%s",
+                role,
+                agent_thread,
+            )
+            getattr(self, "_stale_checkpoint_roles", set()).discard(role)
+            return new_input(history)
+        getattr(self, "_stale_checkpoint_roles", set()).discard(role)
         if recoverable:
             return None
         return new_input()
+
+    @staticmethod
+    def _checkpoint_messages(snapshot: Any) -> list[Any]:
+        values = getattr(snapshot, "values", None)
+        messages = values.get("messages") if isinstance(values, dict) else None
+        return list(messages) if isinstance(messages, list) else []
+
+    @classmethod
+    def _history_before_current_prompt(cls, snapshot: Any) -> list[Any]:
+        """丢弃最后一条失败轮 prompt，同时保留更早的会话消息。"""
+        messages = cls._checkpoint_messages(snapshot)
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if isinstance(message, dict):
+                kind = str(message.get("type") or message.get("role") or "")
+                content = str(message.get("content") or "")
+            else:
+                kind = str(getattr(message, "type", "") or "")
+                content = str(getattr(message, "content", "") or "")
+            if kind in {"human", "user"} and content.startswith("用户问题："):
+                return messages[:index]
+        return messages
+
+    def _checkpoint_has_legacy_version_arg(self, snapshot: Any) -> bool:
+        """迁移旧检查点：工具已不再接受模型提交 expected_version。"""
+        messages = self._checkpoint_messages(snapshot)
+        answered = {
+            str(getattr(message, "tool_call_id", "") or "")
+            for message in messages
+            if getattr(message, "tool_call_id", None)
+        }
+        for message in reversed(messages):
+            calls = getattr(message, "tool_calls", None)
+            if not isinstance(calls, list):
+                continue
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                call_id = str(call.get("id") or "")
+                if call_id and call_id in answered:
+                    continue
+                args = call.get("args")
+                name = str(call.get("name") or "")
+                if name not in {
+                    "update_planner_state",
+                    "update_execution_state",
+                    "update_reflection_state",
+                }:
+                    continue
+                return not isinstance(args, dict) or "expected_version" in args
+        return False
 
     # 3.1.12 重建单个角色，保留共享状态和检查点
     def _reconnect_agent(self, role: str) -> None:
@@ -681,6 +749,7 @@ class SeaVideoHarness:
         self._thread_id = thread_id
         self.shared_state = self.state_store.load(thread_id, question)
         current = self.shared_state.snapshot()
+        starting_new_turn = False
         if resume:
             if current["task_status"] != "awaiting_confirmation" or not current["pending_agent"]:
                 raise ValueError("此会话没有待确认的中断，不能重复批准或拒绝")
@@ -694,6 +763,10 @@ class SeaVideoHarness:
             "stalled",
         }:
             self.shared_state.start_turn(question)
+            starting_new_turn = True
+        self._stale_checkpoint_roles = (
+            set(self.agent_specs) if starting_new_turn else set()
+        )
         self.state_store.save(thread_id, self.shared_state)
         try:
             self._build_agents()

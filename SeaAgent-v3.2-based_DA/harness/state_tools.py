@@ -64,14 +64,14 @@ def build_state_tools(state: Any) -> list[Any]:
     def read_shared_state() -> dict[str, Any]:
         return state.view()
 
-    def planner_update(patch: _PlannerPatch, expected_version: int) -> dict[str, Any]:
-        return _update(state, "planner", patch, expected_version)
+    def planner_update(patch: _PlannerPatch) -> dict[str, Any]:
+        return _update(state, "planner", patch)
 
-    def executor_update(patch: _ExecutionPatch, expected_version: int) -> dict[str, Any]:
-        return _update(state, "executor", patch, expected_version)
+    def executor_update(patch: _ExecutionPatch) -> dict[str, Any]:
+        return _update(state, "executor", patch)
 
-    def reflector_update(patch: _ReflectionPatch, expected_version: int) -> dict[str, Any]:
-        return _update(state, "reflector", patch, expected_version)
+    def reflector_update(patch: _ReflectionPatch) -> dict[str, Any]:
+        return _update(state, "reflector", patch)
 
     return [
         StructuredTool.from_function(
@@ -98,7 +98,7 @@ def build_state_tools(state: Any) -> list[Any]:
 
 
 # 1.2 落到共享状态并校验字段归属
-def _update(state: Any, role: str, patch: _StatePatch, expected_version: int) -> dict[str, Any]:
+def _update(state: Any, role: str, patch: _StatePatch) -> dict[str, Any]:
     ignored = sorted(patch.model_extra or {})
     values = patch.model_dump(exclude_unset=True, exclude=set(ignored))
     if not values:
@@ -108,7 +108,7 @@ def _update(state: Any, role: str, patch: _StatePatch, expected_version: int) ->
             "message": f"{role} 必须至少更新一个自己负责的字段；当前可写字段：{', '.join(sorted(type(patch).model_fields))}。",
             "ignored_fields": ignored,
         }
-    result = state.update(role, values, expected_version)
+    result = state.update(role, values)
     if ignored:
         result["ignored_fields"] = ignored
         result["message"] = "仅更新当前角色有权维护的字段；其余字段已忽略。"

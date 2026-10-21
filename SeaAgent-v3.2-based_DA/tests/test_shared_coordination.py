@@ -81,7 +81,7 @@ def test_plan_events_and_answer_only_come_from_shared_state():
     assert len([event for event in events if event["type"] == "plan"]) == 2
 
 
-def test_state_tools_can_read_again_and_require_the_latest_version():
+def test_state_tools_can_read_again_without_a_model_version_argument():
     state = SharedTaskState("q")
     tools = {tool.name: tool for tool in build_state_tools(state)}
     guard = RepeatToolCallMiddleware(state=state, scope="planner", limits={"run": 10})
@@ -97,7 +97,7 @@ def test_state_tools_can_read_again_and_require_the_latest_version():
     updated = guard.wrap_tool_call(
         request(
             "update_planner_state",
-            {"patch": {"requirements": ["r"]}, "expected_version": first["version"]},
+            {"patch": {"requirements": ["r"]}},
             "c2",
         ),
         handler,
@@ -106,10 +106,9 @@ def test_state_tools_can_read_again_and_require_the_latest_version():
     second = json.loads(guard.wrap_tool_call(read, handler).content)
     assert second["requirements"] == ["r"]
     assert second["version"] > first["version"]
-    assert (
-        "expected_version"
-        in tools["update_planner_state"].args_schema.model_json_schema()["required"]
-    )
+    assert "expected_version" not in tools[
+        "update_planner_state"
+    ].args_schema.model_json_schema()["properties"]
 
 
 def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
@@ -143,9 +142,7 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
         "next_action": "execute",
         "task_status": "completed",
     }
-    result = tools["update_planner_state"].invoke(
-        {"patch": patch, "expected_version": snapshot["version"]}
-    )
+    result = tools["update_planner_state"].invoke({"patch": patch})
 
     updated = state.snapshot()
     assert result["ok"] is True
@@ -156,12 +153,43 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     assert updated["tool_results"] == []
 
     rejected = tools["update_planner_state"].invoke(
-        {"patch": {"task_status": "completed", "version": 100}, "expected_version": updated["version"]}
+        {"patch": {"task_status": "completed", "version": 100}}
     )
     assert rejected["ok"] is False
     assert rejected["error"] == "no_owned_fields"
     assert rejected["ignored_fields"] == ["task_status", "version"]
     assert state.snapshot() == updated
+
+
+def test_state_update_drops_legacy_version_before_tool_validation():
+    class Request:
+        def __init__(self):
+            self.tool_call = {
+                "name": "update_planner_state",
+                "args": {
+                    "patch": {"requirements": ["r"]},
+                    "expected_version": 3,
+                },
+                "id": "legacy-call",
+            }
+
+        def override(self, **updates):
+            self.tool_call = updates["tool_call"]
+            return self
+
+    seen = {}
+    guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="planner")
+
+    def handler(req):
+        seen.update(req.tool_call["args"])
+        return ToolMessage(
+            content='{"ok": true}',
+            name=req.tool_call["name"],
+            tool_call_id=req.tool_call["id"],
+        )
+
+    guard.wrap_tool_call(Request(), handler)
+    assert seen == {"patch": {"requirements": ["r"]}}
 
 
 def test_domain_results_are_reused_across_roles_and_reload(tmp_path):

@@ -15,6 +15,9 @@ from .shared_state import STATE_TOOLS, SharedTaskState
 
 REPEAT_HINT = "Skipped: this exact call was already made. Reuse its recorded result; do not repeat the same tool and arguments."
 FREE_TOOLS = STATE_TOOLS | {"read_file", "show_evidence"}
+STATE_UPDATE_TOOLS = frozenset(
+    {"update_planner_state", "update_execution_state", "update_reflection_state"}
+)
 
 
 class AgentCancelled(RuntimeError):
@@ -91,6 +94,21 @@ class RepeatToolCallMiddleware(AgentMiddleware):
     def _save(self) -> None:
         if self.persist:
             self.persist()
+
+    @staticmethod
+    def _without_legacy_version(request: Any) -> Any:
+        """接受旧模型输出，但不再把版本号传给状态更新工具。"""
+        call = request.tool_call
+        name = str(call.get("name") or "")
+        args = call.get("args")
+        if (
+            name not in STATE_UPDATE_TOOLS
+            or not isinstance(args, dict)
+            or "expected_version" not in args
+        ):
+            return request
+        normalized = {key: value for key, value in args.items() if key != "expected_version"}
+        return request.override(tool_call={**call, "args": normalized})
 
     # 2.1.6 执行前原子占用预算，复用缓存或阻止重复写入
     def _prepare(self, request: Any) -> tuple[str | None, ToolMessage | None]:
@@ -237,6 +255,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
 
     # 2.1.9 同步工具执行与异常登记
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        request = self._without_legacy_version(request)
         key, blocked = self._prepare(request)
         if blocked is not None:
             return blocked
@@ -264,6 +283,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
 
     # 2.1.10 异步工具执行与异常登记
     async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
+        request = self._without_legacy_version(request)
         key, blocked = self._prepare(request)
         if blocked is not None:
             return blocked

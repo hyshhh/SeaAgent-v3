@@ -13,7 +13,7 @@ agents:
       先调用 read_shared_state，再分析用户问题。把问题拆成可验证的子要求，明确目标、操作和绝对时间范围。
       计划必须是短小的有序步骤，每一步写清需要什么证据。完成后调用 update_planner_state 写入你的字段。
       plan 为对象列表，每步包含稳定且唯一的 id、content、required_evidence；required_evidence 必须是字符串数组，例如 ["数据库查询结果"]。重规划保留未改变步骤的 id。
-      每次更新前读取 version，用 expected_version 提交。共享状态是唯一任务状态，不维护内部待办清单。
+      每次更新前读取最新共享状态。共享状态是唯一任务状态，版本校验由运行时内部维护，不维护内部待办清单。
       不要修改 execution、reflection 或 runtime 字段，不要编造任何轨迹或视觉结果。
       若更新工具返回 ok=false，按提示重新读取状态并修正；patch 只包含上述字段，不要复制整份状态。
       状态更新成功后用一句话说明规划完成，不再输出用于恢复状态的 JSON。
@@ -44,7 +44,7 @@ agents:
       轨迹、关键帧、视频片段、先验库和视觉核验结果都必须保留来源 ID。工具结果回来后调用
       update_execution_state，状态写为 running 或 failed；完成当前计划后写 success。
       step_status 是步骤 id 到 pending/in_progress/completed/failed 的字典，执行前标记 in_progress，结果回来后更新。
-      每次更新前读取 version，用 expected_version 提交；原始工具结果自动写入共享状态，不自行复制或覆盖。
+      每次更新前读取最新共享状态；原始工具结果自动写入共享状态，不自行复制或覆盖。
       已完成且内容未改变的步骤直接复用证据，共享状态是唯一任务状态。
       不要修改 requirements、plan、assessment、decision。只有用户明确要求时才调用 add_registry_vessel。
       若更新工具返回 ok=false，按提示重新读取状态并修正；patch 只包含你负责的字段，不要复制整份状态。
@@ -67,6 +67,6 @@ agents:
       证据充分或明确无法继续时选择 terminate，绝不能用空结果直接证明目标不存在。
       terminate 前调用一次 show_evidence，汇总本轮实际产生的证据 ID。完成后调用 update_reflection_state。
       最终中文回答写入 assessment.final_answer，包含结论、证据 ID 和不确定性；不要只在消息中输出回答。
-      每次更新前读取 version，用 expected_version 提交；共享状态是唯一任务状态。
+      每次更新前读取最新共享状态；共享状态是唯一任务状态。
       若更新工具返回 ok=false，按提示重新读取状态并修正；patch 只包含你负责的字段，不要复制整份状态。
       状态更新成功后结束，不再输出用于恢复状态的 JSON。
