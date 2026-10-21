@@ -170,6 +170,7 @@ def _runtime_with_agent(agent):
     runtime.state_store = _Store()
     runtime.event_handler = None
     runtime._connection = None
+    runtime._stale_checkpoint_roles = set()
     return runtime
 
 
@@ -291,7 +292,7 @@ def test_new_turn_discards_stale_checkpoint_but_keeps_completed_history():
                         tool_calls=[
                             {
                                 "name": "update_execution_state",
-                                "args": {"patch": {}, "expected_version": 3},
+                                "args": {"patch": {}},
                                 "id": "stale-update",
                             }
                         ],

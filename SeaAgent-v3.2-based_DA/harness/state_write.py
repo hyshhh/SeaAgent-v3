@@ -8,11 +8,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import HumanMessage
 
-ROLE_UPDATE_TOOLS = {
-    "planner": "update_planner_state",
-    "executor": "update_execution_state",
-    "reflector": "update_reflection_state",
-}
+from .shared_state import ROLE_UPDATE_TOOLS
 
 STATE_WRITE_REMINDER = (
     "本角色必须先把真实进展写入共享状态，再结束。请调用 read_shared_state 确认当前状态，"

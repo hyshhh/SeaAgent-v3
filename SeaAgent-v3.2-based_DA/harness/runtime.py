@@ -437,9 +437,7 @@ class SeaVideoHarness:
         )
         if interrupted and resume_payload is not None:
             return resume_payload
-        reset_requested = role in getattr(self, "_stale_checkpoint_roles", set())
-        legacy_update = recoverable and self._checkpoint_has_legacy_version_arg(snapshot)
-        if recoverable and (reset_requested or (legacy_update and resume_payload is None)):
+        if recoverable and role in self._stale_checkpoint_roles:
             history = self._history_before_current_prompt(snapshot)
             self._open_checkpoint().delete_thread(agent_thread)
             logger.info(
@@ -447,9 +445,9 @@ class SeaVideoHarness:
                 role,
                 agent_thread,
             )
-            getattr(self, "_stale_checkpoint_roles", set()).discard(role)
+            self._stale_checkpoint_roles.discard(role)
             return new_input(history)
-        getattr(self, "_stale_checkpoint_roles", set()).discard(role)
+        self._stale_checkpoint_roles.discard(role)
         if recoverable:
             return None
         return new_input()
@@ -475,35 +473,6 @@ class SeaVideoHarness:
             if kind in {"human", "user"} and content.startswith("用户问题："):
                 return messages[:index]
         return messages
-
-    def _checkpoint_has_legacy_version_arg(self, snapshot: Any) -> bool:
-        """迁移旧检查点：工具已不再接受模型提交 expected_version。"""
-        messages = self._checkpoint_messages(snapshot)
-        answered = {
-            str(getattr(message, "tool_call_id", "") or "")
-            for message in messages
-            if getattr(message, "tool_call_id", None)
-        }
-        for message in reversed(messages):
-            calls = getattr(message, "tool_calls", None)
-            if not isinstance(calls, list):
-                continue
-            for call in calls:
-                if not isinstance(call, dict):
-                    continue
-                call_id = str(call.get("id") or "")
-                if call_id and call_id in answered:
-                    continue
-                args = call.get("args")
-                name = str(call.get("name") or "")
-                if name not in {
-                    "update_planner_state",
-                    "update_execution_state",
-                    "update_reflection_state",
-                }:
-                    continue
-                return not isinstance(args, dict) or "expected_version" in args
-        return False
 
     # 3.1.12 重建单个角色，保留共享状态和检查点
     def _reconnect_agent(self, role: str) -> None:

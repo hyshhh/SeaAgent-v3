@@ -15,13 +15,6 @@ def test_each_agent_can_only_update_owned_fields():
     else:
         raise AssertionError("planner modified reflector state")
 
-def test_stale_version_is_rejected():
-    state = SharedTaskState("问题")
-    state.update("planner", {"requirements": ["r1"]}, expected_version=1)
-    result = state.update("executor", {"execution_status": "running"}, expected_version=1)
-    assert result["ok"] is False
-    assert result["error"] == "stale_state_version"
-
 def test_tool_results_collect_evidence_ids():
     state = SharedTaskState("问题")
     state.record_tool_result("executor", "get_frames", "c1", {"keyframeIds": ["kf-1"], "trackIds": ["t-1"]}, "completed")

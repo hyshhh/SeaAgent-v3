@@ -23,6 +23,11 @@ OWNER_FIELDS = {
     "reflector": {"assessment", "evidence_gaps", "conflicts", "decision"},
     "runtime": {"question", "task_status", "iteration", "pending_agent"},
 }
+ROLE_UPDATE_TOOLS = {
+    "planner": "update_planner_state",
+    "executor": "update_execution_state",
+    "reflector": "update_reflection_state",
+}
 STATE_TOOLS = frozenset(   #状态工具独立，不可变
     {
         "read_shared_state",
@@ -31,6 +36,7 @@ STATE_TOOLS = frozenset(   #状态工具独立，不可变
         "update_reflection_state",
     }
 )
+STATE_UPDATE_TOOLS = frozenset(ROLE_UPDATE_TOOLS.values())
 STEP_STATUSES = {"pending", "in_progress", "completed", "failed"}   #步骤状态【没开始/正在做/做完了/失败了】
 MAX_TOOL_RESULTS_BYTES = 160_000   #tool_result列表的容量上限
 MAX_PLAN_BYTES = 32_000  #paln字段的字节上限
@@ -224,10 +230,8 @@ class SharedTaskState:
     def _changed(self) -> None:
         self._values["version"] += 1
 
-    # 2.1.5 校验字段归属与版本，原子合并角色补丁
-    def update(
-        self, role: str, patch: dict[str, Any], expected_version: int | None = None
-    ) -> dict[str, Any]:
+    # 2.1.5 校验字段归属并原子合并角色补丁
+    def update(self, role: str, patch: dict[str, Any]) -> dict[str, Any]:
         if role not in OWNER_FIELDS or not isinstance(patch, dict):
             raise ValueError("unknown owner or invalid state patch")
         if not patch:
@@ -237,13 +241,6 @@ class SharedTaskState:
             raise ValueError(f"{role} cannot update: {', '.join(forbidden)}")
         with self._lock:  #python上下文管理器，进入加锁，离开解锁
             version = self._values["version"]
-            if expected_version is not None and expected_version != version:
-                return {
-                    "ok": False,
-                    "error": "stale_state_version",
-                    "version": version,
-                    "message": "请重新调用 read_shared_state，再按新版本提交补丁。",
-                }
             patch = deepcopy(patch)
             self._validate(patch)
             if "plan" in patch:

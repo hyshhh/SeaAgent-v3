@@ -11,13 +11,10 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from .shared_state import STATE_TOOLS, SharedTaskState
+from .shared_state import STATE_TOOLS, STATE_UPDATE_TOOLS, SharedTaskState
 
 REPEAT_HINT = "Skipped: this exact call was already made. Reuse its recorded result; do not repeat the same tool and arguments."
 FREE_TOOLS = STATE_TOOLS | {"read_file", "show_evidence"}
-STATE_UPDATE_TOOLS = frozenset(
-    {"update_planner_state", "update_execution_state", "update_reflection_state"}
-)
 
 
 class AgentCancelled(RuntimeError):
