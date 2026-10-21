@@ -64,6 +64,13 @@ function fillSystemSettings(data) {
     const path = input.dataset.setting;
     updateSettingInput(input, settingValue(systemSettings, path), systemSettingSpecs[path]);
   });
+  [
+    ['qaVlmApiPort', 'llm.api_port'],
+    ['qaEmbeddingApiPort', 'embedding.api_port'],
+  ].forEach(([id, path]) => {
+    const input = document.getElementById(id);
+    if (input) updateSettingInput(input, settingValue(systemSettings, path), systemSettingSpecs[path]);
+  });
   syncAppearanceTrackingFields();
   syncMonitoringOptions(systemSettings);
 }
@@ -243,6 +250,58 @@ async function saveSystemSettings() {
   }
 }
 
+async function openQaEndpointSettings() {
+  const dialog = document.getElementById('qaEndpointDialog');
+  const status = document.getElementById('qaEndpointStatus');
+  const button = document.getElementById('qaEndpointSaveButton');
+  if (!dialog) return;
+  if (!dialog.open) dialog.showModal();
+  if (button) button.disabled = true;
+  if (status) status.textContent = '正在读取模型服务配置…';
+  try {
+    fillSystemSettings(await apiFetch(SETTINGS_API));
+    if (status) status.textContent = '端口配置已读取';
+    if (button) button.disabled = false;
+  } catch (error) {
+    if (status) status.textContent = `读取失败：${error.message}`;
+  }
+}
+
+function closeQaEndpointSettings() {
+  document.getElementById('qaEndpointDialog')?.close();
+}
+
+async function saveQaEndpointSettings() {
+  const button = document.getElementById('qaEndpointSaveButton');
+  const status = document.getElementById('qaEndpointStatus');
+  const vlmPort = Number(document.getElementById('qaVlmApiPort')?.value);
+  const embeddingPort = Number(document.getElementById('qaEmbeddingApiPort')?.value);
+  if (![vlmPort, embeddingPort].every(port => Number.isInteger(port) && port >= 1 && port <= 65535)) {
+    if (status) status.textContent = '端口必须是 1 到 65535 之间的整数';
+    return;
+  }
+  try {
+    if (button) button.disabled = true;
+    if (status) status.textContent = '正在保存…';
+    const response = await apiFetch(SETTINGS_API, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({settings: {
+        llm: {api_port: vlmPort},
+        embedding: {api_port: embeddingPort},
+      }}),
+    });
+    fillSystemSettings(response.data || response);
+    if (status) status.textContent = '已保存；下一轮问答将使用新端口';
+    showToast('VLM 与 Embedding API 端口已更新');
+  } catch (error) {
+    if (status) status.textContent = `保存失败：${error.message}`;
+    showToast(error.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function resetSystemSettings() {
   if (!window.confirm('确定恢复全部运行参数和提示词的默认值吗？')) return;
   const button = document.getElementById('saveSettingsButton');
@@ -265,6 +324,9 @@ window.loadSystemSettings = loadSystemSettings;
 window.saveSystemSettings = saveSystemSettings;
 window.resetSystemSettings = resetSystemSettings;
 window.saveMonitoringSettings = saveMonitoringSettings;
+window.openQaEndpointSettings = openQaEndpointSettings;
+window.closeQaEndpointSettings = closeQaEndpointSettings;
+window.saveQaEndpointSettings = saveQaEndpointSettings;
 
 document.addEventListener('DOMContentLoaded', () => loadSystemSettings(false));
 

@@ -5,6 +5,7 @@ import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
@@ -50,8 +51,14 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
     for key in PROMPT_SETTING_KEYS
 }
 
-SETTING_SPECS: dict[str, dict[str, Any]] = {
+API_PORT_URLS = {
+    "llm.api_port": "llm.base_url",
+    "embedding.api_port": "embedding.base_url",
+}
 
+SETTING_SPECS: dict[str, dict[str, Any]] = {
+    "llm.api_port": {"type": "int", "min": 1, "max": 65535, "step": 1},
+    "embedding.api_port": {"type": "int", "min": 1, "max": 65535, "step": 1},
     "harness.tool_calls_per_run": {"type": "int", "min": 1, "max": 200, "step": 1},
     "yolo.model": {"type": "enum", "choices": list(DETECTION_MODEL_OPTIONS)},
     "yolo.device": {"type": "string", "allow_empty": True, "max_chars": 128},
@@ -129,6 +136,37 @@ def _flatten(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return values
 
 
+def _api_port(config: dict[str, Any], path: str) -> int:
+    base_url_path = API_PORT_URLS[path]
+    try:
+        parsed = urlsplit(str(_get(config, base_url_path) or ""))
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError
+        port = parsed.port
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError
+    except ValueError as error:
+        raise ValueError(f"参数 {path} 对应的服务地址无效") from error
+    return port if port is not None else (443 if parsed.scheme == "https" else 80)
+
+
+def _url_with_api_port(config: dict[str, Any], path: str, port: int) -> str:
+    base_url_path = API_PORT_URLS[path]
+    raw_url = str(_get(config, base_url_path) or "")
+    try:
+        parsed = urlsplit(raw_url)
+        hostname = parsed.hostname
+        if parsed.scheme not in {"http", "https"} or not hostname:
+            raise ValueError
+        _ = parsed.port  # Validate any existing port before replacing it.
+    except ValueError as error:
+        raise ValueError(f"参数 {path} 对应的服务地址无效") from error
+    user_info = f"{parsed.netloc.rsplit('@', 1)[0]}@" if "@" in parsed.netloc else ""
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    netloc = f"{user_info}{host}:{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
 def _read_runtime() -> dict[str, Any]:
     if not RUNTIME_FILE.exists():
         return {}
@@ -153,6 +191,16 @@ def _coerce(path: str, value: Any) -> int | float | str | bool:
     # numeric specs first; prompt specs second
     if path in SETTING_SPECS:
         spec = SETTING_SPECS[path]
+        if path in API_PORT_URLS:
+            if isinstance(value, bool):
+                raise ValueError(f"参数 {path} 必须是 1 到 65535 的整数")
+            try:
+                port = int(str(value).strip())
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"参数 {path} 必须是 1 到 65535 的整数") from error
+            if not 1 <= port <= 65535:
+                raise ValueError(f"参数 {path} 必须在 1 到 65535 之间")
+            return port
         if spec["type"] == "bool":
             if isinstance(value, bool):
                 return value
@@ -212,7 +260,7 @@ def _validate_relations(config: dict[str, Any]) -> None:
 def public_settings(config: dict[str, Any]) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for path in SETTING_SPECS:
-        value = _get(config, path)
+        value = _api_port(config, path) if path in API_PORT_URLS else _get(config, path)
         _set(values, path, value)
     for path in PROMPT_SETTING_SPECS:
         _set(values, path, _get(config, path) or "")
@@ -234,14 +282,22 @@ def update_settings(config: dict[str, Any], payload: dict[str, Any]) -> dict[str
     if not changes:
         raise ValueError("没有收到可修改的参数")
     updated = deepcopy(config)
+    persisted: dict[str, Any] = {}
     for path, value in changes.items():
-        _set(updated, path, value)
+        if path in API_PORT_URLS:
+            base_url_path = API_PORT_URLS[path]
+            value = _url_with_api_port(updated, path, int(value))
+            _set(updated, base_url_path, value)
+            persisted[base_url_path] = value
+        else:
+            _set(updated, path, value)
+            persisted[path] = value
     _validate_relations(updated)
     runtime = _read_runtime()
-    for path, value in changes.items():
+    for path, value in persisted.items():
         _set(runtime, path, value)
     _write_runtime(runtime)
-    for path, value in changes.items():
+    for path, value in persisted.items():
         _set(config, path, value)
     # 同步到已创建的 LLM 服务提示词缓存
     return public_settings(config)
@@ -252,7 +308,10 @@ def reset_settings(config: dict[str, Any]) -> dict[str, Any]:
         RUNTIME_FILE.unlink()
     defaults = load_config()
     for path in SETTING_SPECS:
-        _set(config, path, _get(defaults, path))
+        if path not in API_PORT_URLS:
+            _set(config, path, _get(defaults, path))
+    for base_url_path in API_PORT_URLS.values():
+        _set(config, base_url_path, _get(defaults, base_url_path))
     for path in PROMPT_SETTING_SPECS:
         _set(config, path, _get(defaults, path) or "")
     return public_settings(config)

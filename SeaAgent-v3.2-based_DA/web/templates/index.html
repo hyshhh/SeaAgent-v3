@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=30">
 <link rel="stylesheet" href="/static/css/academic.css?v=37">
-<link rel="stylesheet" href="/static/css/qa.css?v=11">
+<link rel="stylesheet" href="/static/css/qa.css?v=12">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -246,6 +246,7 @@
             <div class="qa-composer-actions">
               <div class="qa-composer-tools">
                 <select class="agent-preset-select" aria-label="预设问题" title="预设问题" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">预设问题</option><option value="舷号 0857 有没有在视频中出现？">舷号查询</option><option value="数据库中有没有黄色的无人艇？">先验库查询</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">未在库船</option><option value="查找一下15:30到15:40有哪些在库船出现？">在库船</option><option value="从15:30到15:40一共出现多少艘船？">数量统计</option><option value="监控中什么时间出现过一艘黄色无人艇？">外观检索</option></select>
+                <button type="button" class="qa-endpoint-button" onclick="openQaEndpointSettings()" title="配置视觉语言模型和向量模型服务端口">模型端口</button>
                 <button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="刷新记忆概览" aria-label="刷新记忆概览">↻</button>
                 <button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="清除问答记忆" aria-label="清除问答记忆"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></svg></button>
               </div>
@@ -287,6 +288,14 @@
       </aside>
     </div>
   </div>
+  <dialog class="qa-endpoint-dialog" id="qaEndpointDialog" aria-labelledby="qaEndpointTitle">
+    <div class="qa-endpoint-head"><div><span class="eyebrow">MODEL SERVICES</span><h2 id="qaEndpointTitle">QA 模型 API 端口</h2></div><button type="button" class="qa-endpoint-close" onclick="closeQaEndpointSettings()" aria-label="关闭">×</button></div>
+    <p class="qa-endpoint-note">修改后保留当前服务地址的协议、主机和路径；新的问答请求将立即使用新端口。</p>
+    <label>VLM API 端口<input id="qaVlmApiPort" type="number" min="1" max="65535" step="1" required><small>用于视觉语言模型的 Chat Completions API。</small></label>
+    <label>Embedding API 端口<input id="qaEmbeddingApiPort" type="number" min="1" max="65535" step="1" required><small>用于文本与图像向量编码的 Embeddings API。</small></label>
+    <div class="qa-endpoint-status" id="qaEndpointStatus" role="status"></div>
+    <div class="qa-endpoint-actions"><button type="button" class="qa-endpoint-cancel" onclick="closeQaEndpointSettings()">取消</button><button type="button" class="qa-endpoint-save" id="qaEndpointSaveButton" onclick="saveQaEndpointSettings()">保存端口</button></div>
+  </dialog>
 </section>
 <section class="tab-content" id="tab-database">
   <div class="registry-head">
@@ -442,7 +451,7 @@
 <script src="/static/js/pipeline.js?v=22"></script>
   <script src="/static/js/memory.js?v=8"></script>
 <script src="/static/js/agent.js?v=84"></script>
-<script src="/static/js/settings.js?v=11"></script>
+<script src="/static/js/settings.js?v=12"></script>
 </body>
 </html>
 

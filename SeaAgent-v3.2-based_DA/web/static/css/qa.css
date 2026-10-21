@@ -1217,6 +1217,50 @@
 #tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb { background: #c4c4c4; border-color: #fff; }
 #tab-agent-qa .qa-inspector { scrollbar-color: #c4c4c4 #fff; }
 
+#tab-agent-qa .qa-endpoint-button {
+  min-height: 28px;
+  margin-left: 8px;
+  padding: 0 10px;
+  color: #42566a;
+  border: 1px solid var(--qa-line-strong);
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+#tab-agent-qa .qa-endpoint-button:hover { color: #1f4f74; background: var(--qa-blue-soft); }
+#tab-agent-qa .qa-endpoint-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(440px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 22px;
+  color: var(--qa-ink);
+  border: 1px solid var(--qa-line-strong);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 20px 60px rgba(15, 32, 48, .2);
+}
+#tab-agent-qa .qa-endpoint-dialog:not([open]) { display: none; }
+#tab-agent-qa .qa-endpoint-dialog::backdrop { background: rgba(20, 31, 42, .32); backdrop-filter: blur(2px); }
+#tab-agent-qa .qa-endpoint-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+#tab-agent-qa .qa-endpoint-head h2 { margin: 5px 0 0; font-size: 18px; }
+#tab-agent-qa .qa-endpoint-close { padding: 0 4px; color: #778391; border: 0; background: transparent; cursor: pointer; font-size: 24px; line-height: 1; }
+#tab-agent-qa .qa-endpoint-note { margin: 0; color: #748091; font-size: 11px; line-height: 1.6; }
+#tab-agent-qa .qa-endpoint-dialog > label { display: grid; gap: 6px; color: #3d4c59; font-size: 12px; font-weight: 600; }
+#tab-agent-qa .qa-endpoint-dialog input { width: 100%; padding: 9px 10px; color: var(--qa-ink); border: 1px solid var(--qa-line-strong); border-radius: 7px; background: #fff; outline: none; }
+#tab-agent-qa .qa-endpoint-dialog input:focus { border-color: #6d9fc3; box-shadow: 0 0 0 3px rgba(47, 111, 159, .1); }
+#tab-agent-qa .qa-endpoint-dialog small { color: #8a95a0; font-size: 10px; font-weight: 400; }
+#tab-agent-qa .qa-endpoint-status { min-height: 16px; color: #687787; font-size: 11px; }
+#tab-agent-qa .qa-endpoint-actions { display: flex; justify-content: flex-end; gap: 8px; }
+#tab-agent-qa .qa-endpoint-actions button { min-height: 32px; padding: 0 12px; border-radius: 7px; cursor: pointer; font-size: 11px; }
+#tab-agent-qa .qa-endpoint-cancel { color: #566372; border: 1px solid var(--qa-line-strong); background: #fff; }
+#tab-agent-qa .qa-endpoint-save { color: #fff; border: 1px solid #2f6f9f; background: #2f6f9f; }
+#tab-agent-qa .qa-endpoint-save:disabled { opacity: .6; cursor: wait; }
+
+
 /* 答案面板的 Markdown 元素：字号仍然统一 13px（层级靠字重与左边线），
    只有标题按 Codex 的做法给出 600 字重 + 上间距。 */
 #tab-agent-qa .qa-answer-text h2,
