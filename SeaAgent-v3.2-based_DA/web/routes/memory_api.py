@@ -41,5 +41,5 @@ async def update_settings(body: MemorySettingsUpdate, manager: Annotated[TrackMe
 async def clear_memory(manager: Annotated[TrackMemoryManager, Depends(get_manager)]):
     if has_running_pipeline():
         raise HTTPException(409, "流水线正在运行，请先停止处理再清除记忆")
-    result = manager.clear_all()
+    result = manager.clear_track_memory()
     return ApiResponse(success=True, message="轨迹记忆已全部清除", data=result)

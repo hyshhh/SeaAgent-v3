@@ -1,10 +1,13 @@
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from harness.shared_state import SharedTaskState
 from harness.wrapup import NUDGE_KEY, EvidenceWrapUpMiddleware
 
 
-def _middleware(max_nudges=1):
-    return EvidenceWrapUpMiddleware(evidence_tool="show_evidence", instruction="call show_evidence", max_nudges=max_nudges)
+def _middleware(max_nudges=1, decision="terminate"):
+    shared_state = SharedTaskState("问题", {"decision": decision})
+    return EvidenceWrapUpMiddleware(evidence_tool="show_evidence", instruction="call show_evidence", max_nudges=max_nudges, shared_state=shared_state)
 
 
 def _evidence_message():
@@ -31,6 +34,17 @@ def test_evidence_in_current_turn_lets_the_answer_pass():
         AIMessage(content="共三艘。"),
     )
     assert _middleware().after_model(state) is None
+
+
+@pytest.mark.parametrize("artifact", [{"replayed": True}, {"convergence_required": True}])
+def test_replayed_or_blocked_evidence_does_not_count_as_landed(artifact):
+    state = _state(
+        HumanMessage(content="有几艘船？"),
+        AIMessage(content="", tool_calls=[{"name": "show_evidence", "args": {}, "id": "call-1"}]),
+        ToolMessage(content="skipped", name="show_evidence", tool_call_id="call-1", artifact=artifact),
+        AIMessage(content="共三艘。"),
+    )
+    assert _middleware().after_model(state)["jump_to"] == "model"
 
 
 def test_evidence_from_a_previous_turn_does_not_count_as_this_turn():
@@ -63,5 +77,26 @@ def test_empty_model_output_is_not_a_final_answer():
 
 
 def test_middleware_stands_down_when_the_evidence_tool_is_unset():
-    middleware = EvidenceWrapUpMiddleware(evidence_tool="", max_nudges=2)
+    middleware = EvidenceWrapUpMiddleware(evidence_tool="", max_nudges=2, shared_state=SharedTaskState("问题", {"decision": "terminate"}))
     assert middleware.after_model(_state(HumanMessage(content="问题"), AIMessage(content="回答"))) is None
+
+
+@pytest.mark.parametrize("decision", [None, "replan", "continue", "failed"])
+def test_non_terminal_decisions_do_not_trigger_evidence_wrapup(decision):
+    state = {**_state(HumanMessage(content="问题"), AIMessage(content="需要继续处理。")), "decision": "terminate"}
+    assert _middleware(decision=decision).after_model(state) is None
+
+
+def test_wrapup_follows_live_decisions_and_the_next_stage_reset():
+    middleware = _middleware(decision="replan")
+    state = _state(HumanMessage(content="问题"), AIMessage(content="回答"))
+    assert middleware.after_model(state) is None
+    middleware.shared_state.update("reflector", {"decision": "terminate"})
+    assert middleware.after_model(state)["jump_to"] == "model"
+    middleware.shared_state.start_agent("reflector")
+    assert middleware.after_model(state) is None
+
+
+def test_missing_shared_state_does_not_trigger_evidence_wrapup():
+    state = {**_state(HumanMessage(content="问题"), AIMessage(content="回答")), "decision": "terminate"}
+    assert EvidenceWrapUpMiddleware(evidence_tool="show_evidence").after_model(state) is None

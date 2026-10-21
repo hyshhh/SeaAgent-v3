@@ -13,6 +13,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 
 from agent import AgentController
+from config import project_root
+from harness.shared_state import SharedStateStore
 from web.models import AgentQuery, AgentResume
 
 router = APIRouter(tags=["agent-memory"])
@@ -38,7 +40,21 @@ async def _evidence_image_response(request: Request, image_path: Path, scale: fl
 
 @router.post("/api/agent/query")
 async def query_agent(body: AgentQuery, request: Request):
-    return await run_in_threadpool(_controller(request).answer, body.question, body.session_id)
+    session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
+    cancel = _begin_run(request, session_id)
+    try:
+        return await run_in_threadpool(_controller(request).answer, body.question, session_id, cancel)
+    finally:
+        request.app.state.agent_runs.pop(session_id, None)
+
+
+@router.post("/api/agent/query/resume")
+async def resume_agent_query(body: AgentResume, request: Request):
+    cancel = _begin_run(request, body.session_id)
+    try:
+        return await run_in_threadpool(_controller(request).resume, body.decision, body.session_id, body.feedback, cancel)
+    finally:
+        request.app.state.agent_runs.pop(body.session_id, None)
 
 
 def _begin_run(request: Request, session_id: str) -> threading.Event:
@@ -47,6 +63,10 @@ def _begin_run(request: Request, session_id: str) -> threading.Event:
     进行中的运行按 session_id 记账：一个会话同时只跑一轮，停止接口凭会话号就能找到它，
     前端也可以在列表里标出「哪个会话在回答」。
     """
+    if getattr(request.app.state, "agent_memory_clearing", False):
+        raise HTTPException(409, "问答记忆正在清除，请稍后再试")
+    if session_id in request.app.state.agent_runs:
+        raise HTTPException(409, "此会话仍有问答正在执行，请等待当前运行结束")
     cancel = threading.Event()
     request.app.state.agent_runs[session_id] = cancel
     return cancel
@@ -55,33 +75,55 @@ def _begin_run(request: Request, session_id: str) -> threading.Event:
 @router.post("/api/agent/query/stream")
 async def stream_agent_query(body: AgentQuery, request: Request):
     """逐行返回 Harness 状态、工具与最终回答事件。"""
+    session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
+    cancel = _begin_run(request, session_id)
+
     async def events():
         loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue[dict] = asyncio.Queue()
         terminal_seen = threading.Event()
-        # 会话号在进入 worker 线程前定下来，停止接口才能在同一 key 上找到这次运行
-        session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
-        cancel = _begin_run(request, session_id)
+        event_lock = threading.Lock()
+        worker: asyncio.Task | None = None
+        captured_terminal: dict | None = None
+
+        def release(_task=None) -> None:
+            if request.app.state.agent_runs.get(session_id) is cancel:
+                request.app.state.agent_runs.pop(session_id, None)
+            if _task is not None and not _task.cancelled():
+                _task.exception()  # 已断开的客户端也要消费后台异常。
 
         def emit(event: dict) -> None:
+            nonlocal captured_terminal
             # runtime 在 worker 线程中执行；用线程安全标记保证 terminal 事件只由一个来源发送。
-            if event.get("type") in {"complete", "error"}:
-                terminal_seen.set()
-            loop.call_soon_threadsafe(event_queue.put_nowait, event)
-
-        async def execute() -> None:
-            # 预算读取也要在 try 内：任何异常都必须变成一条终止事件，
-            # 否则事件队列永远不出队，整条 NDJSON 流会永久等待（这个坑刚踩过）
-            budget = 0.0
-            try:
-                budget = float(request.app.state.config.get("harness", {}).get("run_timeout_seconds", 600) or 0)
-                # 整轮墙钟预算：运行时只能"收到下一帧"才看得到东西，如果某次工具调用（或子智能体
-                # 内部的循环）长时间不返回，前端会彻底静止。这里给它一个上限，超时就收尾。
-                call = run_in_threadpool(_controller(request, emit).answer, body.question, session_id, cancel)
-                result = await (asyncio.wait_for(call, timeout=budget) if budget > 0 else call)
+            with event_lock:
                 if terminal_seen.is_set():
                     return
-                if result.get("success", False):
+                if event.get("type") in {"complete", "error", "confirm"}:
+                    captured_terminal = event  # 等控制器完成审计与结果投影，再发送终局事件。
+                    return
+                loop.call_soon_threadsafe(event_queue.put_nowait, event)
+
+        async def execute() -> None:
+            nonlocal worker
+            # 预算读取也要在 try 内：任何异常都必须变成一条终止事件，
+            # 否则事件队列永远不出队，整条 NDJSON 流会永久等待（这个坑刚踩过）
+            try:
+                worker = asyncio.create_task(run_in_threadpool(_controller(request, emit).answer, body.question, session_id, cancel))
+                worker.add_done_callback(release)
+                result = await asyncio.shield(worker)
+                if terminal_seen.is_set():
+                    return
+                if captured_terminal is not None:
+                    terminal_seen.set()
+                    event = {**captured_terminal, "result": result}
+                    if result.get("state") == "error":
+                        event.update(type="error", message=result.get("error") or event.get("message"))
+                    await event_queue.put(event)
+                elif result.get("state") == "awaiting_confirmation":
+                    terminal_seen.set()
+                    await event_queue.put({"type": "confirm", "title": "等待人工确认",
+                                           "confirmation": result.get("confirmation") or {}, "result": result})
+                elif result.get("success", False):
                     terminal_seen.set()
                     await event_queue.put({
                         "type": "complete",
@@ -106,20 +148,6 @@ async def stream_agent_query(body: AgentQuery, request: Request):
                         "errorType": result.get("errorType"),
                         "result": result,
                     })
-            except asyncio.TimeoutError:
-                # 超时：置位中断信号（它会在下一个超步边界收尾），并立刻把这一轮结束掉。
-                # worker 线程可能还卡在某个工具里，这里不等它——前端先拿到可读的结论。
-                cancel.set()
-                if terminal_seen.is_set():
-                    return
-                terminal_seen.set()
-                logger.warning("Agent run timed out: session_id=%s budget=%ss", session_id, budget)
-                await event_queue.put({
-                    "type": "error",
-                    "title": "Harness 已超时",
-                    "message": f"本轮超过 {int(budget)} 秒仍未返回（多半是某次全量扫描或子智能体内部循环），已中止等待。可缩小时间范围或减少轨迹条数后重试。",
-                    "errorType": "TimeoutError",
-                })
             except Exception as error:
                 logger.exception("Agent stream task failed")
                 if terminal_seen.is_set():
@@ -140,10 +168,13 @@ async def stream_agent_query(body: AgentQuery, request: Request):
             while True:
                 event = await event_queue.get()
                 yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-                if event.get("type") in {"complete", "error"}:
+                if event.get("type") in {"complete", "error", "confirm"}:
                     break
         finally:
-            request.app.state.agent_runs.pop(session_id, None)
+            cancel.set()
+            terminal_seen.set()
+            if worker is None or worker.done():
+                release()
             # 超时后 worker 线程可能仍在跑，await 它会再次卡住这条流；只在已结束时收尾
             if task.done():
                 await task
@@ -166,7 +197,13 @@ async def stop_agent_run(session_id: str, request: Request):
 
 @router.delete("/api/agent/memory")
 async def clear_agent_memory(request: Request):
-    result = await run_in_threadpool(request.app.state.memory_manager.clear_qa_memory)
+    if request.app.state.agent_runs or getattr(request.app.state, "agent_memory_clearing", False):
+        raise HTTPException(409, "请先停止进行中的问答，再清除记忆")
+    request.app.state.agent_memory_clearing = True
+    try:
+        result = await run_in_threadpool(request.app.state.memory_manager.clear_qa_memory)
+    finally:
+        request.app.state.agent_memory_clearing = False
     return {"success": True, "message": "问答记忆已清除", "data": result}
 
 @router.get("/api/agent/sessions")
@@ -185,10 +222,31 @@ async def get_agent_session(session_id: str, request: Request):
 
 @router.delete("/api/agent/sessions/{session_id}")
 async def delete_agent_session(session_id: str, request: Request):
-    removed = await run_in_threadpool(request.app.state.repository.delete_session, session_id)
-    if not removed:
-        raise HTTPException(404, "会话不存在")
+    cancel = _begin_run(request, session_id)
+    try:
+        removed = await run_in_threadpool(request.app.state.repository.delete_session, session_id)
+        if not removed:
+            raise HTTPException(404, "会话不存在")
+        config = getattr(request.app.state, "config", None)
+        if config is not None:
+            await run_in_threadpool(_delete_runtime_state, config, session_id)
+    finally:
+        if request.app.state.agent_runs.get(session_id) is cancel:
+            request.app.state.agent_runs.pop(session_id, None)
     return {"success": True, "message": "会话已删除", "data": {"sessionId": session_id}}
+
+
+def _delete_runtime_state(config: dict, session_id: str) -> None:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    harness = config.get("harness", {})
+    state_path = project_root() / str(harness.get("shared_state_file", "data/memory/shared_task_state.sqlite"))
+    SharedStateStore(state_path).delete(session_id)
+    checkpoint = project_root() / str(harness.get("checkpointer", "data/memory/checkpoints.sqlite"))
+    if checkpoint.is_file():
+        with SqliteSaver.from_conn_string(str(checkpoint)) as saver:
+            for role in ("planner", "executor", "reflector"):
+                saver.delete_thread(f"{session_id}:{role}")
 
 @router.get("/api/agent/memory-summary")
 async def memory_summary(request: Request):

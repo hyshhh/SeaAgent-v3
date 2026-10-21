@@ -6,10 +6,12 @@ import logging
 import os
 import shutil
 import threading
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from config import project_root
+from harness.shared_state import SharedStateStore
 from memory.repository import MemoryRepository
 from vector_store import VectorCatalog
 
@@ -84,12 +86,12 @@ class TrackMemoryManager:
             "settings": self.settings.read(),
         }
 
-    def clear_all(self) -> dict[str, int]:
+    def clear_track_memory(self) -> dict[str, int]:
         with self._lock:
             snapshot = self.snapshot()
             self.vectors.keyframes.rebuild([])
             self.repository.clear_track_memory()
-            self._clear_directories(("keyframe_dir", "trajectory_dir", "clip_dir"))
+            self._clear_directories(("keyframe_dir", "trajectory_dir"))
         return {"deletedTracks": snapshot["trackCount"], "deletedKeyframes": snapshot["keyframeCount"]}
 
     def clear_qa_memory(self) -> dict[str, int]:
@@ -97,6 +99,12 @@ class TrackMemoryManager:
             result = self.repository.clear_qa_memory()
             self._clear_directories(("clip_dir",))
             self._clear_checkpoints()
+            path = Path(self.config.get("harness", {}).get("shared_state_file", "data/memory/shared_task_state.sqlite"))
+            state_path = path if path.is_absolute() else project_root() / path
+            SharedStateStore(state_path).clear()
+            legacy_artifacts = (project_root() / "data" / "memory" / "tool_results").resolve()
+            if legacy_artifacts != (state_path.parent / "tool_results").resolve():
+                self._clear_directory(legacy_artifacts)
         return result
 
     def _clear_checkpoints(self) -> None:
@@ -152,15 +160,17 @@ class TrackMemoryManager:
                     self._unlink(frame.get("keyframePath"))
                 self._unlink(tracks.get(str(track_id), {}).get("trajectoryPath"))
                 self.repository.delete_track(track_id)
-            self._clear_directories(("clip_dir",))
         return [str(value) for value in expired]
 
     def _clear_directories(self, keys: Iterable[str]) -> None:
         for key in keys:
-            directory = Path(self.config["paths"][key]).resolve()
-            directory.mkdir(parents=True, exist_ok=True)
-            for item in directory.iterdir():
-                shutil.rmtree(item) if item.is_dir() else item.unlink(missing_ok=True)
+            self._clear_directory(Path(self.config["paths"][key]).resolve())
+
+    @staticmethod
+    def _clear_directory(directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        for item in directory.iterdir():
+            shutil.rmtree(item) if item.is_dir() else item.unlink(missing_ok=True)
 
     @staticmethod
     def _unlink(value: str | None) -> None:

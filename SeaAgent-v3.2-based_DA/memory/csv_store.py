@@ -6,8 +6,9 @@ import csv
 import logging
 import os
 import threading
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
+from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +18,17 @@ csv.field_size_limit(16 * 1024 * 1024)
 
 
 class CsvTable:
+    # 同一进程内，多个仓库实例操作同一路径时也必须共用锁。
+    _locks: ClassVar[dict[Path, threading.RLock]] = {}
+    _locks_guard = threading.Lock()
+
     def __init__(self, path: str | Path, fields: Iterable[str]):
         self.path = Path(path)
         self.fields = tuple(fields)
-        self._lock = threading.RLock()
-        self._ensure()
+        with self._locks_guard:
+            self._lock = self._locks.setdefault(self.path.resolve(), threading.RLock())
+        with self._lock:
+            self._ensure()
 
     def _ensure(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -37,9 +44,8 @@ class CsvTable:
                 return tuple(next(csv.reader(stream), []))
 
     def rows(self) -> list[dict[str, str]]:
-        with self._lock:
-            with self.path.open("r", encoding="utf-8-sig", newline="") as stream:
-                return [dict(row) for row in csv.DictReader(stream)]
+        with self._lock, self.path.open("r", encoding="utf-8-sig", newline="") as stream:
+            return [dict(row) for row in csv.DictReader(stream)]
 
     def find(self, predicate: Callable[[dict[str, str]], bool]) -> list[dict[str, str]]:
         return [row for row in self.rows() if predicate(row)]

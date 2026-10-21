@@ -1,38 +1,43 @@
 """人工确认流：写入前中断、事件契约、批准/拒绝后的恢复。
 
 写入工具本身另测；这里测链路——中断有没有被认出来（而不是被当成失败吞掉）、
-恢复有没有带上正确的命令与同一个 thread_id。
+恢复有没有把 Command 交回那个被中断的角色。中断检测在单个角色的执行里，
+所以桩只需要一个能吐帧的假 agent。
 """
-import threading
+from langchain_core.messages import AIMessage
+from langgraph.types import Command, Interrupt
 
-from langgraph.types import Command
-
-from harness.runtime import SeaVideoHarness, _confirmation_from, _interrupt_payload, _resume_command
+from harness.runtime import (
+    SeaVideoHarness,
+    _confirmation_from,
+    _interrupt_payload,
+    _resume_command,
+    _Trace,
+)
+from harness.shared_state import SharedTaskState
 
 
 class _FakeAgent:
     """按脚本吐帧的假 agent，并把每次收到的输入记下来供断言。"""
 
-    def __init__(self, frames, raise_on_first=False):
+    def __init__(self, frames):
         self.frames = list(frames)
         self.received = []
-        self._first = True
 
     def stream(self, payload, config=None, stream_mode=None, subgraphs=False):
         self.received.append(payload)
-        if self._first and getattr(self, "raise_on_first", False):
-            self._first = False
-            raise RuntimeError("provider unavailable")
-        self._first = False
         return iter(self.frames)
 
     def get_state(self, _config):
         raise RuntimeError("no checkpoint")
 
 
-def _interrupt_frame():
-    from langgraph.types import Interrupt
+class _Store:
+    def save(self, *_args, **_kwargs):
+        pass
 
+
+def _interrupt_frame():
     return {"__interrupt__": (Interrupt(
         value={
             "action_requests": [{
@@ -53,17 +58,32 @@ def _runtime_with_agent(agent):
             "stream_mode": "updates",
             "event_payload_max_chars": 4000,
             "evidence_tool": "show_evidence",
-            "execution_mode": "three-phase-subagents",
+            "execution_mode": "evidence-state-multi-agent",
             "output": {"answer_field": "answer", "state_field": "state", "evidence_field": "evidence"},
         },
         "tools": [{"name": "add_registry_vessel", "label": "先验库写入"}],
     }
-    runtime.agent = agent
+    runtime.agents = {"executor": agent}
+    runtime.shared_state = SharedTaskState("把 003 加进库里")
+    runtime.state_store = _Store()
     runtime.event_handler = None
     runtime._connection = None
     runtime._released = False
-    runtime.subagents = []
+    runtime._pending_agent = "executor"
     return runtime
+
+
+def _run_steps(runtime, trace, payload=None):
+    driver = runtime._run_agent_steps("executor", "把 003 加进库里", "session-x", trace, None, payload)
+    while True:
+        try:
+            next(driver)
+        except StopIteration as stopped:
+            return stopped.value
+
+
+def _trace():
+    return _Trace(None, event_limit=4000)
 
 
 # ---------------------------------------------------------------- 载荷解析
@@ -99,36 +119,30 @@ def test_resume_command_shapes():
 # ---------------------------------------------------------------- 中断路径
 
 
-def test_an_interrupt_pauses_the_turn_instead_of_failing_it():
-    """中断不是失败：本轮以 awaiting_confirmation 收尾，并发一条 confirm 事件。"""
-    events = []
+def test_an_interrupt_pauses_the_role_instead_of_failing_it():
+    """中断不是失败：本角色以 awaiting_confirmation 收尾，共享状态记下停在谁身上。"""
+    trace = _trace()
     runtime = _runtime_with_agent(_FakeAgent([_interrupt_frame()]))
-    runtime.event_handler = events.append
-    result = runtime.run("把 003 加进库里", thread_id="session-x")
+    outcome = _run_steps(runtime, trace)
 
-    assert result["state"] == "awaiting_confirmation"
-    assert "error" not in result
-    assert result["confirmation"]["actions"][0]["tool"] == "add_registry_vessel"
-    confirm_events = [event for event in events if event["type"] == "confirm"]
-    assert len(confirm_events) == 1
-    assert confirm_events[0]["confirmation"]["interruptId"] == "interrupt-1"
-    assert all(event["type"] != "error" for event in events)
+    assert outcome["state"] == "awaiting_confirmation"
+    assert outcome["confirmation"]["actions"][0]["tool"] == "add_registry_vessel"
+    assert runtime.shared_state.snapshot()["pending_agent"] == "executor"
+    assert runtime.shared_state.snapshot()["task_status"] == "awaiting_confirmation"
 
 
-def test_resume_sends_a_command_on_the_same_thread():
-    """恢复用的是同一个 thread_id，且输入是 Command —— 不是重新提问。"""
-    agent = _FakeAgent([{"model": {"messages": [__import__("langchain_core.messages", fromlist=["AIMessage"]).AIMessage(content="已写入 003。", id="a1")]}}])
+def test_resume_sends_the_command_to_the_interrupted_role():
+    """恢复时把 Command 原样交给那个角色，而不是重新提问。"""
+    agent = _FakeAgent([{"model": {"messages": [AIMessage(content="已写入 003。", id="a1")]}}])
     runtime = _runtime_with_agent(agent)
-    result = runtime.resume("approve", thread_id="session-x")
+    _run_steps(runtime, _trace(), payload=_resume_command("approve", ""))
     assert agent.received[0].resume == {"decisions": [{"type": "approve"}]}
-    assert result["state"] == "completed"
-    assert result["answer"] == "已写入 003。"
 
 
-def test_rejection_carries_the_feedback_back_to_the_model():
-    agent = _FakeAgent([{"model": {"messages": [__import__("langchain_core.messages", fromlist=["AIMessage"]).AIMessage(content="那我改成查库。", id="a1")]}}])
+def test_rejection_carries_the_feedback_to_the_model():
+    agent = _FakeAgent([{"model": {"messages": [AIMessage(content="那我改成查库。", id="a1")]}}])
     runtime = _runtime_with_agent(agent)
-    runtime.resume("reject", thread_id="session-x", feedback="这条不该入库，先查它在不在库里")
+    _run_steps(runtime, _trace(), payload=_resume_command("reject", "这条不该入库，先查它在不在库里"))
     decision = agent.received[0].resume["decisions"][0]
     assert decision["type"] == "reject"
     assert "先查它在不在库里" in decision["message"]
@@ -144,17 +158,21 @@ def test_resume_rejects_an_unknown_decision():
         raise AssertionError("非法 decision 没有被拦下")
 
 
-def test_resume_rebuilds_the_agent_after_the_turn_released_it():
-    """上一轮结束时连接已释放，恢复必须重新装配——否则 agent 是关着的。"""
-    runtime = _runtime_with_agent(_FakeAgent([{"model": {"messages": []}}]))
+def test_resume_rebuilds_agents_from_persisted_state(tmp_path):
+    """人工确认恢复只读持久化的角色与状态，不依赖旧实例的私有标记。"""
+    from harness.shared_state import SharedStateStore
+
+    runtime = _runtime_with_agent(_FakeAgent([]))
+    runtime.state_store = SharedStateStore(tmp_path / "state.sqlite")
+    runtime.shared_state.runtime_update({"task_status": "awaiting_confirmation", "pending_agent": "executor"})
+    runtime.state_store.save("session-x", runtime.shared_state)
     rebuilt = {"count": 0}
 
-    def _build():
+    def _rebuild():
         rebuilt["count"] += 1
-        return _FakeAgent([{"model": {"messages": []}}])
+        runtime.agents = {"executor": _FakeAgent([])}
 
-    runtime._build_agent = _build  # type: ignore[method-assign]
-    runtime._released = True
-    runtime._resume_agent()
+    runtime._build_agents = _rebuild  # type: ignore[method-assign]
+    runtime._initialize_state("session-x", resume=True)
     assert rebuilt["count"] == 1
-    assert runtime._released is False
+    assert runtime.shared_state.snapshot()["pending_agent"] == "executor"

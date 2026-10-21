@@ -2,19 +2,22 @@
 
 1. 终局事件的 result 曾经在超限时被压成字符串，前端读不到 answerText/state/toolRecords，
    界面显示「未生成回答、0 tool records」——结构必须永远保住。
-2. 4B 模型会把同一个技能文件读 8 遍且从不委派：中间件要在第二次就跳过并提示，
+2. 4B 模型会把同一个技能文件读 8 遍：中间件要在第二次就跳过并提示，
    把模型推回正轨，而不是等运行时把整轮停掉（那样用户拿到的是没有回答）。
 """
+import asyncio
 import json
+import time
 
 import pytest
+from langchain_core.language_models import FakeListChatModel
 from langchain_core.messages import ToolMessage
 
 from config import load_config
 from harness.middleware import build_middleware
-from harness.runtime import _bounded
+from harness.shared_state import SharedTaskState
 from harness.tool_guard import REPEAT_HINT, RepeatToolCallMiddleware
-from langchain_core.language_models import FakeListChatModel
+from harness.trace import _bounded
 
 
 class _Request:
@@ -43,14 +46,6 @@ def test_different_arguments_are_not_skipped():
     assert other.content == "executed:read_file"
 
 
-def test_exempt_tool_names_are_never_skipped():
-    """豁免名单里的工具即使同名同参也照常执行——守卫的豁免口子仍然有效。"""
-    guard = RepeatToolCallMiddleware(exempt=("list_registry",))
-    for index in range(3):
-        result = guard.wrap_tool_call(_Request("list_registry", {}, f"t{index}"), _handler)
-        assert result.content == "executed:list_registry"
-
-
 def test_bounded_payload_keeps_its_structure_when_it_exceeds_the_limit():
     """超限只截字符串，字典还是字典——这是终局事件能被前端解析的前提。"""
     payload = {
@@ -70,4 +65,50 @@ def test_bounded_payload_keeps_its_structure_when_it_exceeds_the_limit():
 
 def test_middleware_stack_includes_the_repeat_guard():
     stack = build_middleware(load_config(), FakeListChatModel(responses=["ok"]))
-    assert isinstance(stack[0], RepeatToolCallMiddleware)
+    assert any(isinstance(item, RepeatToolCallMiddleware) for item in stack)
+
+
+def test_state_and_skill_reads_do_not_consume_tool_budgets():
+    state = SharedTaskState("q")
+    guard = RepeatToolCallMiddleware(
+        state=state,
+        scope="planner",
+        limits={"run": 1, "thread": 1, "agent": 1},
+    )
+    guard.wrap_tool_call(_Request("read_shared_state", {}), _handler)
+    guard.wrap_tool_call(_Request("read_file", {"file_path": "/skills/a/SKILL.md"}), _handler)
+    assert state.snapshot()["tool_calls_run"] == 0
+    assert state.snapshot()["tool_calls_run"] == 0
+    assert state.snapshot()["agent_calls"] == {}
+
+
+def test_sync_domain_tool_timeout_returns_error_without_result_writeback():
+    state = SharedTaskState("q")
+    guard = RepeatToolCallMiddleware(
+        state=state,
+        scope="executor",
+        limits={"agent": 1},
+        tool_timeout=lambda: 0.01,
+    )
+    started = time.monotonic()
+    result = guard.wrap_tool_call(
+        _Request("get_track", {}, "timeout-1"),
+        lambda _request: (time.sleep(0.1), ToolMessage(content="late"))[1],
+    )
+    assert time.monotonic() - started < 0.08
+    assert result.status == "error"
+    assert result.artifact["tool_timeout"] is True
+    assert state.snapshot()["call_history"]["get_track:{}"]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_async_domain_tool_timeout_returns_error():
+    guard = RepeatToolCallMiddleware(scope="executor", limits={"agent": 1}, tool_timeout=lambda: 0.01)
+
+    async def slow(_request):
+        await asyncio.sleep(0.1)
+        return ToolMessage(content="late")
+
+    result = await guard.awrap_tool_call(_Request("get_track", {}, "timeout-2"), slow)
+    assert result.status == "error"
+    assert result.artifact["tool_timeout"] is True

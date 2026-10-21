@@ -1,4 +1,7 @@
+from pathlib import Path
+
 from harness.shared_state import SharedStateStore, SharedTaskState
+
 
 def test_each_agent_can_only_update_owned_fields():
     state = SharedTaskState("问题")
@@ -36,9 +39,38 @@ def test_state_store_survives_reload(tmp_path):
     assert loaded.snapshot()["requirements"] == ["r1"]
     assert loaded.snapshot()["version"] == 2
 
-def test_json_text_can_recover_agent_state():
+def test_reflector_writes_the_answer_through_shared_state():
     state = SharedTaskState("问题")
-    state.apply_agent_text("reflector", "{\"decision\": \"terminate\", \"final_answer\": \"已确认\"}")
+    state.update("reflector", {"decision": "terminate", "assessment": {"final_answer": "已确认"}})
     snapshot = state.snapshot()
     assert snapshot["decision"] == "terminate"
     assert snapshot["assessment"]["final_answer"] == "已确认"
+
+
+def test_delete_cleans_only_the_session_external_results(tmp_path):
+    store = SharedStateStore(tmp_path / "state.sqlite")
+    first = store.load("thread-1")
+    second = store.load("thread-2")
+    first.record_tool_result("executor", "get_frames", "c1", {"data": "a" * 14000}, "completed")
+    second.record_tool_result("executor", "get_frames", "c2", {"data": "b" * 14000}, "completed")
+    first_ref = first.snapshot()["tool_results"][0]["result"]["external_ref"]
+    second_ref = second.snapshot()["tool_results"][0]["result"]["external_ref"]
+    store.save("thread-1", first)
+    store.save("thread-2", second)
+
+    store.delete("thread-1")
+
+    assert not Path(first_ref).exists()
+    assert Path(second_ref).exists()
+
+
+def test_start_turn_cleans_previous_external_results(tmp_path):
+    store = SharedStateStore(tmp_path / "state.sqlite")
+    state = store.load("thread-1")
+    state.record_tool_result("executor", "get_frames", "c1", {"data": "a" * 14000}, "completed")
+    result_path = state.snapshot()["tool_results"][0]["result"]["external_ref"]
+
+    state.start_turn("new question")
+
+    assert not Path(result_path).exists()
+    assert state.snapshot()["tool_results"] == []

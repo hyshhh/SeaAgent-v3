@@ -54,6 +54,23 @@ def agent(tmp_path, monkeypatch):
     return AgentController(config={"harness": {}, "paths": _paths(tmp_path)}, repository=repository, tools=object())
 
 
+def test_error_result_keeps_context_and_distinct_user_messages():
+    controller = AgentController(config={"harness": {}}, repository=object(), tools=object())
+
+    answer_error = controller._error_result(
+        "session-1", "查一艘船", RuntimeError("failed"), "暂时无法完成视频检索。"
+    )
+    resume_error = controller._error_result(
+        "session-1", "查一艘船", RuntimeError("failed"), "确认后仍无法完成这一步。"
+    )
+
+    assert answer_error["question"] == resume_error["question"] == "查一艘船"
+    assert answer_error["answerText"] == "暂时无法完成视频检索。"
+    assert resume_error["answerText"] == "确认后仍无法完成这一步。"
+    assert answer_error["error"] == resume_error["error"] == "failed"
+    assert answer_error["errorType"] == resume_error["errorType"] == "RuntimeError"
+
+
 def test_first_question_creates_a_session(agent):
     result = agent.answer("15:30 到 15:40 有几艘船？")
     assert result["turnIndex"] == 1
@@ -108,7 +125,7 @@ def test_deleting_a_session_removes_its_rounds_and_evidence(tmp_path):
 async def test_session_endpoints_expose_the_transcript(tmp_path):
     repository = _repository(tmp_path)
     repository.create_session("session-abc", "问题")
-    request = type("R", (), {"app": type("A", (), {"state": type("S", (), {"repository": repository})()})()})()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repository=repository, agent_runs={})))
 
     listed = await agent_api.list_agent_sessions(request)
     assert listed["total"] == 1 and listed["sessions"][0]["sessionId"] == "session-abc"
@@ -227,3 +244,27 @@ async def test_stop_endpoint_signals_the_running_session():
     assert (await agent_api.stop_agent_run("session-abc", request))["success"] is True
     assert registry["session-abc"].is_set()
     assert (await agent_api.stop_agent_run("session-none", request))["success"] is False
+
+
+def test_history_preserves_shared_plan_and_pending_confirmation(tmp_path):
+    repository = _repository(tmp_path)
+    confirmation = {"actions": [{"tool": "add_registry_vessel", "arguments": {"hull_number": "003"}}]}
+    repository.append_turn("t", "add 003", {
+        "state": "awaiting_confirmation", "confirmation": confirmation,
+        "sharedState": {"plan": [{"id": "write", "content": "add ship"}], "step_status": {"write": "in_progress"}},
+    })
+    turn = repository.get_session("t")["turns"][0]
+    assert turn["confirmation"] == confirmation
+    assert turn["plan"]["steps"][0]["status"] == "in_progress"
+
+
+def test_history_preserves_a_converged_answer_as_partial(tmp_path):
+    repository = _repository(tmp_path)
+    repository.append_turn("t", "verify", {
+        "state": "completed", "partial": True, "answerText": "已有 kf1，目标尚未验证",
+        "evidence": {"shownKeyframeIds": ["kf1"]},
+    })
+    turn = _repository(tmp_path).get_session("t")["turns"][0]
+    assert turn["partial"] is True
+    assert turn["answer"] == "已有 kf1，目标尚未验证"
+    assert turn["evidence"]["shownKeyframeIds"] == ["kf1"]

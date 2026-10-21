@@ -5,7 +5,6 @@
 """
 import pathlib
 
-import pytest
 import yaml
 
 root = pathlib.Path(__file__).resolve().parents[1] / "skills"

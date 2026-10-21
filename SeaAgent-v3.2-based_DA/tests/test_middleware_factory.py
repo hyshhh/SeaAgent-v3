@@ -1,8 +1,6 @@
 from langchain.agents.middleware import (
     ModelRetryMiddleware,
     SummarizationMiddleware,
-    TodoListMiddleware,
-    ToolCallLimitMiddleware,
     ToolRetryMiddleware,
 )
 from langchain_core.language_models import FakeListChatModel
@@ -10,13 +8,21 @@ from langchain_core.language_models import FakeListChatModel
 from config import load_config
 from harness.disclosure import SkillDisclosureMiddleware
 from harness.middleware import build_middleware
+from harness.shared_state import SharedTaskState
 from harness.tool_guard import RepeatToolCallMiddleware
 from harness.wrapup import EvidenceWrapUpMiddleware
 
 
 def test_official_middleware_stack():
     stack = build_middleware(load_config(), FakeListChatModel(responses=["ok"]))
-    assert [type(item) for item in stack] == [RepeatToolCallMiddleware, SkillDisclosureMiddleware, SummarizationMiddleware, ToolCallLimitMiddleware, ModelRetryMiddleware, ToolRetryMiddleware, TodoListMiddleware, EvidenceWrapUpMiddleware]
+    assert [type(item) for item in stack] == [
+        ToolRetryMiddleware,
+        ModelRetryMiddleware,
+        RepeatToolCallMiddleware,
+        SkillDisclosureMiddleware,
+        SummarizationMiddleware,
+        EvidenceWrapUpMiddleware,
+    ]
 
 
 def test_model_rounds_are_not_capped():
@@ -32,9 +38,19 @@ def test_evidence_guard_reads_its_settings_from_config():
     assert guard.max_nudges == int(config["harness"]["evidence_wrapup_max_nudges"])
 
 
+def test_evidence_guard_receives_the_shared_task_state():
+    shared_state = SharedTaskState("问题")
+    guard = build_middleware(load_config(), FakeListChatModel(responses=["ok"]), shared_state=shared_state)[-1]
+    assert guard.shared_state is shared_state
+
+
 def test_disclosure_guard_reads_its_settings_from_config():
     config = load_config()
-    guard = build_middleware(config, FakeListChatModel(responses=["ok"]))[1]
+    guard = next(
+        item
+        for item in build_middleware(config, FakeListChatModel(responses=["ok"]))
+        if isinstance(item, SkillDisclosureMiddleware)
+    )
     assert guard.max_reminders == int(config["harness"]["skill_reminder_max_per_run"])
 
 
@@ -43,8 +59,12 @@ def test_disclosure_guard_is_skipped_when_no_skills_are_attached():
     from harness.disclosure import SkillDisclosureMiddleware
 
     config = load_config()
-    with_skills = build_middleware(config, FakeListChatModel(responses=["ok"]), skills_attached=True)
-    without_skills = build_middleware(config, FakeListChatModel(responses=["ok"]), skills_attached=False)
+    with_skills = build_middleware(
+        config, FakeListChatModel(responses=["ok"]), skills_attached=True
+    )
+    without_skills = build_middleware(
+        config, FakeListChatModel(responses=["ok"]), skills_attached=False
+    )
 
     assert any(isinstance(item, SkillDisclosureMiddleware) for item in with_skills)
     assert not any(isinstance(item, SkillDisclosureMiddleware) for item in without_skills)

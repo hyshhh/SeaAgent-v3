@@ -121,6 +121,8 @@ function scrollActivity(force = false) {
 
 /* 清空「当前这一轮」的渲染状态；切会话、重放事件前都会调用，保证渲染是幂等的。 */
 function resetActivityDom() {
+  renderAgentPlan({ steps: [] });
+  closeAgentConfirmation('idle');
   const stream = document.getElementById('agentActivityStream');
   if (stream) stream.innerHTML = '<div class="qa-empty-state">Activity will appear here when the harness starts.</div>';
   const final = document.getElementById('agentFinalView');
@@ -157,9 +159,10 @@ function syncComposer(run) {
   const button = document.getElementById('btnAskAgent');
   const stop = document.getElementById('btnStopAgent');
   const running = run?.status === 'running';
+  const awaiting = run?.status === 'awaiting_confirmation';
   if (button) {
-    button.disabled = running;
-    button.title = running ? '本轮进行中…' : '运行（Ctrl / ⌘ + Enter）';
+    button.disabled = running || awaiting;
+    button.title = running ? '本轮进行中…' : awaiting ? '请先批准或拒绝当前操作' : '运行（Ctrl / ⌘ + Enter）';
   }
   if (stop) {
     stop.hidden = !running;
@@ -196,17 +199,18 @@ function trajectorySteps() {
   }
   const turns = Array.isArray(currentSession?.turns) ? currentSession.turns : [];
   const latest = turns[turns.length - 1];
+  renderAgentPlan(latest?.plan || { steps: [] });
   return latest ? { steps: stepsFromTurn(latest), archived: true } : { steps: [], archived: false };
 }
 
 /* ---------------------------------------------------------------------------
- * 计划清单：TodoListMiddleware 把待办写在主智能体的 state 里，运行时按内容指纹去重后
- * 以 plan 事件广播完整快照。这里按快照整体重画——清单可能被模型改写，不做增量合并。
+ * 共享计划与执行进度由运行时以 plan 事件广播，按完整快照重画。
  * ------------------------------------------------------------------------- */
 const PLAN_STATUS_LABEL = {
   pending: '待办',
   in_progress: '进行中',
   completed: '已完成',
+  failed: '失败',
 };
 
 function renderAgentPlan(event) {
@@ -215,17 +219,16 @@ function renderAgentPlan(event) {
   const progress = document.getElementById('agentPlanProgress');
   const fill = document.getElementById('agentPlanMeterFill');
   if (!panel || !list) return;
-  const todos = Array.isArray(event.todos) ? event.todos : [];
-  if (!todos.length) return;
-  panel.hidden = false;
-  list.innerHTML = todos.map((item) => {
+  const steps = Array.isArray(event.steps) ? event.steps : [];
+  panel.hidden = steps.length === 0;
+  list.innerHTML = steps.map((item) => {
     const status = String(item.status || 'pending');
     const label = PLAN_STATUS_LABEL[status] || status;
     const mark = status === 'completed' ? '✓' : status === 'in_progress' ? '▸' : '·';
     return `<li class="qa-plan-item" data-status="${escapeHtml(status)}"><span class="qa-plan-mark" aria-hidden="true">${mark}</span><span class="qa-plan-text">${escapeHtml(item.content || '')}</span><em class="qa-plan-status">${escapeHtml(label)}</em></li>`;
   }).join('');
-  const total = Number(event.total ?? todos.length);
-  const done = Number(event.completed ?? todos.filter((item) => item.status === 'completed').length);
+  const total = Number(event.total ?? steps.length);
+  const done = Number(event.completed ?? steps.filter((item) => item.status === 'completed').length);
   if (progress) progress.textContent = `${done}/${total} 步已完成`;
   if (fill) fill.style.width = total ? `${Math.round((done / total) * 100)}%` : '0%';
   panel.dataset.state = done === total ? 'done' : 'running';
@@ -281,24 +284,44 @@ async function submitConfirmation(decision) {
   if (!pendingConfirmation || !pendingConfirmation.sessionId) return;
   const feedback = document.getElementById('agentConfirmFeedback');
   const panel = document.getElementById('agentConfirmPanel');
+  if (panel?.dataset.state === 'sending') return;
+  const sessionId = pendingConfirmation.sessionId;
+  const run = sessionRuns.get(sessionId) || {
+    id: sessionId, question: currentSession?.turns?.at(-1)?.question || '', events: [], result: null,
+  };
+  if (run.status === 'running') return;
+  run.status = 'running';
+  sessionRuns.set(sessionId, run);
+  syncComposer(run);
   if (panel) panel.dataset.state = 'sending';
   try {
     const response = await fetch('/api/agent/query/resume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sessionId: pendingConfirmation.sessionId,
+        sessionId,
         decision,
         feedback: decision === 'reject' ? String((feedback && feedback.value) || '').trim() : '',
       }),
     });
     if (!response.ok) throw new Error(`恢复失败：${response.status}`);
     const result = await response.json();
-    closeAgentConfirmation(decision === 'approve' ? 'approved' : 'rejected');
-    renderRunOutcome(result);
+    run.result = result;
+    run.status = result.state === 'awaiting_confirmation' ? 'awaiting_confirmation' : result.state === 'cancelled' ? 'stopped' : result.success === false ? 'error' : 'done';
+    run.events = run.events.filter((event) => event.type !== 'confirm');
+    if (currentSessionId === sessionId) {
+      closeAgentConfirmation(decision === 'approve' ? 'approved' : 'rejected');
+      renderAgentAnswer(result);
+      syncComposer(run);
+    }
+    await loadSessions();
   } catch (error) {
-    if (panel) panel.dataset.state = 'failed';
-    appendStandardEvent({ title: '恢复失败' }, 'error', '!', 'CONFIRM', String(error && error.message ? error.message : error));
+    run.status = 'awaiting_confirmation';
+    if (currentSessionId === sessionId) {
+      if (panel) panel.dataset.state = 'failed';
+      syncComposer(run);
+      appendStandardEvent({ title: '恢复失败' }, 'error', '!', 'CONFIRM', String(error && error.message ? error.message : error));
+    }
   }
 }
 
@@ -495,12 +518,19 @@ function renderSessionHistory(turns) {
 function turnAnswer(turn) {
   if (turn?.answer) return turn.answer;
   if (turn?.state === 'cancelled') return '（这一轮已停止）';
-  if (turn?.state === 'stalled') return '（这一轮工具调用连续失败，已按现有结果收尾）';
+  if (turn?.state === 'stalled') return '（这一轮未能继续推进，已按现有结果收尾）';
   return turn?.state || '（该轮未留下回答）';
 }
 
 /* 把某一轮问答还原到主面板：回答、工具名序列与证据都来自会话存档。 */
 function renderRestoredTurn(turn) {
+  renderAgentPlan(turn?.plan || { steps: [] });
+  if (turn?.state === 'awaiting_confirmation') {
+    renderAgentConfirmation({ confirmation: turn.confirmation });
+    syncComposer({ status: 'awaiting_confirmation' });
+    setHarnessState('等待确认', 'running');
+    return;
+  }
   const view = document.getElementById('agentFinalView');
   const answer = document.getElementById('agentAnswer');
   if (view) view.hidden = false;
@@ -515,7 +545,7 @@ function renderRestoredTurn(turn) {
       : '<div class="qa-inspector-empty">这轮没有留下工具调用记录。</div>';
   }
   renderEvidence(turn?.evidence || null);
-  const state = turn?.state === 'error' ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : 'Restored';
+  const state = turn?.state === 'error' ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : turn?.partial ? '已按现有证据收尾' : 'Restored';
   setHarnessState(state, turn?.state === 'error' ? 'failed' : turn?.state === 'cancelled' ? '' : 'complete');
 }
 
@@ -809,6 +839,9 @@ function appendHarnessEvent(event) {
     finishAgentLines();
     appendStandardEvent(event, 'complete', '✓', 'DONE', event.message || 'Answer and evidence generated');
     setHarnessState(event.result?.state === 'cancelled' ? 'Stopped' : 'Complete', event.result?.state === 'cancelled' ? '' : 'complete');
+  } else if (event.type === 'confirm') {
+    renderAgentConfirmation(event);
+    setHarnessState('等待确认', 'running');
   } else if (event.type === 'error') {
     const detail = [event.message, event.error, event.result?.error].filter(Boolean).join('\n');
     appendStandardEvent(event, 'error', '!', 'ERROR', detail || 'Harness failed');
@@ -897,6 +930,13 @@ function renderAgentAnswer(result) {
   // 前端于是显示「未生成回答 / 0 tool records」，看不出任何原因。
   const payload = result && typeof result === 'object' ? result : {};
   const malformed = result !== undefined && result !== null && typeof result !== 'object';
+  const shared = payload.sharedState || payload.shared_state;
+  if (shared) renderAgentPlan({ steps: (shared.plan || []).map((step) => ({ ...step, status: (shared.step_status || {})[step.id] || 'pending' })) });
+  if (payload.state === 'awaiting_confirmation') {
+    renderAgentConfirmation({ confirmation: payload.confirmation });
+    setHarnessState('等待确认', 'running');
+    return;
+  }
   const cancelled = payload.state === 'cancelled';
   const stalled = payload.state === 'stalled';
   if (view) view.hidden = false;
@@ -906,7 +946,7 @@ function renderAgentAnswer(result) {
     // renderMarkdown 内部先转义再解析，所以不会因为模型输出尖括号而注入标签。
     if (text) answer.innerHTML = renderMarkdown(text);
     else if (cancelled) answer.textContent = '本轮已停止。';
-    else if (stalled) answer.textContent = '本轮工具调用没有推进（重复或连续失败），已按现有结果收尾。';
+    else if (stalled) answer.textContent = '本轮未能继续推进，已按现有结果收尾。';
     else if (malformed) answer.textContent = '本轮结果载荷异常，未能显示回答；请在「轨迹」页查看执行过程。';
     else answer.textContent = '未生成回答。';
   }
@@ -914,6 +954,7 @@ function renderAgentAnswer(result) {
   renderEvidence(payload.evidence || null);
   if (cancelled) setHarnessState('Stopped', '');
   else if (stalled) setHarnessState('已收尾', 'complete');
+  else if (payload.partial && payload.success !== false) setHarnessState('已按现有证据收尾', 'complete');
   else setHarnessState(payload.success === false ? 'Failed' : 'Complete', payload.success === false ? 'failed' : 'complete');
   scrollActivity(true);
   scrollConversation(true);
@@ -982,12 +1023,13 @@ async function loadAgentMemorySummary(showNotice = false) {
 
 async function clearAgentMemory() {
   try {
-    // 先停掉所有在跑的会话，否则它们的轮次会在清空后又写回记忆
-    for (const run of sessionRuns.values()) run.controller?.abort();
-    sessionRuns.clear();
+    if ([...sessionRuns.values()].some((run) => run.status === 'running')) {
+      throw new Error('请先停止进行中的问答，再清除记忆');
+    }
     const response = await fetch('/api/agent/memory', {method: 'DELETE'});
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
+    sessionRuns.clear();
     startNewSession();
     await loadSessions();
     if (typeof showToast === 'function') showToast('QA memory cleared');
@@ -1023,7 +1065,7 @@ async function streamAgentQuery(question, sessionId, run) {
   let errorEvent = null;
   const consume = (event) => {
     dispatchRunEvent(run, event);
-    if (event.type === 'complete') result = event.result || result;
+    if (event.type === 'complete' || event.type === 'confirm') result = event.result || result;
     if (event.type === 'error') { errorEvent = event; result = event.result || result; }
   };
   while (true) {
@@ -1049,8 +1091,9 @@ async function askAgent() {
   const question = document.getElementById('agentQuestion')?.value.trim();
   if (!question) { if (typeof showToast === 'function') showToast('请输入问题', 'error'); return; }
   const sessionId = currentSessionId || newSessionId();
-  if (sessionRuns.get(sessionId)?.status === 'running') {
-    if (typeof showToast === 'function') showToast('这个会话还在回答，先停止或换一个会话', 'error');
+  const status = sessionRuns.get(sessionId)?.status || currentSession?.turns?.at(-1)?.state;
+  if (status === 'running' || status === 'awaiting_confirmation') {
+    if (typeof showToast === 'function') showToast('请先完成当前问答或确认操作，也可以切换会话', 'error');
     return;
   }
   currentSessionId = sessionId;
@@ -1067,7 +1110,7 @@ async function askAgent() {
   try {
     const result = await streamAgentQuery(question, sessionId, run);
     run.result = result || null;
-    run.status = result?.state === 'cancelled' ? 'stopped' : result?.success === false ? 'error' : 'done';
+    run.status = result?.state === 'awaiting_confirmation' ? 'awaiting_confirmation' : result?.state === 'cancelled' ? 'stopped' : result?.success === false ? 'error' : 'done';
   } catch (error) {
     // 用户按过停止：无论流是抛 AbortError 还是直接断掉，都算「已停止」而不是失败
     if (error.name === 'AbortError' || run.stopping) {

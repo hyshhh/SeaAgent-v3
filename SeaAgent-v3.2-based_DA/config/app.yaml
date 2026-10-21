@@ -10,8 +10,8 @@ llm:
   api_key: abc123
   base_url: http://localhost:7890/v1
   temperature: 0.0
-  timeout_seconds: 90
-  # 流式：开着才能把子智能体的输出实时外发到轨迹页（关掉则只剩「思考中」一条）
+  timeout_seconds: 60
+  # 流式：模型边生成边回帧，长回答的首字延迟更低；关掉则整段生成完再返回
   streaming: true
   # 思考上限（单次调用输出的 token 上限）：这个模型先输出内部推理再给答案，
   # 两者共用这个额度。额度太小，答案（尤其要求 JSON 的结构化返回）会被截断；

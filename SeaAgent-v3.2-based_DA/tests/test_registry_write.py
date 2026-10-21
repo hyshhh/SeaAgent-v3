@@ -3,7 +3,6 @@
 工具本体是 add_registry_vessel，它外面还有一道人工确认中断（另测）。
 这里只测工具自己的纪律：没有用户要求不写、只新增不覆盖、参考图不能是视频、路径要真实存在。
 """
-import pathlib
 
 from harness.registry_write import MAX_REFERENCES, RegistryWriteTool
 

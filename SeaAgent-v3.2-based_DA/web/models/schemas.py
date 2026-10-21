@@ -1,6 +1,6 @@
 """网页接口数据结构。"""
 from __future__ import annotations
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 class ShipCreate(BaseModel):

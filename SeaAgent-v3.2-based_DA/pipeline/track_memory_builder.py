@@ -116,7 +116,7 @@ class TrackMemoryBuilder:
         )
 
     def reset_persistent_memory(self) -> None:
-        self.memory_manager.clear_all()
+        self.memory_manager.clear_track_memory()
         self.trace.clear()
         self._next_track_id_value = 1
 

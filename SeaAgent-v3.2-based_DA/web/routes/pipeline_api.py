@@ -650,7 +650,6 @@ async def upload_video(file: UploadFile = File(...)):
 
     total_bytes = 0
     chunk_size = 1024 * 1024  # 1MB
-    last_activity = asyncio.get_event_loop().time()
     timeout_seconds = 120  # 2 分钟无数据则超时
 
     try:
@@ -679,7 +678,6 @@ async def upload_video(file: UploadFile = File(...)):
 
                 # 异步写入，避免阻塞事件循环
                 await asyncio.to_thread(f.write, chunk)
-                last_activity = asyncio.get_event_loop().time()
 
     except HTTPException:
         # 清理已写入的部分文件（句柄已由 with 关闭）
@@ -732,9 +730,9 @@ async def debug_ffmpeg():
     # 测试 ffprobe 执行
     if _FFPROBE:
         try:
-            ret = subprocess.run(
+            ret = await asyncio.to_thread(subprocess.run,
                 [_FFPROBE, "-version"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, check=False,
             )
             result["ffprobe_version"] = ret.stdout.strip()[:200]
             result["ffprobe_rc"] = ret.returncode
@@ -746,9 +744,9 @@ async def debug_ffmpeg():
     # 测试 ffmpeg 执行
     if _FFMPEG:
         try:
-            ret = subprocess.run(
+            ret = await asyncio.to_thread(subprocess.run,
                 [_FFMPEG, "-version"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, check=False,
             )
             result["ffmpeg_version"] = ret.stdout.strip()[:200]
             result["ffmpeg_rc"] = ret.returncode
@@ -766,7 +764,7 @@ async def check_video_codec(filename: str):
     if not video_path.exists() or not video_path.is_file():
         raise HTTPException(status_code=404, detail=f"视频不存在: {filename}")
 
-    codec = _probe_codec(str(video_path))
+    codec = await asyncio.to_thread(_probe_codec, str(video_path))
     compatible = codec in _BROWSER_COMPATIBLE_CODECS if codec else True
 
     # 检查是否有已转码的缓存
@@ -881,9 +879,6 @@ async def start_pipeline(req: PipelineStartRequest):
             logger.info("视频分辨率: %dx%d", video_w, video_h)
 
     # 构建 pipeline 命令
-    config = load_config()
-    pipeline_cfg = config.get("pipeline", {})
-
     cmd = [
         sys.executable, "-m", "pipeline",
         video_source,
@@ -981,9 +976,13 @@ async def start_pipeline(req: PipelineStartRequest):
     _init_pool_rows(task_id)
     _append_pipeline_log(task_id, "流水线任务已创建")
 
+    sem_acquired = False
+    handed_off = False
+    process = None
     try:
         # 获取信号量（限制并发 pipeline 数量）
         await sem.acquire()
+        sem_acquired = True
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,  # raw BGR 帧输出
@@ -999,13 +998,28 @@ async def start_pipeline(req: PipelineStartRequest):
         asyncio.create_task(_start_h264_reader(task_id, process, pipe_w, pipe_h, fps=h264_fps))
 
         asyncio.create_task(_wait_pipeline(task_id, process, sem))
+        handed_off = True
 
     except FileNotFoundError:
-        sem.release()
         async with _state_lock:
             _task_status[task_id]["status"] = "failed"
             _task_status[task_id]["error"] = "pipeline 模块不存在，请确认 pipeline 目录已实现"
         raise HTTPException(status_code=500, detail="pipeline 模块不存在")
+    except Exception as error:
+        logger.exception("Pipeline 启动失败: %s", task_id)
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except Exception:
+                pass
+        async with _state_lock:
+            _task_status[task_id]["status"] = "failed"
+            _task_status[task_id]["error"] = str(error)
+        raise HTTPException(status_code=500, detail="Pipeline 启动失败") from error
+    finally:
+        if sem_acquired and not handed_off:
+            sem.release()
 
     return PipelineStartResponse(
         success=True,
@@ -1107,7 +1121,11 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
 
             logger.info("[%s] %s", task_id, text)
 
-        await process.wait()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Pipeline 进程结束等待超时，强制终止: %s", task_id)
+            await _terminate_pipeline_process(process, timeout=1.0)
 
         async with _state_lock:
             if process.returncode == 0:
@@ -1269,33 +1287,7 @@ async def stop_pipeline(task_id: str):
         _cleanup_stream_dir(task_id)
         return {"success": True, "message": f"已停止任务: {task_id}"}
 
-    import signal
-
-    # 用户主动停止：先尝试 SIGTERM，短暂等待后直接 SIGKILL
-    try:
-        pgid = os.getpgid(process.pid)
-        os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            pass
-
-    try:
-        await asyncio.wait_for(process.wait(), timeout=1.0)
-    except asyncio.TimeoutError:
-        try:
-            pgid = os.getpgid(process.pid)
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-        try:
-            await asyncio.wait_for(process.wait(), timeout=1.0)
-        except asyncio.TimeoutError:
-            pass
+    await _terminate_pipeline_process(process)
 
     # 更新状态
     async with _state_lock:
@@ -1310,6 +1302,36 @@ async def stop_pipeline(task_id: str):
     _cleanup_stream_dir(task_id)
 
     return {"success": True, "message": f"已停止任务: {task_id}"}
+
+
+async def _terminate_pipeline_process(process: asyncio.subprocess.Process, timeout: float = 1.0) -> None:
+    """按平台终止子进程，超时后强制杀掉。"""
+    import signal
+
+    use_group = os.name == "posix" and hasattr(os, "getpgid") and hasattr(os, "killpg")
+    try:
+        if use_group:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        else:
+            process.terminate()
+    except (AttributeError, ProcessLookupError, PermissionError):
+        pass
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+        return
+    except asyncio.TimeoutError:
+        pass
+    try:
+        if use_group:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        else:
+            process.kill()
+    except (AttributeError, ProcessLookupError, PermissionError):
+        pass
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        pass
 
 
 def _cleanup_old_tasks():
@@ -1441,8 +1463,6 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
 
     try:
         # 从 pipeline stdout 读取 raw 帧，喂给 ffmpeg
-        loop = asyncio.get_event_loop()
-
         # 启动 ffmpeg
         ffmpeg_proc = await asyncio.create_subprocess_exec(
             *ffmpeg_args,
@@ -1603,9 +1623,9 @@ async def _broadcast_h264(task_id: str, data: bytes):
         viewers = list(stream["viewer_queues"].items())
 
     slow_viewers = []
-    for ws, queue in viewers:
+    for ws, viewer_queue in viewers:
         try:
-            queue.put_nowait(data)
+            viewer_queue.put_nowait(data)
         except asyncio.QueueFull:
             slow_viewers.append(ws)
 
@@ -1924,8 +1944,20 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
     _init_pool_rows(task_id)
     _append_pipeline_log(task_id, "流水线任务已创建")
 
+    sem_acquired = False
+    sem_released = False
+    sem_release_lock = threading.Lock()
+
+    def release_sem_once() -> None:
+        nonlocal sem_released
+        with sem_release_lock:
+            if sem_acquired and not sem_released:
+                sem_released = True
+                sem.release()
+
     try:
         await sem.acquire()
+        sem_acquired = True
 
         # ── H.264 编码器：从 pipe 读 raw BGR → ffmpeg → fMP4 ──
         class _PipeReader:
@@ -2018,7 +2050,6 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
 
         def _run_pipeline():
             """在独立线程中运行 pipeline，stdout fd 重定向到 pipe"""
-            import cv2
             from pipeline.pipeline import ShipPipeline
             from pipeline.virtual_camera import VirtualCamera
 
@@ -2059,27 +2090,29 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
 
             # 通知主循环完成（线程中无 event loop，需用主循环引用）
             async def _finish():
-                async with _state_lock:
-                    if "error" in stats:
-                        _task_status[task_id]["status"] = "failed"
-                        _task_status[task_id]["error"] = stats["error"]
-                    else:
-                        _task_status[task_id]["status"] = "completed"
-                        _task_status[task_id]["progress"] = "处理完成"
-                # 关闭 WebRTC PC，让帧接收器退出
-                pc = _webrtc_pcs.pop(task_id, None)
-                if pc:
-                    try:
-                        await asyncio.wait_for(pc.close(), timeout=3.0)
-                    except Exception:
-                        pass
-                await _stop_h264_stream(task_id)
-                fake_proc.stderr.signal_done()
-                fake_proc._finished.set()
-                sem.release()
-                _append_pipeline_log(task_id, "浏览器摄像头流水线已结束", "info")
-                _webrtc_ready_events.pop(task_id, None)
-                _cleanup_stream_dir(task_id)
+                try:
+                    async with _state_lock:
+                        if "error" in stats:
+                            _task_status[task_id]["status"] = "failed"
+                            _task_status[task_id]["error"] = stats["error"]
+                        else:
+                            _task_status[task_id]["status"] = "completed"
+                            _task_status[task_id]["progress"] = "处理完成"
+                    # 关闭 WebRTC PC，让帧接收器退出
+                    pc = _webrtc_pcs.pop(task_id, None)
+                    if pc:
+                        try:
+                            await asyncio.wait_for(pc.close(), timeout=3.0)
+                        except Exception:
+                            pass
+                    await _stop_h264_stream(task_id)
+                    fake_proc.stderr.signal_done()
+                    fake_proc._finished.set()
+                    _append_pipeline_log(task_id, "浏览器摄像头流水线已结束", "info")
+                    _webrtc_ready_events.pop(task_id, None)
+                    _cleanup_stream_dir(task_id)
+                finally:
+                    release_sem_once()
 
             asyncio.run_coroutine_threadsafe(_finish(), _main_loop)
 
@@ -2094,13 +2127,16 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
         thread.start()
 
     except Exception as e:
-        sem.release()
+        release_sem_once()
         try:
             fake_proc._finished.set()
         except Exception:
             pass
-        os.close(pipe_r)
-        os.close(pipe_w)
+        for pipe_fd in (pipe_r, pipe_w):
+            try:
+                os.close(pipe_fd)
+            except OSError:
+                pass
         _frame_queues.pop(task_id, None)
         _webrtc_ready_events.pop(task_id, None)
         async with _state_lock:
@@ -2110,7 +2146,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
 
     return PipelineStartResponse(
         success=True,
-        message=f"浏览器摄像头 Pipeline 已启动 (内存队列模式)，请连接 WebSocket 推流",
+        message="浏览器摄像头 Pipeline 已启动 (内存队列模式)，请连接 WebSocket 推流",
         task_id=task_id,
         capture_fps=req.capture_fps,
     )
@@ -2252,7 +2288,6 @@ async def _receive_webrtc_camera_frames(
 ):
     """WebRTC 模式：从 RTCPeerConnection 的视频 track 读取帧 → pipeline 队列"""
     import cv2
-    import numpy as np
 
     frame_count = 0
 

@@ -4,11 +4,13 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+pytest-of-*/
 
 # Runtime outputs
 *.sqlite
 *.sqlite-*
 data/memory/*.tmp
+data/memory/tool_results/
 
 # Generated media and indexes
 output/

@@ -1,14 +1,25 @@
 """以 tracks 为主表的三层记忆仓库。"""
 from __future__ import annotations
+
 import json
 import logging
 import re
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
+
 from config import load_config
 from memory.csv_store import CsvTable
-from memory.schema import KEYFRAME_FIELDS, QA_EVIDENCE_FIELDS, QA_ROUND_FIELDS, QA_SESSION_FIELDS, REGISTRY_FIELDS, REGISTRY_IMAGE_FIELDS, TRACK_FIELDS
+from memory.schema import (
+    KEYFRAME_FIELDS,
+    QA_EVIDENCE_FIELDS,
+    QA_ROUND_FIELDS,
+    QA_SESSION_FIELDS,
+    REGISTRY_FIELDS,
+    REGISTRY_IMAGE_FIELDS,
+    TRACK_FIELDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +127,6 @@ class MemoryRepository:
     def clear_track_memory(self) -> None:
         self.tracks.replace_all([])
         self.keyframes.replace_all([])
-        self.qa_sessions.replace_all([])
-        self.qa_rounds.replace_all([])
-        self.qa_evidence.replace_all([])
 
     def upsert_keyframe(self, keyframe: dict[str, Any]) -> None:
         row = dict(keyframe)
@@ -272,14 +280,22 @@ class MemoryRepository:
         不存工具结果正文——那是 qa_evidence 的职责，会话行只负责把对话拼回原样。
         """
         evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
-        return {
+        shared = result.get("sharedState") or {}
+        plan = [{**step, "status": shared.get("step_status", {}).get(step["id"], "pending")}
+                for step in shared.get("plan", []) if isinstance(step, dict) and step.get("id")]
+        turn = {
             "question": question,
             "answer": str(result.get("answerText") or result.get("conclusion") or ""),
             "state": str(result.get("state") or ""),
+            "partial": bool(result.get("partial", False)),
             "createdAt": created_at,
             "toolChain": [str(name) for name in (result.get("toolChain") or [])],
+            "plan": {"steps": plan},
             "evidence": {key: list(evidence.get(key) or []) for key in ("shownKeyframeIds", "shownShipSegmentIds", "shownRegistryReferenceIds")},
         }
+        if turn["state"] == "awaiting_confirmation":
+            turn["confirmation"] = result.get("confirmation") or {}
+        return turn
 
     @classmethod
     def _turns_of(cls, row: dict[str, str]) -> list[dict[str, Any]]:

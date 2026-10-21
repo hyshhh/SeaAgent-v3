@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning("未找到 ffmpeg，部分浏览器视频转码能力不可用")
     yield
 
-app = FastAPI(title="Sea-Video-Harness", description="Skills-driven single-agent maritime video QA harness", version="3.2.0", lifespan=lifespan)
+app = FastAPI(title="Sea-Video-Harness", description="Evidence-state multi-agent maritime video QA harness", version="3.2.0", lifespan=lifespan)
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")

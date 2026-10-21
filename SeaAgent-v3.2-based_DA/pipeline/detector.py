@@ -33,9 +33,8 @@ def _build_tracker_yaml(tracker_type: str, tracker_params: dict[str, Any] | None
         return f"{tracker_type}.yaml"
     cfg: dict[str, Any] = {"tracker_type": tracker_type}
     cfg.update(tracker_params)
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", prefix=f"{tracker_type}_", delete=False, encoding="utf-8")
-    yaml.dump(cfg, tmp, default_flow_style=False, allow_unicode=True)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", prefix=f"{tracker_type}_", delete=False, encoding="utf-8") as tmp:
+        yaml.dump(cfg, tmp, default_flow_style=False, allow_unicode=True)
     return tmp.name
 
 

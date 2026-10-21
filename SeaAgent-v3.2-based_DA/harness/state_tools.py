@@ -1,23 +1,27 @@
 """Tools that let each agent maintain its owned part of the shared state."""
+
 from __future__ import annotations
 
-import json
 from typing import Any
 
 
+# ------------------------------------------------------------------ #
+# 一、状态读写工具
+# ------------------------------------------------------------------ #
+# 1.1 读工具共用，写工具按角色拆开
 def build_state_tools(state: Any) -> list[Any]:
     from langchain_core.tools import StructuredTool
 
     def read_shared_state() -> dict[str, Any]:
-        return state.snapshot()
+        return state.view()
 
-    def planner_update(patch: dict[str, Any], expected_version: int | None = None) -> dict[str, Any]:
+    def planner_update(patch: dict[str, Any], expected_version: int) -> dict[str, Any]:
         return _update(state, "planner", patch, expected_version)
 
-    def executor_update(patch: dict[str, Any], expected_version: int | None = None) -> dict[str, Any]:
+    def executor_update(patch: dict[str, Any], expected_version: int) -> dict[str, Any]:
         return _update(state, "executor", patch, expected_version)
 
-    def reflector_update(patch: dict[str, Any], expected_version: int | None = None) -> dict[str, Any]:
+    def reflector_update(patch: dict[str, Any], expected_version: int) -> dict[str, Any]:
         return _update(state, "reflector", patch, expected_version)
 
     return [
@@ -34,7 +38,7 @@ def build_state_tools(state: Any) -> list[Any]:
         StructuredTool.from_function(
             executor_update,
             name="update_execution_state",
-            description="仅 Executor 使用。更新 evidence_ids、tool_results、execution_status。",
+            description="仅 Executor 使用。更新 evidence_ids、execution_status、step_status（步骤 ID 到 pending/in_progress/completed/failed）。工具原始结果由运行时自动记录。",
         ),
         StructuredTool.from_function(
             reflector_update,
@@ -44,9 +48,8 @@ def build_state_tools(state: Any) -> list[Any]:
     ]
 
 
-def _update(state: Any, role: str, patch: dict[str, Any], expected_version: int | None) -> dict[str, Any]:
-    if isinstance(patch, str):
-        patch = json.loads(patch)
+# 1.2 落到共享状态并校验字段归属
+def _update(state: Any, role: str, patch: dict[str, Any], expected_version: int) -> dict[str, Any]:
     if not isinstance(patch, dict):
-        raise ValueError("patch must be a JSON object")
+        raise TypeError("patch must be a JSON object")
     return state.update(role, patch, expected_version)

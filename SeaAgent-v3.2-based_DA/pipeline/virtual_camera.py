@@ -104,8 +104,6 @@ class VirtualCamera:
         if not self._dir:
             return False, None
 
-        now = time.time()
-
         # 检查帧目录是否还存在（WebSocket 断开后可能被清理）
         if not self._dir.exists():
             self._opened = False

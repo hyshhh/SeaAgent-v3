@@ -1,35 +1,28 @@
-"""Configured LangChain chat model adapter.
+"""把 config 的 llm 段翻译成 LangChain ChatModel，业务代码里不出现任何硬编码端点。"""
 
-把 config 里的 llm 段翻译成一个 LangChain ChatModel：模型名、地址、密钥、温度、超时
-全部来自配置，业务代码里不出现任何硬编码端点。embedding 模型不在此构建。
-"""
 from __future__ import annotations
 
 from typing import Any
 
 
+# ------------------------------------------------------------------ #
+# 一、模型装配                                                             #
+# ------------------------------------------------------------------ #
+# 1.1 按配置构建 ChatOpenAI
 def build_model(config: dict[str, Any]):
-    """按 ``config["llm"]`` 构建 ChatOpenAI（指向 OpenAI 兼容端点）。
-
-    langchain_openai 延迟到函数内导入：本模块会被配置层与测试广泛引用，
-    只有真正建模型时才要求装该依赖；缺失时给出可直接照做的中文报错。
-    """
     try:
         from langchain_openai import ChatOpenAI
     except ImportError as error:
         raise RuntimeError("缺少 langchain-openai，请安装生产依赖") from error
-    # 只有 model 是必填项，其余取保守默认：温度 0 保证可复现，超时 90s 防长尾挂死
-    settings = config.get("llm", {})
-    # streaming=True：子智能体的输出只有走流式才会以 on_llm_new_token 回调出来，
-    # 否则外部只能看到「子智能体思考」这一条，之后一片空白（见 harness/subagent_trace.py）。
-    # 思考上限：模型先输出内部推理再给答案，两者共用这个额度。不设就走服务端默认值。
-    max_tokens = settings.get("max_tokens")
+    settings = config.get("llm", {})  # 模型为必填项；温度 0，请求超时默认 60s。
+    max_tokens = settings.get("max_tokens")  # 思考与答案共用这个额度，不设走服务端默认
     return ChatOpenAI(
         model=settings["model"],
         api_key=settings.get("api_key"),
         base_url=settings.get("base_url"),
         temperature=float(settings.get("temperature", 0)),
-        timeout=float(settings.get("timeout_seconds", 90)),
-        streaming=bool(settings.get("streaming", True)),
+        timeout=float(settings.get("timeout_seconds", 60)),
+        max_retries=0,  # 重试统一由中间件管理，避免 SDK 隐式增加调用次数。
+        streaming=bool(settings.get("streaming", True)),  # 边生成边回帧，长回答首字延迟更低
         max_tokens=int(max_tokens) if max_tokens else None,
     )

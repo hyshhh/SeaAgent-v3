@@ -1,38 +1,23 @@
-"""待人工确认的先验库写入工具。
-
-为什么单独一个模块：
-    这是整条问答链路里**唯一会改进知识库**的操作，所以它与那 10 个读工具分开，
-    并且配了 HumanInTheLoop 中断——写之前必须由人过一眼。
-
-它在链路里的位置：
-    executor 调 add_registry_vessel → 中间件拦下并中断 → 前端弹确认卡
-      ├─ 批准 → 工具真正执行（复用 ShipService 的完整事务：写档案 → 存图 → 编码 → 重建索引）
-      └─ 拒绝 + 理由 → 工具**不执行**，理由作为工具结果回给模型，让它换个做法
-
-三条纪律写死在工具描述和校验里（参考 registry.registry 技能的"多步操作"精神）：
-    1. 只有用户明确要求入库/写入时才调用；模型自己觉得"这条船像 003"不算理由。
-    2. 只新增，不覆盖：舷号已存在直接报错，让人来判断是改还是不加。
-    3. 参考图必须是先验库口径的图，不能把视频关键帧当"已知身份"存进去。
-"""
+# ------------------------------------------------------------------ #
+# 一、先验库写入工具                                                          #
+# ------------------------------------------------------------------ #
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-# 允许的参考图后缀：与 web 层上传同一套口径
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-# 单个库项的参考图上限：与 ShipService 保持一致
-MAX_REFERENCES = 6
-# 视频容器后缀：关键帧/片段不是参考图，出现即拒绝
-VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}  # 允许的参考图后缀：与 web 层上传同一套口径
+MAX_REFERENCES = 6  # 单个库项的参考图上限：与 ShipService 保持一致
+VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm"}  # 视频容器后缀：关键帧/片段不是参考图，出现即拒绝
 
 
+# 1.1 拒绝写入的异常：不执行写入，把原因作为工具结果交回模型
 class RegistryWriteRefused(Exception):
-    """写入前的校验未通过：不执行写入，把原因作为工具结果交回模型。"""
+    pass
 
 
+# 1.2 解析参考图路径
 def _image_paths(values: Any) -> list[Path]:
-    """把入参收敛成存在的图片路径列表。"""
     if values in (None, ""):
         return []
     if isinstance(values, (str, Path)):
@@ -60,14 +45,13 @@ def _image_paths(values: Any) -> list[Path]:
     return paths
 
 
+# 1.3 待人工确认的写入工具本体
 class RegistryWriteTool:
-    """把「新增一条先验库船舶」包成一个可被中断确认的工具。"""
-
+    # 1.3.1 绑定服务与仓库
     def __init__(self, service: Any) -> None:
-        # service 是 web.services.ShipService 的实例（惰性注入，避免 tools 层反向依赖 web）
-        self._service = service
+        self._service = service  # service 是 web.services.ShipService 的实例（惰性注入，避免 tools 层反向依赖 web）
 
-    # ------------------------------------------------------------------ 工具主体
+    # 1.3.2 写入一条库项
     def addRegistryVessel(
         self,
         hull_number: str,
@@ -76,7 +60,6 @@ class RegistryWriteTool:
         aliases: Any = None,
         user_intent: str | None = None,
     ) -> dict[str, Any]:
-        """新增一条先验库记录并重建向量索引；校验不过则拒绝写入并说明原因。"""
         intent = str(user_intent or "").strip()
         if not intent:
             return {
@@ -118,7 +101,6 @@ class RegistryWriteTool:
             "aliases": item.get("aliases", []),
             "referenceIds": [reference.get("referenceId") for reference in references],
             "referenceCount": len(references),
-            # 索引重建由 ShipService 的事务负责：这一步没成功，写库也不会留下半条记录
-            "indexRebuilt": bool(references) and all(reference.get("isEmbedded") for reference in references),
+            "indexRebuilt": bool(references) and all(reference.get("isEmbedded") for reference in references),  # 重建由 ShipService 事务负责
             "userIntent": intent,
         }
