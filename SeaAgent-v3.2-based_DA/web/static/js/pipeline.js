@@ -984,9 +984,35 @@ function markSequenceVideo(filename, state) {
 function renderActiveTrackMonitor(rows, captions = []) {
   const container = document.getElementById('activeTrackMonitorRows');
   if (!container) return;
-  const activeRows = [...(Array.isArray(rows) ? rows : []), ...(Array.isArray(captions) ? captions : [])]
-    .sort((left, right) => Number(right.eventAt || 0) - Number(left.eventAt || 0))
-    .slice(0, 40);
+  const refreshesByTrack = new Map();
+  (Array.isArray(captions) ? captions : []).forEach(caption => {
+    const trackId = String(caption.trackId || '-');
+    const refreshes = refreshesByTrack.get(trackId) || new Map();
+    const previous = refreshes.get(caption.status);
+    if (!previous || Number(caption.eventAt || 0) > Number(previous.eventAt || 0)) {
+      refreshes.set(caption.status, caption);
+    }
+    refreshesByTrack.set(trackId, refreshes);
+  });
+
+  const activeRows = (Array.isArray(rows) ? rows : []).map(row => {
+    const trackId = String(row.trackId || '-');
+    const refreshes = [...(refreshesByTrack.get(trackId)?.values() || [])];
+    refreshesByTrack.delete(trackId);
+    return {
+      ...row,
+      refreshes,
+      displayAt: Math.max(Number(row.eventAt || 0), ...refreshes.map(item => Number(item.eventAt || 0))),
+    };
+  });
+  refreshesByTrack.forEach((refreshes, trackId) => {
+    const items = [...refreshes.values()];
+    activeRows.push({
+      kind: 'caption', trackId, refreshes: items,
+      displayAt: Math.max(...items.map(item => Number(item.eventAt || 0))),
+    });
+  });
+  activeRows.sort((left, right) => right.displayAt - left.displayAt);
   const previousScrollTop = container.scrollTop;
   const previousScrollHeight = container.scrollHeight;
   const followsLatest = previousScrollTop < 12;
@@ -996,8 +1022,14 @@ function renderActiveTrackMonitor(rows, captions = []) {
   }
   container.innerHTML = activeRows.slice(0, 40).map((row) => {
     const trackId = row.trackId || '-';
+    const refreshMarkup = (row.refreshes || []).map(item =>
+      `<span class="pool-refresh-label">${escHtml(item.status || '')}</span>`
+    ).join('');
     if (row.kind === 'caption') {
-      return `<article class="active-track-live-row pool-refresh-caption"><div class="active-track-live-line"><strong>Track #${escHtml(trackId)}</strong></div><p>${escHtml(row.status || '')}</p></article>`;
+      return `<article class="active-track-live-row pool-refresh-caption" data-track-id="${safeAttr(String(trackId))}">
+        <div class="active-track-live-line"><strong>Track #${escHtml(trackId)}</strong></div>
+        <div class="pool-refresh-markers">${refreshMarkup}</div>
+      </article>`;
     }
     const status = pipelineRecordStatus(row.status);
     const hull = row.hullNumber || 'Unreadable';
@@ -1006,6 +1038,7 @@ function renderActiveTrackMonitor(rows, captions = []) {
     return `<article class="active-track-live-row">
       <div class="active-track-live-line"><strong>Track #${escHtml(trackId)}</strong><span>${escHtml(status)}</span></div>
       <p><b>${escHtml(descriptionText)}</b></p>
+      ${refreshMarkup ? `<div class="pool-refresh-markers">${refreshMarkup}</div>` : ''}
     </article>`;
   }).join('');
   if (followsLatest) {

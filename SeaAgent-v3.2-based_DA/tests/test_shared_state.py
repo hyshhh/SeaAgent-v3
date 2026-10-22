@@ -15,6 +15,19 @@ def test_each_agent_can_only_update_owned_fields():
     else:
         raise AssertionError("planner modified reflector state")
 
+
+def test_repeating_the_same_state_patch_is_idempotent_success():
+    state = SharedTaskState("问题")
+    patch = {"requirements": ["找到目标轨迹"]}
+    state.update("planner", patch)
+    version = state.snapshot()["version"]
+
+    result = state.update("planner", patch)
+
+    assert result["ok"] is True
+    assert result["unchanged"] is True
+    assert state.snapshot()["version"] == version
+
 def test_tool_results_collect_evidence_ids():
     state = SharedTaskState("问题")
     state.record_tool_result("executor", "get_frames", "c1", {"keyframeIds": ["kf-1"], "trackIds": ["t-1"]}, "completed")

@@ -33,23 +33,50 @@ class AgentController:
         session = self.repository.get_session(session_id)
         if session is None:
             self.repository.create_session(session_id, question)
-            turn_index = 1
+            original_question = question
+            clarification = ""
         else:
-            turn_index = len(session.get("turns") or []) + 1
+            turns = session.get("turns") or []
+            if turns and turns[-1].get("state") == "awaiting_confirmation":
+                raise ValueError("请先完成当前问答的确认，再开始新问题")
+            original_question = question
+            clarification = ""
+            if turns and turns[-1].get("state") == "awaiting_input":
+                original_question = str(turns[-1].get("question") or question)
+                clarification = str(turns[-1].get("answer") or "")
+                clarification_response = question
+                question = f"{original_question}\n\n用户补充信息：{clarification_response}"
+        if not clarification:
+            clarification_response = ""
+        runtime_id = f"qa-{uuid.uuid4().hex}"
         runtime: SeaVideoHarness | None = None
+        result: dict[str, Any] = {}
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
-            state = runtime.run(question, thread_id=session_id, cancel=cancel)
-            result = self._project(session_id, state, turn_index, question)
+            state = runtime.run(question, thread_id=runtime_id, cancel=cancel)
+            result = self._project(session_id, state, original_question)
         except Exception as error:
             logger.exception("Agent controller failed: session_id=%s", session_id)
             result = self._error_result(session_id, question, error, "暂时无法完成视频检索。")
         finally:
             if runtime is not None:
                 runtime.close()
+                if result.get("state") != "awaiting_confirmation":
+                    self._discard_run(runtime, runtime_id)
+        if clarification:
+            result["clarificationQuestion"] = str(result.get("clarification") or clarification)
+            result["clarificationResponse"] = clarification_response
         # 成功与失败都留档：失败轮次同样属于会话历史，前端据此还原完整对话
+        result["question"] = original_question
         result["sessionId"] = session_id
-        result["turnIndex"] = self.repository.append_turn(session_id, question, result)
+        if clarification:
+            result["turnIndex"] = self.repository.replace_last_turn(
+                session_id, original_question, result, runtime_id=runtime_id
+            )
+        else:
+            result["turnIndex"] = self.repository.append_turn(
+                session_id, question, result, runtime_id=runtime_id
+            )
         return result
 
     # 1.1.3 人工确认后继续上一轮
@@ -58,22 +85,37 @@ class AgentController:
         if not session_id:
             raise ValueError("恢复确认必须带上 session_id（中断点是按它会话存的）")
         session = self.repository.get_session(session_id)
-        turn_index = len((session or {}).get("turns") or []) + 1
-        question = str((session or {}).get("title") or "（人工确认后继续）")
+        turns = (session or {}).get("turns") or []
+        if not turns or turns[-1].get("state") != "awaiting_confirmation":
+            raise ValueError("当前会话没有等待确认的问答")
+        pending_turn = turns[-1]
+        runtime_id = str(pending_turn.get("runtimeId") or "")
+        if not runtime_id:
+            raise ValueError("等待确认的问答缺少运行标识，请重新发起该问题")
+        question = str(pending_turn.get("question") or "（人工确认后继续）")
         runtime: SeaVideoHarness | None = None
+        result: dict[str, Any] = {}
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
-            state = runtime.resume(decision, thread_id=session_id, feedback=feedback, cancel=cancel)
+            state = runtime.resume(decision, thread_id=runtime_id, feedback=feedback, cancel=cancel)
             question = str((state.get("shared_state") or {}).get("question") or question)
-            result = self._project(session_id, state, turn_index, question)
+            result = self._project(session_id, state, question)
         except Exception as error:
             logger.exception("Agent controller resume failed: session_id=%s", session_id)
             result = self._error_result(session_id, question, error, "确认后仍无法完成这一步。")
+            result.update(
+                state="awaiting_confirmation",
+                confirmation=pending_turn.get("confirmation") or {},
+            )
         finally:
             if runtime is not None:
                 runtime.close()
+                if result.get("state") != "awaiting_confirmation":
+                    self._discard_run(runtime, runtime_id)
         result["sessionId"] = session_id
-        result["turnIndex"] = self.repository.append_turn(session_id, question, result)
+        result["turnIndex"] = self.repository.replace_last_turn(
+            session_id, question, result, runtime_id=runtime_id
+        )
         return result
 
     # 1.1.4 异常时构造对外错误结果
@@ -99,32 +141,9 @@ class AgentController:
             "errorType": type(error).__name__,
         }
 
-    # 1.1.5 把内部状态投成对外结构并写审计表
-    def _project(self, session_id: str, state: dict[str, Any], turn_index: int = 1, question: str = "") -> dict[str, Any]:
+    # 1.1.5 把单次 QA 的运行结果投成 API 结构
+    def _project(self, session_id: str, state: dict[str, Any], question: str = "") -> dict[str, Any]:
         records = state.get("tool_records") or []
-        rounds = state.get("rounds") or []
-        persisted_rounds = {
-            int(item.get("round")): item
-            for item in rounds
-            if isinstance(item, dict) and str(item.get("round", "")).isdigit()
-        }
-        for index, record in enumerate(records):
-            round_number = int(record.get("round") or 0) or index + 1
-            round_id = f"{session_id}-round-{turn_index}-{round_number}"
-            round_info = persisted_rounds.get(round_number, {})
-            self.repository.add_round(
-                round_id,
-                session_id,
-                {"toolChain": round_info.get("toolChain", [record.get("tool")])},
-                {"status": record.get("status", "completed")},
-            )
-            record_id = str(record.get("id") or index + 1)
-            self.repository.add_evidence(
-                f"{round_id}-evidence-{record_id}",
-                round_id,
-                record,
-                {"tool": record.get("tool"), "callId": record_id},
-            )
         output = self.config.get("harness", {}).get("output", {})
         answer_key = str(output.get("answer_field", "answer"))
         state_key = str(output.get("state_field", "state"))
@@ -135,7 +154,7 @@ class AgentController:
         harness_settings = self.config.get("harness", {})
         result = {
             # 确认等待由前端弹卡；未完成的运行以 stalled 状态呈现。
-            "success": run_state == "completed",
+            "success": run_state in {"completed", "awaiting_input"},
             "sessionId": session_id,
             # 带上问句：证据面板用它显示 "Evidence for: …"，截图进论文时这张图能自证是哪一问
             "question": str(question or ""),
@@ -155,4 +174,15 @@ class AgentController:
         if state.get("confirmation"):
             result["confirmation"] = state["confirmation"]
         result["enrichedEvidence"] = state.get(str(output.get("enriched_evidence_field", "enrichedEvidence"))) or {}
+        if state.get("clarification"):
+            result["clarification"] = str(state["clarification"])
         return result
+
+    @staticmethod
+    def _discard_run(runtime: Any, runtime_id: str) -> None:
+        discard = getattr(runtime, "discard_run", None)
+        if callable(discard):
+            try:
+                discard(runtime_id)
+            except Exception:
+                logger.exception("Could not clean temporary QA state: run_id=%s", runtime_id)

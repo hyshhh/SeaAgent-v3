@@ -14,8 +14,6 @@ from config import load_config
 from memory.csv_store import CsvTable
 from memory.schema import (
     KEYFRAME_FIELDS,
-    QA_EVIDENCE_FIELDS,
-    QA_ROUND_FIELDS,
     QA_SESSION_FIELDS,
     REGISTRY_FIELDS,
     REGISTRY_IMAGE_FIELDS,
@@ -57,8 +55,6 @@ class MemoryRepository:
         self.registry = CsvTable(paths["registry_csv"], REGISTRY_FIELDS)
         self.registry_images = CsvTable(paths["registry_images_csv"], REGISTRY_IMAGE_FIELDS)
         self.qa_sessions = CsvTable(paths["qa_sessions_csv"], QA_SESSION_FIELDS)
-        self.qa_rounds = CsvTable(paths["qa_rounds_csv"], QA_ROUND_FIELDS)
-        self.qa_evidence = CsvTable(paths["qa_evidence_csv"], QA_EVIDENCE_FIELDS)
         self._migrate_qa_sessions()
 
     def _migrate_qa_sessions(self) -> None:
@@ -74,8 +70,10 @@ class MemoryRepository:
         rows = self.qa_sessions.rows()
         migrated: list[dict[str, Any]] = []
         dropped = 0
+        normalized_any = False
         for row in rows:
-            turns = self._turns_of(row)
+            turns = [self._normalize_turn(turn, row.get("session_id", "")) for turn in self._turns_of(row)]
+            normalized_any |= turns != _loads(row.get("turns", ""), [])
             title = str(row.get("title") or (turns[0]["question"] if turns else "") or "")
             if not title and not turns:
                 dropped += 1  # 既没标题也没轮次：点开也是空白，只会在列表里制造噪声
@@ -88,7 +86,7 @@ class MemoryRepository:
                 "turns": _json(turns),
             })
         legacy = "turns" not in header
-        if not legacy and not dropped:
+        if not legacy and not dropped and not normalized_any:
             return
         self.qa_sessions.replace_all(migrated, expect_stale_columns=True)
         logger.info("问答会话已迁移：保留 %d 条，清理空壳 %d 条（原表头 %s）", len(migrated), dropped, ",".join(header))
@@ -234,17 +232,11 @@ class MemoryRepository:
         return self._reference_record(rows[0]) if rows else None
 
     def qa_memory_summary(self) -> dict[str, int]:
-        return {
-            "sessionCount": len(self.qa_sessions.rows()),
-            "roundCount": len(self.qa_rounds.rows()),
-            "evidenceCount": len(self.qa_evidence.rows()),
-        }
+        return {"sessionCount": len(self.qa_sessions.rows())}
 
     def clear_qa_memory(self) -> dict[str, int]:
         summary = self.qa_memory_summary()
         self.qa_sessions.replace_all([])
-        self.qa_rounds.replace_all([])
-        self.qa_evidence.replace_all([])
         return summary
 
     # —— 对话记忆：一个会话一行，turns 里按顺序存每一轮问答 ——
@@ -269,53 +261,106 @@ class MemoryRepository:
         records.sort(key=lambda item: (str(item.get("updatedAt") or ""), str(item.get("sessionId") or "")), reverse=True)
         return records[:limit] if limit and limit > 0 else records
 
-    def append_turn(self, session_id: str, question: str, result: dict[str, Any]) -> int:
+    def append_turn(
+        self,
+        session_id: str,
+        question: str,
+        result: dict[str, Any],
+        *,
+        runtime_id: str = "",
+    ) -> int:
         """把一轮问答追加进会话并刷新 updated_at，返回轮次序号（从 1 开始）。"""
         rows = self.qa_sessions.find(lambda row: row["session_id"] == session_id)
         now = _now()
         row = rows[0] if rows else {"session_id": session_id, "title": _title(question), "created_at": now, "updated_at": now, "turns": "[]"}
         # 旧格式会话可能只有 query_info：先迁移出已有轮次，再把本轮追加在后面，避免覆盖旧记录
         turns = self._turns_of(row)
-        turns.append(self._turn_record(question, result, now))
+        turns.append(
+            self._turn_record(question, result, now, runtime_id)
+        )
         self.qa_sessions.upsert({"session_id": session_id, "title": row.get("title") or _title(question), "created_at": row.get("created_at") or now, "updated_at": now, "turns": _json(turns)}, "session_id")
         return len(turns)
 
+    def replace_last_turn(
+        self,
+        session_id: str,
+        question: str,
+        result: dict[str, Any],
+        *,
+        runtime_id: str = "",
+    ) -> int:
+        """更新等待确认或等待澄清的同一轮，不把恢复过程记成新 QA。"""
+        rows = self.qa_sessions.find(lambda row: row["session_id"] == session_id)
+        if not rows:
+            return self.append_turn(
+                session_id, question, result, runtime_id=runtime_id,
+            )
+        row = rows[0]
+        now = _now()
+        turns = self._turns_of(row)
+        created_at = turns[-1].get("createdAt", now) if turns else now
+        turn = self._turn_record(question, result, created_at, runtime_id)
+        if turns:
+            turns[-1] = turn
+        else:
+            turns.append(turn)
+        self.qa_sessions.upsert({
+            "session_id": session_id,
+            "title": row.get("title") or _title(question),
+            "created_at": row.get("created_at") or now,
+            "updated_at": now,
+            "turns": _json(turns),
+        }, "session_id")
+        return len(turns)
+
     def delete_session(self, session_id: str) -> bool:
-        """删除会话与其轮次、证据明细；返回会话是否真的被删掉。"""
+        """删除保存问答记录的会话。"""
         removed = self.qa_sessions.delete(lambda row: row["session_id"] == session_id)
-        self.qa_rounds.delete(lambda row: row["session_id"] == session_id)
-        self.qa_evidence.delete(lambda row: str(row.get("round_id", "")).startswith(f"{session_id}-round-"))
         return bool(removed)
 
-    def add_round(self, round_id: str, session_id: str, plan: dict[str, Any], reflection: dict[str, Any]) -> None:
-        self.qa_rounds.upsert({"round_id": round_id, "session_id": session_id, "plan": _json(plan), "reflection": _json(reflection)}, "round_id")
-
-    def add_evidence(self, evidence_id: str, round_id: str, tool_result: dict[str, Any], evidence_source: dict[str, Any]) -> None:
-        self.qa_evidence.upsert({"evidence_id": evidence_id, "round_id": round_id, "tool_result": _json(tool_result), "evidence_source": _json(evidence_source)}, "evidence_id")
-
     @staticmethod
-    def _turn_record(question: str, result: dict[str, Any], created_at: str) -> dict[str, Any]:
-        """一轮问答的紧凑存档：回答、状态、工具名序列与证据 ID。
-
-        不存工具结果正文——那是 qa_evidence 的职责，会话行只负责把对话拼回原样。
-        """
-        evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
-        shared = result.get("sharedState") or {}
-        plan = [{**step, "status": shared.get("step_status", {}).get(step["id"], "pending")}
-                for step in shared.get("plan", []) if isinstance(step, dict) and step.get("id")]
+    def _turn_record(
+        question: str,
+        result: dict[str, Any],
+        created_at: str,
+        runtime_id: str = "",
+    ) -> dict[str, Any]:
+        """存可见 QA 内容；运行信息只在人工确认期间临时保留。"""
         turn = {
             "question": question,
             "answer": str(result.get("answerText") or result.get("conclusion") or ""),
             "state": str(result.get("state") or ""),
             "partial": bool(result.get("partial", False)),
             "createdAt": created_at,
-            "toolChain": [str(name) for name in (result.get("toolChain") or [])],
-            "plan": {"steps": plan},
-            "evidence": {key: list(evidence.get(key) or []) for key in ("shownKeyframeIds", "shownShipSegmentIds", "shownRegistryReferenceIds")},
         }
         if turn["state"] == "awaiting_confirmation":
             turn["confirmation"] = result.get("confirmation") or {}
+            turn["runtimeId"] = runtime_id
+        if result.get("clarificationResponse"):
+            turn["clarificationResponse"] = str(result["clarificationResponse"])
+        if result.get("clarificationQuestion"):
+            turn["clarificationQuestion"] = str(result["clarificationQuestion"])
         return turn
+
+    @staticmethod
+    def _normalize_turn(turn: dict[str, Any], fallback_runtime_id: str = "") -> dict[str, Any]:
+        """Drop legacy tool traces, plans and evidence payloads from saved dialogue."""
+        turn = turn if isinstance(turn, dict) else {}
+        normalized = {
+            "question": str(turn.get("question") or ""),
+            "answer": str(turn.get("answer") or ""),
+            "state": str(turn.get("state") or ""),
+            "partial": bool(turn.get("partial", False)),
+            "createdAt": str(turn.get("createdAt") or ""),
+        }
+        if normalized["state"] == "awaiting_confirmation":
+            normalized["confirmation"] = turn.get("confirmation") or {}
+            normalized["runtimeId"] = str(turn.get("runtimeId") or fallback_runtime_id)
+        if turn.get("clarificationResponse"):
+            normalized["clarificationResponse"] = str(turn["clarificationResponse"])
+        if turn.get("clarificationQuestion"):
+            normalized["clarificationQuestion"] = str(turn["clarificationQuestion"])
+        return normalized
 
     @classmethod
     def _turns_of(cls, row: dict[str, str]) -> list[dict[str, Any]]:

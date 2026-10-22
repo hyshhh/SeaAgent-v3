@@ -10,8 +10,6 @@ def _paths(tmp_path):
         "registry_csv": str(tmp_path / "registry.csv"),
         "registry_images_csv": str(tmp_path / "registry_images.csv"),
         "qa_sessions_csv": str(tmp_path / "qa_sessions.csv"),
-        "qa_rounds_csv": str(tmp_path / "qa_rounds.csv"),
-        "qa_evidence_csv": str(tmp_path / "qa_evidence.csv"),
     }
 
 
@@ -19,16 +17,13 @@ def test_clear_track_memory_preserves_qa_memory(tmp_path):
     repository = MemoryRepository({"paths": _paths(tmp_path)})
     repository.upsert_track({"track_id": "1", "start_time": 1, "end_time": 2})
     repository.create_session("session-1", "问题")
-    repository.add_round("round-1", "session-1", {}, {})
-    repository.add_evidence("evidence-1", "round-1", {}, {})
+    repository.append_turn("session-1", "问题", {"state": "completed", "answerText": "回答"})
 
     repository.clear_track_memory()
 
     assert repository.tracks.rows() == []
     assert repository.keyframes.rows() == []
     assert repository.get_session("session-1") is not None
-    assert repository.qa_rounds.rows()
-    assert repository.qa_evidence.rows()
 
 
 class _Index:

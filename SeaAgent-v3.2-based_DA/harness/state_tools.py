@@ -39,6 +39,7 @@ class _PlannerPatch(_StatePatch):
     requirements: list[str] | None = None
     plan: list[_PlanStep | str] | None = None
     next_action: str | dict[str, Any] | None = None
+    clarification: str | None = None
 
 
 class _ExecutionPatch(_StatePatch):
@@ -91,7 +92,7 @@ def build_state_tools(state: Any) -> list[Any]:
         StructuredTool.from_function(
             planner_update,
             name="update_planner_state",
-            description="仅 Planner 使用。patch 只填 requirements、plan、next_action；不要复制整份共享状态。",
+            description="仅 Planner 使用。patch 只填 requirements、plan、next_action、clarification；不要复制整份共享状态。",
         ),
         StructuredTool.from_function(
             executor_update,

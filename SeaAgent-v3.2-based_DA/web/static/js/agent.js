@@ -1,7 +1,7 @@
 /* Sea-Video-Harness QA interaction layer. Public activity only; no hidden chain-of-thought is rendered. */
 
 /* ── 会话与运行状态 ───────────────────────────────────────────────────────────
-   一个会话一轮问答。sessionRuns 以 session_id 为键保存「进行中或刚结束」的那一轮：
+   一个会话可保存多条 QA 记录，每条 QA 独立运行。sessionRuns 以 session_id 为键保存当前运行：
    事件先写进该轮的缓冲区，只有当前正在查看这个会话时才落到 DOM 上。于是：
 
      · 切到别的会话，运行继续跑，事件一条不丢；
@@ -409,7 +409,7 @@ function renderTrajectory() {
     const delegation = step.delegation ? `<span class="qa-step-delegation">→ ${escapeHtml(step.delegation)}</span>` : '';
     const args = step.args === undefined ? '' : escapeHtml(compact(step.args, 220));
     const result = step.result === undefined ? '' : escapeHtml(compact(step.result, 260));
-    const detail = [args ? `参数：${args}` : '', result ? `结果：${result}` : '', step.archived ? '会话存档只保留工具名，参数与结果未留存。' : ''].filter(Boolean).join('\n');
+    const detail = [args ? `参数：${args}` : '', result ? `结果：${result}` : ''].filter(Boolean).join('\n');
     return `<article class="qa-step${step.agent ? ' is-subagent' : ''}">
       <span class="qa-step-kind"><i class="${kind.dot}"></i>${kind.label}</span>
       <div class="qa-step-body">
@@ -522,9 +522,9 @@ function turnAnswer(turn) {
   return turn?.state || '（该轮未留下回答）';
 }
 
-/* 把某一轮问答还原到主面板：回答、工具名序列与证据都来自会话存档。 */
+/* 把某一轮问答还原到主面板；会话记录只恢复问题和回答。 */
 function renderRestoredTurn(turn) {
-  renderAgentPlan(turn?.plan || { steps: [] });
+  renderAgentPlan({ steps: [] });
   if (turn?.state === 'awaiting_confirmation') {
     renderAgentConfirmation({ confirmation: turn.confirmation });
     syncComposer({ status: 'awaiting_confirmation' });
@@ -537,16 +537,13 @@ function renderRestoredTurn(turn) {
   if (answer) answer.textContent = turnAnswer(turn) || '（该轮未留下回答）';
   const summary = document.getElementById('agentToolSummary');
   const tools = document.getElementById('agentResultTools');
-  const chain = Array.isArray(turn?.toolChain) ? turn.toolChain : [];
-  if (summary) summary.textContent = chain.length ? `${chain.length} tool call${chain.length === 1 ? '' : 's'} · from session memory` : 'No tool records.';
+  if (summary) summary.textContent = 'QA transcript';
   if (tools) {
-    tools.innerHTML = chain.length
-      ? chain.map((name) => `<article class="qa-trace-record"><strong>${escapeHtml(name)}</strong><span>completed</span></article>`).join('')
-      : '<div class="qa-inspector-empty">这轮没有留下工具调用记录。</div>';
+    tools.innerHTML = '<div class="qa-inspector-empty">历史只保存问答内容。</div>';
   }
-  renderEvidence(turn?.evidence || null);
   const failed = turn?.state === 'error' || turn?.state === 'stalled';
-  const state = turn?.state === 'stalled' ? '未完成' : failed ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : turn?.partial ? '已按现有证据收尾' : 'Restored';
+  const awaitingInput = turn?.state === 'awaiting_input';
+  const state = awaitingInput ? '需要补充信息' : turn?.state === 'stalled' ? '未完成' : failed ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : turn?.partial ? '已按现有证据收尾' : 'Restored';
   setHarnessState(state, failed ? 'failed' : turn?.state === 'cancelled' ? '' : 'complete');
 }
 
@@ -945,6 +942,7 @@ function renderAgentAnswer(result) {
   }
   const cancelled = payload.state === 'cancelled';
   const stalled = payload.state === 'stalled';
+  const awaitingInput = payload.state === 'awaiting_input';
   if (view) view.hidden = false;
   if (answer) {
     const text = payload.answerText || payload.answer;
@@ -960,6 +958,7 @@ function renderAgentAnswer(result) {
   renderEvidence(payload.evidence || null);
   if (cancelled) setHarnessState('Stopped', '');
   else if (stalled) setHarnessState('未完成', 'failed');
+  else if (awaitingInput) setHarnessState('需要补充信息', '');
   else if (payload.partial && payload.success !== false) setHarnessState('已按现有证据收尾', 'complete');
   else setHarnessState(payload.success === false ? 'Failed' : 'Complete', payload.success === false ? 'failed' : 'complete');
   scrollActivity(true);

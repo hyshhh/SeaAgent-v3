@@ -365,6 +365,16 @@ class SeaVideoHarness:
         if connection is not None:
             connection.close()
 
+    def discard_run(self, thread_id: str) -> None:
+        """Remove temporary shared state, external tool results and role checkpoints."""
+        self.state_store.delete(thread_id)
+        saver = self._open_checkpoint()
+        try:
+            for role in ("planner", "executor", "reflector"):
+                saver.delete_thread(f"{thread_id}:{role}")
+        finally:
+            self.close()
+
     # 3.1.8 进入运行时上下文
     def __enter__(self) -> Self:
         return self
@@ -623,6 +633,16 @@ class SeaVideoHarness:
                 resume_payload = None  # 确认只消费一次，下一轮重新规划。
                 if outcome["state"] != "completed":
                     return outcome
+                if role == "planner":
+                    clarification = str(
+                        self.shared_state.snapshot().get("clarification") or ""
+                    ).strip()
+                    if clarification:
+                        self.shared_state.runtime_update(
+                            {"task_status": "awaiting_input", "pending_agent": None}
+                        )
+                        self.state_store.save(thread_id, self.shared_state)
+                        return {"state": "awaiting_input", "clarification": clarification}
                 next_index = all_roles.index(role) + 1  #计算下一个跑哪个角色
                 self.shared_state.runtime_update(
                     {"pending_agent": all_roles[next_index] if next_index < 3 else None}  #下一个没有了就取none
@@ -730,6 +750,7 @@ class SeaVideoHarness:
             "error",
             "cancelled",
             "stalled",
+            "awaiting_input",
         }:
             self.shared_state.start_turn(question)
             starting_new_turn = True
@@ -752,7 +773,7 @@ class SeaVideoHarness:
             current = self.shared_state.snapshot()
             if current["task_status"] != "failed":
                 patch = {"task_status": state}
-                if state in {"completed", "stalled", "error", "cancelled"}:
+                if state in {"completed", "stalled", "error", "cancelled", "awaiting_input"}:
                     patch["pending_agent"] = None
                 self.shared_state.runtime_update(patch)
             try:
@@ -770,6 +791,21 @@ class SeaVideoHarness:
                     "title": "等待人工确认",
                     "message": "有一项写入操作需要你确认",
                     "confirmation": result["confirmation"],
+                    "result": result,
+                }
+            )
+            return result
+        if state == "awaiting_input":
+            result = trace.result(thread_id, self.config, state="awaiting_input")
+            answer_field = str(harness.get("output", {}).get("answer_field", "answer"))
+            clarification = str(outcome.get("clarification") or "").strip()
+            result[answer_field] = clarification
+            result["clarification"] = clarification
+            trace.event(
+                {
+                    "type": "complete",
+                    "title": "需要补充信息",
+                    "message": clarification,
                     "result": result,
                 }
             )

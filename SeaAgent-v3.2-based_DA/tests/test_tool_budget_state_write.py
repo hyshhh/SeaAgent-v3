@@ -184,6 +184,8 @@ def test_state_write_middleware_forces_one_status_only_repair():
     }
 
     state.update("planner", {"next_action": "scan"})
+    unchanged = state.update("planner", {"next_action": "scan"})
+    assert unchanged["ok"] is True and unchanged["unchanged"] is True
     filtered_after_write = middleware._request(request)
     assert {tool.name for tool in filtered_after_write.tools} == {
         "read_shared_state",
@@ -226,7 +228,7 @@ def test_state_write_baseline_survives_checkpointed_resume(tmp_path):
     middleware.before_agent({})
 
     assert not middleware._write_required()
-    assert "agent_start_versions" not in restored.view()
+    assert "agent_start_write_counts" not in restored.view()
 
 
 def test_run_budget_does_not_trigger_an_extra_model_summary(tmp_path):

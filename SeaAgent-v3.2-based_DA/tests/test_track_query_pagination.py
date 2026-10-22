@@ -5,10 +5,7 @@ from tools.service import ToolService
 
 
 def _repository(tmp_path):
-    names = (
-        "tracks", "keyframes", "registry", "registry_images",
-        "qa_sessions", "qa_rounds", "qa_evidence",
-    )
+    names = ("tracks", "keyframes", "registry", "registry_images", "qa_sessions")
     paths = {f"{name}_csv": str(tmp_path / f"{name}.csv") for name in names}
     return MemoryRepository({"paths": paths})
 

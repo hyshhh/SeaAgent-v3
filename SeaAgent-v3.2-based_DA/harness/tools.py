@@ -64,9 +64,26 @@ def _coerce_time_pair(value: Any) -> tuple[str | float, str | float]:
     return normalized[0], normalized[1]
 
 
+def _coerce_json(value: Any) -> Any:
+    """Accept JSON-encoded tool arguments from models as well as native objects."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError("expected a JSON value") from error
+    return value
+
+
 # 1.3 声明类型 → Python 注解
 def _type_for(spec: dict[str, Any]) -> Any:
-    return {"string": str, "integer": int, "number": float, "string_list": Annotated[list[str], BeforeValidator(_coerce_string_list)], "time_range": Annotated[tuple[str | float, str | float], BeforeValidator(_coerce_time_pair)], "json": Any}.get(str(spec.get("type", "json")), Any)
+    return {
+        "string": str,
+        "integer": int,
+        "number": float,
+        "string_list": Annotated[list[str], BeforeValidator(_coerce_string_list)],
+        "time_range": Annotated[tuple[str | float, str | float], BeforeValidator(_coerce_time_pair)],
+        "json": Annotated[Any, BeforeValidator(_coerce_json)],
+    }.get(str(spec.get("type", "json")), Any)
 
 # 1.4 由声明生成参数模型
 def _build_schema(name: str, arguments: dict[str, Any]):

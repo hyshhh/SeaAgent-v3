@@ -43,10 +43,10 @@ class StateWriteMiddleware(AgentMiddleware):
 
     def _write_required(self) -> bool:
         state = self.shared_state.snapshot()
-        baseline = state["agent_start_versions"].get(
-            self.role, state["role_versions"].get(self.role, 0)
-        )
-        if state["role_versions"].get(self.role, 0) <= baseline:
+        wrote = state["role_write_counts"].get(self.role, 0) > state[
+            "agent_start_write_counts"
+        ].get(self.role, 0)
+        if not wrote:
             return True
         return self.role == "reflector" and state["decision"] == "terminate" and not str(
             state["assessment"].get("final_answer") or ""

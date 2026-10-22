@@ -18,7 +18,7 @@ from typing import Any
 # ------------------------------------------------------------------ #
 # 1.1 声明各角色可维护的字段与合法状态
 OWNER_FIELDS = {
-    "planner": {"requirements", "plan", "next_action"},
+    "planner": {"requirements", "plan", "next_action", "clarification"},
     "executor": {"evidence_ids", "step_status", "execution_status"},
     "reflector": {"assessment", "evidence_gaps", "conflicts", "decision"},
     "runtime": {"question", "task_status", "iteration", "pending_agent"},
@@ -180,6 +180,7 @@ class SharedTaskState:
             "requirements": [],
             "plan": [],
             "next_action": None,
+            "clarification": None,
             "step_status": {},
             "evidence_ids": [],
             "tool_results": [],
@@ -195,8 +196,8 @@ class SharedTaskState:
             "tool_calls_run": 0,
             "agent_calls": {},
             "call_history": {},
-            "role_versions": {},
-            "agent_start_versions": {},
+            "role_write_counts": {},
+            "agent_start_write_counts": {},
             "evidence": {},
         }
         if values:
@@ -223,7 +224,10 @@ class SharedTaskState:
             return {
                 key: deepcopy(value)
                 for key, value in self._values.items()
-                if key not in {"call_history", "role_versions", "agent_start_versions"}
+                if key not in {
+                    "call_history",
+                    "role_write_counts", "agent_start_write_counts",
+                }
             }
 
     # 2.1.4 推进业务版本号
@@ -275,16 +279,17 @@ class SharedTaskState:
                 if unknown:
                     raise ValueError(f"evidence_ids must come from successful tool results: {', '.join(unknown)}")
             changed = any(self._values.get(key) != value for key, value in patch.items())
+            counts = self._values["role_write_counts"]
+            counts[role] = counts.get(role, 0) + 1
             if not changed:
                 return {
-                    "ok": False,
-                    "error": "no_state_change",
+                    "ok": True,
+                    "unchanged": True,
                     "version": version,
-                    "message": "状态补丁没有改变任何字段。",
+                    "message": "状态已是最新值，无需重复修改。",
                 }
             self._values.update(patch)
             self._changed()
-            self._values["role_versions"][role] = self._values["version"]
             return {"ok": True, "version": self._values["version"]}
 
     # 2.1.6 校验类型、枚举、步骤 ID 与可序列化性
@@ -311,6 +316,7 @@ class SharedTaskState:
                 "stalled",
                 "cancelled",
                 "awaiting_confirmation",
+                "awaiting_input",
                 "failed",
                 "error",
             },
@@ -335,6 +341,12 @@ class SharedTaskState:
             and not isinstance(patch["next_action"], (str, dict))
         ):
             raise ValueError("next_action must be text, an object or null")
+        if "clarification" in patch:
+            clarification = patch["clarification"]
+            if clarification is not None and not isinstance(clarification, str):
+                raise TypeError("clarification must be text or null")
+            if isinstance(clarification, str) and len(clarification) > 1000:
+                raise ValueError("clarification must be at most 1000 characters")
         json.dumps(patch, ensure_ascii=False, allow_nan=False)
 
     # 2.1.7 更新由运行时维护的调度字段
@@ -362,7 +374,7 @@ class SharedTaskState:
         with self._lock:
             self._values["pending_agent"] = role
             self._values["agent_calls"][role] = 0
-            self._values["agent_start_versions"][role] = self._values["role_versions"].get(role, 0)
+            self._values["agent_start_write_counts"][role] = self._values["role_write_counts"].get(role, 0)
             if role == "reflector":
                 self._values["decision"] = None
                 self._values["assessment"] = {}

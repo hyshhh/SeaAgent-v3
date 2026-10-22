@@ -2171,7 +2171,18 @@ tbody tr:hover td { background: #f2f6f9; }
 }
 #tab-monitoring .pool-no-frames,
 #tab-monitoring .pool-empty { font-size: 12px; }
-#tab-monitoring .pool-refresh-caption > p { color: #8fe0c2; }
+#tab-monitoring .pool-refresh-markers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 5px;
+}
+#tab-monitoring .pool-refresh-label {
+  color: #ffd45c;
+  font-size: clamp(14px, .9vw, 18px);
+  font-weight: 750;
+  line-height: 1.5;
+}
 #tab-monitoring .monitor-processing-status strong { font-size: 13px; }
 
 @media (max-width: 620px) {

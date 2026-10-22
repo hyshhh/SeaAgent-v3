@@ -118,7 +118,9 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     patch_ref = schema["properties"]["patch"]["$ref"].rsplit("/", 1)[-1]
     patch_schema = schema["$defs"][patch_ref]
     assert patch_schema["additionalProperties"] is False
-    assert set(patch_schema["properties"]) == {"requirements", "plan", "next_action"}
+    assert set(patch_schema["properties"]) == {
+        "requirements", "plan", "next_action", "clarification"
+    }
     plan_schema = next(
         item for item in patch_schema["properties"]["plan"]["anyOf"] if item.get("type") == "array"
     )

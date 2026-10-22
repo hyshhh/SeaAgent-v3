@@ -135,7 +135,10 @@ async def test_cleanup_blocks_new_runs_until_it_finishes(monkeypatch, action):
     started, release = asyncio.Event(), asyncio.Event()
     request = _request()
     request.app.state.memory_manager = SimpleNamespace(clear_qa_memory=dict)
-    request.app.state.repository = SimpleNamespace(delete_session=lambda session_id: True)
+    request.app.state.repository = SimpleNamespace(
+        get_session=lambda session_id: {"sessionId": session_id, "turns": []},
+        delete_session=lambda session_id: True,
+    )
 
     async def cleanup(call, *args):
         started.set()

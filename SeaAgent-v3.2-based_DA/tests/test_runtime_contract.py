@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from config import load_config
 from harness.runtime import SeaVideoHarness, _Trace
-from harness.shared_state import SharedTaskState
+from harness.shared_state import SharedStateStore, SharedTaskState
 
 # ---------------------------------------------------------------- 事件记账
 
@@ -72,6 +72,38 @@ def test_trace_correlates_tool_result_and_projects_shared_evidence():
     )
     assert role_output["title"] == "角色输出"
     assert trace.result("thread-1", load_config())["answer"] == "已完成"
+
+
+def test_planner_clarification_stops_before_executor_and_reflector(tmp_path):
+    runtime = SeaVideoHarness.__new__(SeaVideoHarness)
+    runtime.config = {"harness": {"max_iterations": 2}}
+    runtime.shared_state = SharedTaskState("目标船舶在哪里？")
+    runtime.state_store = SharedStateStore(tmp_path / "state.sqlite")
+    runtime._cancel = None
+    called = []
+
+    def run_role(role, *_args):
+        called.append(role)
+        if role == "planner":
+            runtime.shared_state.update(
+                "planner", {"clarification": "请补充查询时间范围。"}
+            )
+        yield None
+        return {"state": "completed"}
+
+    runtime._run_agent_steps = run_role
+    outcome = runtime._consume_driver(
+        runtime._drive_multi_steps(
+            "目标船舶在哪里？", "qa-test", _Trace(None, 4000)
+        )
+    )
+
+    assert outcome == {
+        "state": "awaiting_input",
+        "clarification": "请补充查询时间范围。",
+    }
+    assert called == ["planner"]
+    assert runtime.shared_state.snapshot()["task_status"] == "awaiting_input"
 
 
 def test_trace_accepts_root_level_updates_and_bounds_event_payloads():

@@ -244,12 +244,20 @@ async def get_agent_session(session_id: str, request: Request):
 async def delete_agent_session(session_id: str, request: Request):
     cancel = _begin_run(request, session_id)
     try:
+        session = await run_in_threadpool(request.app.state.repository.get_session, session_id)
         removed = await run_in_threadpool(request.app.state.repository.delete_session, session_id)
         if not removed:
             raise HTTPException(404, "会话不存在")
         config = getattr(request.app.state, "config", None)
         if config is not None:
-            await run_in_threadpool(_delete_runtime_state, config, session_id)
+            run_ids = {
+                str(turn.get("runtimeId"))
+                for turn in (session or {}).get("turns", [])
+                if turn.get("runtimeId")
+            }
+            run_ids.add(session_id)
+            for run_id in run_ids:
+                await run_in_threadpool(_delete_runtime_state, config, run_id)
     finally:
         if request.app.state.agent_runs.get(session_id) is cancel:
             request.app.state.agent_runs.pop(session_id, None)
@@ -257,17 +265,17 @@ async def delete_agent_session(session_id: str, request: Request):
 
 
 # 3.5 删除运行时状态
-def _delete_runtime_state(config: dict, session_id: str) -> None:
+def _delete_runtime_state(config: dict, thread_id: str) -> None:
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     harness = config.get("harness", {})
     state_path = project_root() / str(harness.get("shared_state_file", "data/memory/shared_task_state.sqlite"))
-    SharedStateStore(state_path).delete(session_id)
+    SharedStateStore(state_path).delete(thread_id)
     checkpoint = project_root() / str(harness.get("checkpointer", "data/memory/checkpoints.sqlite"))
     if checkpoint.is_file():
         with SqliteSaver.from_conn_string(str(checkpoint)) as saver:
             for role in ("planner", "executor", "reflector"):
-                saver.delete_thread(f"{session_id}:{role}")
+                saver.delete_thread(f"{thread_id}:{role}")
 
 # 3.6 记忆概览
 @router.get("/api/agent/memory-summary")
@@ -283,8 +291,6 @@ async def memory_summary(request: Request):
         "registryCount": len(registry),
         "recognitionModel": config["llm"]["model"],
         "qaSessionCount": qa_memory["sessionCount"],
-        "qaRoundCount": qa_memory["roundCount"],
-        "qaEvidenceCount": qa_memory["evidenceCount"],
         "retrievalTopK": int(config["pipeline"]["retrieval"].get("top_k", 3)),
         "broadMatchTopK": max(0, int(config["pipeline"]["retrieval"].get("broad_match_top_k", 0))),
     }

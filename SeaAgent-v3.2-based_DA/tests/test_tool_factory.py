@@ -1,3 +1,5 @@
+import json
+
 from config import load_config
 from harness.tools import build_tools
 
@@ -27,3 +29,15 @@ def test_match_text_requires_and_explains_its_gallery():
     assert "keyframes" in schema["properties"]["gallery_images"]["description"]
     assert "registryReferences" in schema["properties"]["gallery_images"]["description"]
     assert "不得只传 description" in tool.description
+
+
+def test_json_string_gallery_is_decoded_before_service_call():
+    tools = {tool.name: tool for tool in build_tools(load_config(), Service())}
+    gallery = [{"keyframeId": "kf-1", "trackId": "12"}]
+
+    result = tools["match_text"].invoke({
+        "description": "黄色无人艇",
+        "gallery_images": json.dumps(gallery, ensure_ascii=False),
+    })
+
+    assert result["kwargs"]["galleryImages"] == gallery

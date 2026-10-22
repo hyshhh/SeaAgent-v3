@@ -108,13 +108,12 @@ test('a confirmation response cannot replace a newly selected session', async ()
   assert.equal(ui.run("sessionRuns.get('a').status"), 'awaiting_confirmation');
 });
 
-test('history restores a pending confirmation and completed shared plan', () => {
+test('history restores pending confirmation without saving runtime plans', () => {
   const ui = page();
   ui.run(`currentSessionId = 't'; renderRestoredTurn({
-    state: 'awaiting_confirmation', confirmation: ${JSON.stringify(confirmation)},
-    plan: { steps: [{ id: 'scan', content: 'scan', status: 'completed' }] }
+    state: 'awaiting_confirmation', confirmation: ${JSON.stringify(confirmation)}
   });`);
-  assert.equal(ui.elements.get('agentPlanMeterFill').style.width, '100%');
+  assert.equal(ui.elements.get('agentPlanMeterFill').style.width, '0%');
   assert.equal(ui.elements.get('agentConfirmPanel').hidden, false);
   assert.equal(ui.elements.get('btnAskAgent').disabled, true);
 });
@@ -147,6 +146,15 @@ test('a stalled run is labeled incomplete instead of completed', () => {
   assert.equal(ui.elements.get('agentThinkingState').textContent, '未完成');
   ui.run(`renderRestoredTurn({ state: 'stalled', answer: 'Planner 未提交状态' });`);
   assert.equal(ui.elements.get('agentThinkingState').textContent, '未完成');
+});
+
+test('planner clarification is shown as a completed pause for user input', () => {
+  const ui = page();
+  ui.run(`renderAgentAnswer({ state: 'awaiting_input', success: true,
+    answerText: '请补充时间范围。' });`);
+  assert.match(ui.elements.get('agentAnswer').innerHTML, /请补充时间范围/);
+  assert.equal(ui.elements.get('agentThinkingState').textContent, '需要补充信息');
+  assert.equal(ui.elements.get('btnAskAgent').disabled, false);
 });
 
 test('an error shared by the event and result is displayed only once', () => {
