@@ -53,6 +53,15 @@ class _ReflectionPatch(_StatePatch):
     conflicts: list[str] | None = None
     decision: Literal["terminate", "replan", "continue", "failed"] | None = None
 
+    @field_validator("assessment", mode="before")
+    @classmethod
+    def _accept_text_assessment(cls, value: Any) -> Any:
+        """兼容模型把最终回答直接写成字符串。"""
+        if isinstance(value, str):
+            text = value.strip()
+            return {"final_answer": text} if text else {}
+        return value
+
 
 # ------------------------------------------------------------------ #
 # 一、状态读写工具
@@ -92,7 +101,10 @@ def build_state_tools(state: Any) -> list[Any]:
         StructuredTool.from_function(
             reflector_update,
             name="update_reflection_state",
-            description="仅 Reflector 使用。patch 只填 assessment、evidence_gaps、conflicts、decision；不要复制整份共享状态。",
+            description=(
+                "仅 Reflector 使用。patch 只填 assessment、evidence_gaps、conflicts、decision；"
+                "assessment 必须是对象，例如 {'final_answer': '最终回答'}，不能直接写成字符串。"
+            ),
         ),
     ]
 

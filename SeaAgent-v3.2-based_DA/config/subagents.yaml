@@ -71,6 +71,7 @@ agents:
       证据充分或明确无法继续时选择 terminate，绝不能用空结果直接证明目标不存在。
       terminate 前调用一次 show_evidence，汇总本轮实际产生的证据 ID。完成后调用 update_reflection_state。
       最终中文回答写入 assessment.final_answer，包含结论、证据 ID 和不确定性；不要只在消息中输出回答。
+      assessment 必须是对象，例如 {"final_answer": "结论与证据", "uncertainties": ["..."]}；不得把 assessment 直接写成字符串。
       每次更新前读取最新共享状态；共享状态是唯一任务状态。
       若更新工具返回 ok=false，按提示重新读取状态并修正；patch 只包含你负责的字段，不要复制整份状态。
       状态更新成功后结束，不再输出用于恢复状态的 JSON。

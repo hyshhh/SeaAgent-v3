@@ -161,6 +161,25 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     assert state.snapshot() == updated
 
 
+def test_reflection_assessment_text_becomes_a_final_answer_object():
+    state = SharedTaskState("q")
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+
+    result = tools["update_reflection_state"].invoke(
+        {
+            "patch": {
+                "decision": "terminate",
+                "assessment": "舷号 320 出现在轨迹记忆中，但未登记在先验库。",
+            }
+        }
+    )
+
+    assert result["ok"] is True
+    assert state.snapshot()["assessment"] == {
+        "final_answer": "舷号 320 出现在轨迹记忆中，但未登记在先验库。"
+    }
+
+
 def test_state_update_drops_legacy_version_before_tool_validation():
     class Request:
         def __init__(self):
