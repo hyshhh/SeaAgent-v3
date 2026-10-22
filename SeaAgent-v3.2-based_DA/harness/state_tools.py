@@ -23,7 +23,7 @@ class _PlanStep(BaseModel):
     content: str
     required_evidence: list[str] = Field(
         default_factory=list,
-        description="完成该步骤所需的证据类型；必须是字符串数组。",
+        description="所需证据类型，字符串数组。",
     )
 
     @field_validator("required_evidence", mode="before")
@@ -87,24 +87,24 @@ def build_state_tools(state: Any) -> list[Any]:
         StructuredTool.from_function(
             read_shared_state,
             name="read_shared_state",
-            description="读取当前共享任务状态。任何决策前先读取，避免使用过期信息。",
+            description="读取当前任务状态；决策前先读。",
         ),
         StructuredTool.from_function(
             planner_update,
             name="update_planner_state",
-            description="仅 Planner 使用。patch 只填 requirements、plan、next_action、clarification；不要复制整份共享状态。",
+            description="Planner 专用；只更新 requirements、plan（id/content/required_evidence）、next_action、clarification。",
         ),
         StructuredTool.from_function(
             executor_update,
             name="update_execution_state",
-            description="仅 Executor 使用。patch 只填 evidence_ids、execution_status、step_status（步骤 ID 到 pending/in_progress/completed/failed）。工具原始结果由运行时自动记录。",
+            description="Executor 专用；只更新 evidence_ids、execution_status、step_status（step ID→pending/in_progress/completed/failed）。工具结果由运行时记录。",
         ),
         StructuredTool.from_function(
             reflector_update,
             name="update_reflection_state",
             description=(
-                "仅 Reflector 使用。patch 只填 assessment、evidence_gaps、conflicts、decision；"
-                "assessment 必须是对象，例如 {'final_answer': '最终回答'}，不能直接写成字符串。"
+                "Reflector 专用；只更新 assessment、evidence_gaps、conflicts、decision（terminate/replan/continue/failed）。"
+                "assessment 必须是对象，如 {'final_answer': '结论'}。"
             ),
         ),
     ]

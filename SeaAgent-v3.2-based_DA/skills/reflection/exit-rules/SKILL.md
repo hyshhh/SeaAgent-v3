@@ -1,14 +1,11 @@
 ---
 name: exit-rules
-description: "Use to decide whether the loop may end, per question class."
+description: "Use to decide whether evidence supports termination for this question type."
 ---
 
-# Sea-Video Exit Rules
+# Exit Rules
 
-**Existence by hull — staged.** Registry not read yet ⇒ not settled. Registry read and a searchable reference exists but no image comparison ran ⇒ not settled; the next step is the visual chain. After a registry read plus a visual comparison: matches above the confirmation band ⇒ settled as "suspected presence"; zero matches with zero surviving tracks ⇒ settled as "the registry has a record but the footage does not show it". Only when the registry was read and the visual comparison ran (or no searchable reference exists at all) may you settle on "not seen in the footage".
-
-**Registry membership list.** A full time-window scan returning zero tracks ⇒ settled, "no vessel candidates in this range"; do not read the whole registry or match images afterwards. Tracks exist but the registry was never listed, or no scorable image comparison was formed ⇒ not settled. A text search run with the user's sentence does not count as the appearance step. Correct shape: a full track scan (then keyframes if there were tracks), then reuse of those keyframes with the catalogue listing and the image comparison. In the answer, the in-registry list carries only confirmed matches, the not-in-registry list only tracks whose best match is still a mismatch, and uncertain tracks are listed separately as pending.
-
-**Registry only.** A hull lookup that succeeded settles it. A description question needs the catalogue listed **and** an appearance search run through it; an explicitly empty catalogue may be reported as not found. A list or count needs the catalogue listing.
-
-**Counting.** Settled only when the dedup step produced a usable count. Say "at least N" while groups could still merge, and carry unsearchable tracks as a caveat.
+- **Video existence by hull:** check the registry when relevant; if a searchable reference exists, compare it with unfiltered candidate tracks/frames. A hull-filtered empty result is never absence. Conclude “not seen” only after the visual check or when no searchable reference exists and scope is clear.
+- **Registry membership:** complete the requested track scope, inspect returned frames, list the registry and compare images. Report only confirmed matches as in-registry; keep uncertain candidates separate. Zero tracks settles only that requested scope.
+- **Registry-only:** a successful hull lookup settles a hull query; description/list/count needs catalogue data and text search as applicable.
+- **Count:** require a usable dedup result. State a lower bound while merges remain possible and disclose unsearchable tracks.

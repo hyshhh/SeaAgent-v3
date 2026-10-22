@@ -1,8 +1,8 @@
 ---
 name: registry
-description: "Use for vessel registry lookup, registry membership, hull-number matching, and registry descriptions."
+description: "Use for registry lookups, listings, membership and identity comparison."
 ---
 
-# Sea-Video Registry
+# Registry Evidence
 
-Use the registry tools for database facts and image matching for identity claims. A registry hit alone does not establish presence in video. A video track alone does not establish registry membership. For membership comparisons, score the video candidates against registry references and preserve uncertain candidates as a separate group.
+Use registry tools for catalogue facts. A registry record does not prove video appearance; a video track does not prove membership. For identity, compare video keyframes with registry references and keep uncertain candidates separate.

@@ -28,7 +28,7 @@ def test_match_text_requires_and_explains_its_gallery():
     assert "gallery_images" in schema["required"]
     assert "keyframes" in schema["properties"]["gallery_images"]["description"]
     assert "registryReferences" in schema["properties"]["gallery_images"]["description"]
-    assert "不得只传 description" in tool.description
+    assert "不可只传 description" in tool.description
 
 
 def test_json_string_gallery_is_decoded_before_service_call():

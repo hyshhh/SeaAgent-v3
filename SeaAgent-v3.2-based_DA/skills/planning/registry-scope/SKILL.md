@@ -1,12 +1,11 @@
 ---
 name: registry-scope
-description: "Use when the question mentions the registry (先验库/在库/库里/名录) to decide whether the footage is involved at all."
+description: "Use when the user mentions the registry or database."
 ---
 
-# Sea-Video Registry Scope
+# Registry Scope
 
-1. Trigger words: 数据库/数据仓库/先验库/库中/库里/名录/在库/未在库.
-2. Registry only when the database is named and no video-side word appears — then 有没有/出现/找到 refer to the record, not the footage.
-3. Scope `both` when both sides are named; "有哪些在库船出现在视频中" is `both`, not registry-only.
-4. Strip scope words out of the appearance description.
-5. Acceptance follows the scope: registry-only questions are settled by the catalogue listing plus a text match over registry references (or a hull lookup), and must never require a track query or keyframes.
+- Registry terms include 数据库、数据仓库、先验库、库中/库里、名录、在库/未在库.
+- Registry-only when no video/appearance scope is requested; `both` only when both sources are explicit.
+- Remove scope terms from the appearance phrase (e.g. “库里有哪些黄色快艇” → “黄色快艇”).
+- Registry-only answers use catalogue/hull tools and registry references; do not require tracks or keyframes.

@@ -1,22 +1,14 @@
 ---
 name: acceptance
-description: "Use when writing the acceptance checklist: which evidence must exist before the answer counts as established."
+description: "Use to define the evidence required for each user requirement."
 ---
 
-# Sea-Video Acceptance Checklist
+# Plan Acceptance
 
-The checklist is the contract for the turn: the executor collects against it, the reflector audits it item by item.
-Write one item per requirement, with `how_to_check` naming the tool and field that settles it.
+Put each verifiable claim in `requirements`; make `plan` steps name needed tools/evidence in `content` and `required_evidence` (string array). Do not add unsupported fields such as `how_to_check`.
 
-- **existence + hull** — registry lookup first, then a time-window track query. An empty hull-filtered query is **not** an answer: an unfiltered scan and a visual comparison are still required before "not seen".
-- **existence + description** — track query, keyframes, then an appearance match.
-- **count** — tracks, keyframes and dedup. A raw row count is not a count of vessels.
-- **list** — the time-window track scan; add the registry (listing + image match) only when membership is asked.
-- **time** — track start/end timestamps, keyframes when available.
-- **explain** — tracks and keyframes, plus an image match when identity matters.
-- **registry only** — catalogue listing and, for an appearance question, a text match against registry references. No video tools.
-
-Never accept as sufficient on their own:
-- "video OCR did not read a hull number" (recognition failure also returns empty),
-- "a hull-filtered query returned zero tracks",
-- a checklist whose only step is a track query when the target is a hull number.
+- Video presence/list: `get_track`; inspect frames only when visual identity matters.
+- Appearance: tracks → keyframes → `match_text`.
+- Hull or registry membership: query the requested source; use unfiltered tracks and image comparison when recognition/identity is uncertain.
+- Count: complete candidate scope → keyframes → `dedup_tracks`.
+- Registry-only: hull/catalogue lookup and registry-image text search as needed; no video query unless requested.

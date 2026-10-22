@@ -11,8 +11,8 @@ from langchain_core.messages import HumanMessage
 from .shared_state import ROLE_UPDATE_TOOLS
 
 STATE_WRITE_REMINDER = (
-    "本角色必须先把真实进展写入共享状态，再结束。请调用 read_shared_state 确认当前状态，"
-    "然后调用你负责的状态更新工具；只记录已确认内容，不得把未验证步骤标为完成。"
+    "本角色必须先把真实进展写入共享状态；结束前先调用 read_shared_state，再调用状态更新工具写入已确认进展；"
+    "不得把未验证步骤标为完成。"
 )
 
 

@@ -2,128 +2,105 @@ tools:
   - name: get_track
     label: 轨迹记忆
     method: getTrack
-    description: >-
-      查询已入库轨迹。省略 time_range 表示全部监控时间；显式时间范围使用 ISO-8601 时间，省略时区按 Asia/Shanghai 解释。
-      每页默认 50 条、最多 100 条。hasMore=true 时把 nextCursor.afterStartTime 传给 after_start_time，
-      把 nextCursor.afterTrackId 传给 after_track_id，并保留相同筛选条件读取下一页；不要一次请求全量关键帧。
-      改变时间或舷号筛选时，必须清空游标并从第一页重新查询。
-      hull_number 只匹配已识别舷号的轨迹。按舷号查询无结果时，不得据此判定未出现；去掉舷号筛选继续检查未识别轨迹。
-      只有相关分页全部查完且候选证据检查完成，才能报告在当前已入库轨迹中未检出。
+    description: 查询已存轨迹。省略 time_range=全部监控时间；显式时间用 ISO-8601（无时区按 Asia/Shanghai）。默认每页 50、最多 100；hasMore 时用 nextCursor.afterStartTime 和 afterTrackId 继续，筛选变化须从第一页开始。hull_number 只匹配已识别舷号；为空时去掉筛选再查。完整否定结论须查完相关分页和候选证据。
     arguments:
       time_range:
         type: time_range
         required: false
         target: timeRange
-        description: >-
-          可选的起止时间。优先传两个带时区的 ISO-8601 时间，例如
-          ["2026-10-22T10:00:00+08:00", "2026-10-22T11:00:00+08:00"]；
-          省略表示全部监控时间。epoch 秒仅为旧调用兼容格式。
-      hull_number: {type: string, required: false, target: hullNumber}
-      final_match_type: {type: string, required: false, target: finalMatchType}
+        description: 可选起止时间；优先用带时区 ISO-8601（旧调用可用 epoch 秒），省略表示全部监控时间。
+      hull_number: {type: string, required: false, target: hullNumber, description: 可选规范化舷号。}
+      final_match_type: {type: string, required: false, target: finalMatchType, description: 可选轨迹匹配类型。}
       after_start_time: {type: number, required: false, target: afterStartTime, description: 上一页 nextCursor.afterStartTime。}
       after_track_id: {type: string, required: false, target: afterTrackId, description: 上一页 nextCursor.afterTrackId。}
-      limit: {type: integer, required: false, default: 50, description: 每页条数，0 表示默认 50，最大 100。}
+      limit: {type: integer, required: false, default: 50, description: 每页条数，最大 100。}
+
   - name: get_frames
     label: 关键帧
     method: getFrames
-    description: >-
-      读取一组轨迹的可检索关键帧。只对已经筛过的少量轨迹调用（建议一次不超过 20 条），
-      传入成百上千条轨迹会让这一步变成分钟级的重活。
-    arguments: {track_ids: {type: string_list, required: true, target: trackIds}}
+    description: 读取少量已筛选轨迹的可检索关键帧；建议每次不超过 20 条。返回 keyframes 和 keyframesByTrack，向量缺失的帧/轨迹会列在 discardedKeyframeIds、unsearchableTrackIds。
+    arguments:
+      track_ids: {type: string_list, required: true, target: trackIds, description: get_track 返回的轨迹 ID。}
+
   - name: get_clip
     label: 视频片段
     method: getClip
-    description: >-
-      为指定轨迹生成视频证据片段。time_range 使用 ISO-8601 起止时间，时区处理与 get_track 相同；省略时返回整条轨迹片段。
+    description: 为一条轨迹生成视频证据片段与海报；省略 time_range 返回整条轨迹，显式时间按轨迹范围裁剪。返回 shipSegmentId 和文件路径。
     arguments:
-      track_id: {type: string, required: true, target: trackId}
-      time_range: {type: time_range, required: false, target: timeRange}
-      scale: {type: number, required: false}
+      track_id: {type: string, required: true, target: trackId, description: 已返回的轨迹 ID。}
+      time_range: {type: time_range, required: false, target: timeRange, description: 可选 ISO-8601 起止时间。}
+      scale: {type: number, required: false, description: 可选缩放比例，限制在 0.25–1。}
+
   - name: get_registry
     label: 先验库
     method: getRegistry
-    description: 按规范化舷号读取先验库船舶及参考图。
-    arguments: {hull_number: {type: string, required: true, target: hullNumber}}
+    description: 按舷号或别名读取先验库记录和参考图；命中库不等于视频出现。
+    arguments: {hull_number: {type: string, required: true, target: hullNumber, description: 要查询的舷号。}}
+
   - name: list_registry
     label: 先验库目录
     method: listRegistry
-    description: 读取先验库目录。
+    description: 读取全部先验库记录及 registryReferences；用于库内列表或提供图像匹配图库。
     arguments: {}
+
   - name: match_hull
     label: 舷号匹配
     method: matchHull
-    description: 将一组识别出的舷号与先验库进行精确匹配。
-    arguments: {hull_number_array: {type: string_list, required: true, target: hullNumberArray}}
+    description: 将已识别舷号精确匹配先验库；只传工具返回或识别出的舷号。
+    arguments: {hull_number_array: {type: string_list, required: true, target: hullNumberArray, description: 舷号数组。}}
+
   - name: match_text
     label: 文本检索
     method: matchText
-    description: >-
-      按外观描述检索一个明确且非空的图像集合。检索视频证据前先 get_frames，
-      并把返回的 keyframes 作为 gallery_images；检索先验库前先 list_registry
-      或 get_registry，并把 registryReferences 作为 gallery_images。
-      不得只传 description，不得混用视频关键帧与先验库参考图，也不得使用空图库调用。
+    description: 用外观描述检索非空图库。视频用 get_frames.keyframes；库优先用 list_registry/get_registry.registryReferences。gallery_images 须是返回的记录，不可只传 description、路径字符串或 ID；不得空传或混用来源。无可用库图向量时可传 registryItems 做文字弱匹配，该结果不是视觉证据。
     arguments:
-      description:
-        type: string
-        required: true
-        description: 要检索的外观描述，例如“黄色无人艇”。
-      gallery_images:
-        type: json
-        required: true
-        target: galleryImages
-        description: >-
-          必填的非空图像数组。视频检索传 get_frames 返回的 keyframes；
-          先验库检索传 list_registry 或 get_registry 返回的 registryReferences。
-      top_k: {type: integer, required: false, target: topK}
+      description: {type: string, required: true, description: 清洗后的外观描述。}
+      gallery_images: {type: json, required: true, target: galleryImages, description: 非空 keyframes/registryReferences 图像记录；库文字弱匹配可传 registryItems。}
+      top_k: {type: integer, required: false, target: topK, description: 可选返回数量。}
+
   - name: match_image
     label: 图像检索
     method: matchImage
-    description: 用先验库参考图匹配视频关键帧。
+    description: 比较视频关键帧与先验库参考图；推荐 query_images=registryReferences、gallery_images=keyframes。两侧须为完整图像记录且各含一种来源；保留 match/uncertain/mismatch 和覆盖率。
     arguments:
-      query_images: {type: json, required: true, target: queryImages}
-      gallery_images: {type: json, required: true, target: galleryImages}
-      top_k: {type: integer, required: false, target: topK}
+      query_images: {type: json, required: true, target: queryImages, description: 一侧完整图像记录。}
+      gallery_images: {type: json, required: true, target: galleryImages, description: 另一侧完整图像记录。}
+      top_k: {type: integer, required: false, target: topK, description: 可选返回数量。}
+
   - name: verify_target
     label: 视觉核验
     method: verifyTarget
-    description: 用视觉模型核验候选证据是否满足目标描述或先验库身份。
+    description: 视觉核验：description+关键帧/片段核验外观；库参考图+关键帧/片段核验身份；description+库参考图核验库内描述。关键帧与片段每次只选一种；返回 match/mismatch/uncertain 和事实。
     arguments:
-      description: {type: string, required: false}
-      registry_reference_ids: {type: string_list, required: false, target: registryReferenceIds}
-      keyframe_ids: {type: string_list, required: false, target: keyframeIds}
-      ship_segment_ids: {type: string_list, required: false, target: shipSegmentIds}
+      description: {type: string, required: false, description: 可选目标外观描述。}
+      registry_reference_ids: {type: string_list, required: false, target: registryReferenceIds, description: 已返回的库参考图 ID。}
+      keyframe_ids: {type: string_list, required: false, target: keyframeIds, description: 已返回的关键帧 ID。}
+      ship_segment_ids: {type: string_list, required: false, target: shipSegmentIds, description: 已返回的视频片段 ID。}
+
   - name: show_evidence
     label: 证据汇总
     method: showEvidence
-    description: 汇总关键帧、片段和先验库参考图的展示证据。
+    description: 展示本轮实际产生的关键帧、片段和库参考图；只能传工具返回的 ID。返回的 displayId 是面板 ID，不是证据 ID。
     arguments:
-      keyframe_ids: {type: string_list, required: false, target: keyframeIds}
-      ship_segment_ids: {type: string_list, required: false, target: shipSegmentIds}
-      registry_reference_ids: {type: string_list, required: false, target: registryReferenceIds}
+      keyframe_ids: {type: string_list, required: false, target: keyframeIds, description: 关键帧 ID。}
+      ship_segment_ids: {type: string_list, required: false, target: shipSegmentIds, description: 片段 ID。}
+      registry_reference_ids: {type: string_list, required: false, target: registryReferenceIds, description: 库参考图 ID。}
+
   - name: dedup_tracks
     label: 轨迹去重
     method: dedupTracks
-    description: >-
-      基于轨迹关键帧外观对跨时段轨迹进行去重估计。输入是「已筛过」的轨迹与其关键帧，
-      建议一次不超过 20 条轨迹；它需要为关键帧算嵌入向量，规模一大就是分钟级甚至更久。
-    arguments: {tracks: {type: json, required: true}, keyframes_by_track: {type: json, required: true, target: keyframesByTrack}}
+    description: 根据完整轨迹记录和按轨迹分组的关键帧估计船舶数量；只在计数需要时调用，建议每次不超过 20 条轨迹。返回确认/待确认合并组及不可搜索轨迹。
+    arguments:
+      tracks: {type: json, required: true, description: get_track 返回的完整 tracks。}
+      keyframes_by_track: {type: json, required: true, target: keyframesByTrack, description: get_frames 返回的 keyframesByTrack。}
 
-  # 唯一会改进知识库的工具：写前必须由人确认（见 config/subagents.yaml 的 interrupt_on）。
-  # 描述里写死"只在用户明确要求入库时调用"，这是模型层面的第一道闸；工具内部的校验是第二道。
   - name: add_registry_vessel
     label: 先验库写入
     method: addRegistryVessel
-    description: >-
-      **只在用户明确要求把某条船写入先验库时才调用**（例如"把 003 加进库里""这条船入库"）。
-      模型自己推断"这看起来像 003"不构成调用理由——那种情况先问用户。
-      调用前会被人工确认中断拦下：用户批准才真正写入，拒绝则把反馈交回给你，请换个做法。
-      只新增不覆盖：舷号已存在会报错，需要改已有记录请让用户在界面上更新。
-      image_paths 必须是图片文件的路径（关键帧可以，视频片段不行）。
+    description: 仅用户明确要求入库时调用；调用会人工确认，拒绝则不写入。只新增不覆盖；image_paths 必须是图片路径。
     arguments:
-      hull_number: {type: string, required: true, target: hullNumber}
-      description: {type: string, required: false}
-      image_paths: {type: string_list, required: false, target: imagePaths}
-      aliases: {type: string_list, required: false}
-      user_intent: {type: string, required: true, target: userIntent}
-
-
+      hull_number: {type: string, required: true, target: hullNumber, description: 舷号。}
+      description: {type: string, required: false, description: 船舶描述。}
+      image_paths: {type: string_list, required: false, target: imagePaths, description: 关键帧等图片路径，不能是视频。}
+      aliases: {type: string_list, required: false, description: 可选别名。}
+      user_intent: {type: string, required: true, target: userIntent, description: 用户明确的入库意图原文。}

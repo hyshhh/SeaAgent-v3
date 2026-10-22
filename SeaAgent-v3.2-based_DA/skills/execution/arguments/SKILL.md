@@ -1,14 +1,11 @@
 ---
 name: arguments
-description: "Use before issuing a call to get its arguments and dependencies right."
+description: "Use to check tool inputs and dependencies before calling."
 ---
 
-# Sea-Video Arguments And Dependencies
+# Tool Arguments
 
-Required per tool: keyframe lookup needs track IDs; clip generation needs a track ID; registry lookup needs a hull number; hull matching needs a list of hull numbers; text matching needs a description plus a gallery when searching images; image matching needs a keyframe side and a registry-reference side; dedup needs full track records plus keyframes keyed by track; the evidence tool needs at least one keyframe, clip or reference ID.
-
-1. Pass IDs a tool returned. Never invent a track, keyframe or reference ID.
-2. A dependency that is missing, failed or empty means the step is skipped with the reason recorded — never called with placeholder arguments.
-3. When an upstream result is empty, the dependent step does not run; repair the upstream first.
-4. Dedup needs track records with id, start and end time, not bare IDs.
-5. Keep `topK` small and purposeful: an appearance search over many tracks is a minutes-long job — narrow the candidate set instead of raising the limit.
+- Use returned IDs only: `get_frames` needs track IDs; `get_clip` a track ID; registry lookup a hull; hull matching a list of hulls.
+- `match_text` needs a description and nonempty image gallery. `match_image` needs video frames on one side and registry references on the other.
+- Dedup needs full tracks with `trackId/startTime/endTime` and keyframes grouped by track. `show_evidence` accepts keyframe, clip and reference IDs.
+- Missing/failed/empty dependencies mean skip with reason; never use placeholders. Keep `top_k` targeted and small.

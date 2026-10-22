@@ -1,8 +1,8 @@
 ---
 name: response
-description: "Use before finalizing any answer to normalize evidence, uncertainty, and concise Chinese presentation."
+description: "Use to format a concise, evidence-based Chinese answer."
 ---
 
-# Sea-Video Response
+# Response
 
-Answer in Chinese unless the user asks otherwise. Separate conclusion, evidence, and limitations. Include track IDs, keyframe IDs, registry IDs, or clip IDs when available. Never expose chain-of-thought; provide a short factual rationale only.
+Answer in Chinese unless requested otherwise. Lead with the conclusion, cite available evidence IDs, then state gaps and uncertainty. Give factual rationale only; never reveal chain-of-thought.

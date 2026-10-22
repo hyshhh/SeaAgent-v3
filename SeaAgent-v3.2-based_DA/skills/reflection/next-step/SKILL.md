@@ -1,23 +1,15 @@
 ---
 name: next-step
-description: "Use when a gap must become one concrete next instruction."
+description: "Use to turn an unresolved evidence gap into one concrete, bounded action."
 ---
 
-# Sea-Video Next Step
+# Next Action
 
-Write the next step as tools plus the arguments that matter, so the executor does not re-derive the intent.
+Name the tool, IDs/filters and expected evidence; reuse prior results and change the failed input.
 
-- zero tracks and the registry never read → the registry lookup on the hull number.
-- registry has references but no image comparison ran → registry → unfiltered track scan → keyframes → image match, query side registry references, gallery side video keyframes.
-- membership list unfinished → the catalogue listing, then the image comparison over the keyframes already fetched.
-- a text match was run with the user's sentence → replace it with the image comparison.
-- tracks without keyframes → fetch keyframes for those track IDs.
-- keyframes without an appearance search → the search over those keyframes with a cleaned phrase.
-- no exact hull comparison → the hull matcher over the recognised numbers.
-- a count without dedup → the dedup step over tracks and keyframes.
+- No tracks and relevant hull/registry question: `get_registry` or remove the hull filter and query tracks.
+- Tracks without frames: `get_frames` for those IDs; frames without appearance search: `match_text` with a cleaned phrase.
+- Registry/video identity gap: unfiltered tracks → frames → registry references → `match_image` (query=registry, gallery=video).
+- Missing exact hull check: `match_hull` on recognized numbers. Missing count: `dedup_tracks` on full records and grouped frames.
 
-A next step must be cheap enough to finish: never ask for a whole-period scan, and never chain a
-raw full track result into the keyframe or dedup step. Narrow the window or the candidate set inside
-the instruction itself, and say which tracks or time range to use.
-
-Always name the tools and their key arguments. For a visual step state which side is the registry and which is the video, and make sure the track query carries no hull number. Never write a vague "keep looking".
+Keep scans paged and per-track work to batches of at most 20. Never chain a raw full result into frames/dedup or give a vague “continue searching” instruction.

@@ -1,8 +1,8 @@
 ---
 name: dedup
-description: "Use for counting or enumerating vessels when multiple tracks may belong to one vessel."
+description: "Use when counting vessels across possibly overlapping tracks."
 ---
 
-# Sea-Video Deduplication
+# Track Deduplication
 
-Counts must be based on track evidence and the deduplication tool, not on raw track row count. Preserve confirmed, possible, and unsearchable groups. If the evidence cannot distinguish two tracks, state a range or uncertainty instead of silently choosing one.
+Count vessels from the complete candidate set with `dedup_tracks`, not raw rows. Supply full track records and keyframes grouped by track. Keep confirmed merges, pending merges and unsearchable tracks separate; incomplete coverage means a lower bound or uncertainty.

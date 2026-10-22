@@ -1,12 +1,8 @@
 ---
 name: conflict-uncertain
-description: "Use when the evidence does not settle cleanly."
+description: "Use when results conflict, remain ambiguous or make no progress."
 ---
 
-# Sea-Video Conflict And Uncertainty
+# Conflict and Uncertainty
 
-**Conflict** — a strong match and a strong mismatch for the same target, or two tools reaching mutually exclusive conclusions. Stop and state it; do not pick the friendlier one. Conflict is yours to declare only when the evidence really is contradictory.
-
-**Uncertain** — two consecutive rounds that produced nothing new; the round budget nearly spent without progress; or a remaining gap whose value no longer justifies another round. Always name the gap.
-
-Never settle a turn that produced no successful result at all. Never report "uncertain" as a way of asking for another round — that spins the loop.
+Declare conflict only for strong, incompatible evidence about the same target. Use uncertain when two rounds add no evidence, the budget is nearly spent without progress, or the remaining gap is not worth another step; name the gap. Do not use uncertainty to request another round. Never settle a turn with no successful result.

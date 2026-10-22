@@ -1,18 +1,13 @@
 ---
 name: query-rules
-description: "Use before running a tool, to run it the way its domain requires and keep the two false negatives out of the answer."
+description: "Use for query edge cases that can create false negatives."
 ---
 
-# Sea-Video Query Rules
+# Query Rules
 
-**Never invent a time range.** A window like `[0, ...]` is January 1970 and matches nothing — it looks like a range but guarantees an empty result. If the question gives no time expression, ask the user for one instead of substituting a placeholder, and say in the answer that the range is what you are waiting for.
-
-**Tracks.** Always carry a time window or a page limit; an unfiltered full scan is the most expensive call here. A hull-number filter only matches tracks whose recognition already agreed with that number — empty means "no track was recognised as this hull", never "the vessel was absent". When it comes back empty, change the filter instead of repeating the call.
-
-**Keyframes / dedup.** Per-track work: feed at most about twenty tracks per call. Frames with no vector come back as discarded and a track left with nothing searchable is reported as unsearchable — carry that into the answer rather than dropping the track.
-
-**Registry.** A hull lookup matches exactly or through an alias; the catalogue listing returns everything. A registry hit proves the record exists, not that the vessel appeared; a video track proves appearance, not membership. Whether a reference image is searchable is decided by the vector index, not by a flag on the row.
-
-**Image matching.** One side is video keyframes, the other registry references. Scores band as confirmed / uncertain / mismatch; a mismatch is downgraded to uncertain when registry coverage for that track is incomplete, and only the best match per track is kept. Empty input is a soft failure returning a hint — so "never tried" and "tried but could not" stay distinguishable.
-
-**Visual verification.** Pass a description, references, keyframes or clips. When the answer rests on comparing images, the verification tool's verdict outranks your own reading of a text description.
+- Never invent a time range. Omit `time_range` to search all stored monitoring time; explicit ranges use ISO-8601 with timezone.
+- A hull filter includes only tracks whose recognized number matches. Empty means unrecognized/not matched, not absent; retry without that filter.
+- `get_frames` reports discarded frames and tracks with no searchable frames; carry those gaps into the conclusion.
+- Registry lookup proves a record exists, not video presence. A trajectory proves a candidate, not registry identity.
+- `match_text` needs a nonempty gallery: video keyframes or registry references. `match_image` compares one side of each; never mix source types.
+- Respect returned score bands and coverage. An incomplete image comparison cannot support a confident mismatch; verification verdict governs visual claims.
