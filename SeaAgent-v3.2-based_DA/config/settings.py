@@ -59,7 +59,6 @@ API_PORT_URLS = {
 SETTING_SPECS: dict[str, dict[str, Any]] = {
     "llm.api_port": {"type": "int", "min": 1, "max": 65535, "step": 1},
     "embedding.api_port": {"type": "int", "min": 1, "max": 65535, "step": 1},
-    "harness.tool_calls_per_run": {"type": "int", "min": 1, "max": 200, "step": 1},
     "yolo.model": {"type": "enum", "choices": list(DETECTION_MODEL_OPTIONS)},
     "yolo.device": {"type": "string", "allow_empty": True, "max_chars": 128},
     "yolo.confidence": {"type": "float", "min": 0.01, "max": 0.99, "step": 0.01},

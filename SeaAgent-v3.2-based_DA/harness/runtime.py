@@ -153,16 +153,40 @@ def _load_subagents(
     if not spec_path.is_file():
         raise RuntimeError(f"找不到 Agent 配置文件：{spec_path}")
     raw = yaml.safe_load(spec_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict) or not isinstance(raw.get("agents"), list):
+        raise TypeError(f"{spec_path} 必须包含 agents 列表")
     by_name = {str(getattr(tool, "name", "")): tool for tool in tools}
     subagents: list[dict[str, Any]] = []
-    raw_specs = raw.get("agents") or raw.get("subagents") or []
-    for spec in raw_specs:
+    for spec in raw["agents"]:
+        if not isinstance(spec, dict):
+            raise TypeError("Agent 配置项必须是对象")
         name = str(spec.get("name") or "").strip()
         if not name:
-            raise ValueError("从智能体缺少 name")
+            raise ValueError("Agent 配置缺少 name")
         if any(item["name"] == name for item in subagents):
             raise ValueError(f"重复 Agent 名称：{name}")
-        wanted = [str(item) for item in (spec.get("tools") or [])]
+        description = str(spec.get("description") or "").strip()
+        system_prompt = str(spec.get("system_prompt") or "").strip()
+        task_prompt = str(spec.get("task_prompt") or "").strip()
+        if not description or not system_prompt or task_prompt.count("{question}") != 1:
+            raise ValueError(f"Agent {name} 必须显式配置 description、system_prompt 和含一个 {{question}} 的 task_prompt")
+        tool_budget = spec.get("tool_budget")
+        if type(tool_budget) is not int or tool_budget < 1:
+            raise ValueError(f"Agent {name} 的 tool_budget 必须是正整数")
+        skills = spec.get("skills")
+        if not isinstance(skills, list) or any(not isinstance(group, str) or not group.strip() for group in skills):
+            raise ValueError(f"Agent {name} 的 skills 必须是字符串列表")
+        reminder = spec.get("skill_reminder")
+        if not isinstance(reminder, dict):
+            raise TypeError(f"Agent {name} 的 skill_reminder 必须是对象")
+        reminder_count = reminder.get("max_per_run")
+        reminder_text = str(reminder.get("message") or "").strip()
+        if type(reminder_count) is not int or reminder_count < 0 or not reminder_text:
+            raise ValueError(f"Agent {name} 的 skill_reminder 需要非负 max_per_run 和 message")
+        wanted_tools = spec.get("tools")
+        if not isinstance(wanted_tools, list):
+            raise TypeError(f"Agent {name} 的 tools 必须是列表")
+        wanted = [str(item) for item in wanted_tools]
         missing = [item for item in wanted if item not in by_name]
         if missing:
             raise ValueError(
@@ -170,10 +194,16 @@ def _load_subagents(
             )
         built: dict[str, Any] = {
             "name": name,
-            "description": str(spec.get("description") or ""),
-            "system_prompt": str(spec.get("system_prompt") or ""),
+            "description": description,
+            "system_prompt": system_prompt,
+            "task_prompt": task_prompt,
+            "tool_budget": tool_budget,
+            "skill_reminder": {
+                "max_per_run": reminder_count,
+                "message": reminder_text,
+            },
             "tools": [by_name[item] for item in wanted],
-            "skills": _skill_sources(harness, [str(group) for group in (spec.get("skills") or [])]),
+            "skills": _skill_sources(harness, skills),
         }
         scope = _read_scope_paths(built["skills"])  # 读取面按组收口，免得模型逛到别人的技能规范里
         permissions = _readonly_permissions(scope, permission_type, deny_when_empty=not scope)
@@ -184,9 +214,24 @@ def _load_subagents(
         interrupt_on = spec.get("interrupt_on")
         if isinstance(interrupt_on, dict) and interrupt_on:
             built["interrupt_on"] = interrupt_on
+        evidence_wrapup = spec.get("evidence_wrapup")
+        if evidence_wrapup is not None:
+            if (
+                not isinstance(evidence_wrapup, dict)
+                or str(evidence_wrapup.get("tool") or "") not in wanted
+                or type(evidence_wrapup.get("max_nudges")) is not int
+                or evidence_wrapup["max_nudges"] < 0
+            ):
+                raise ValueError(f"Agent {name} 的 evidence_wrapup 配置无效")
+            built["evidence_wrapup"] = {
+                "tool": str(evidence_wrapup["tool"]),
+                "max_nudges": evidence_wrapup["max_nudges"],
+            }
         subagents.append(built)
     if not subagents:
         raise ValueError(f"{spec_path} 里没有配置任何 Agent")
+    if {item["name"] for item in subagents} != {"planner", "executor", "reflector"}:
+        raise ValueError(f"{spec_path} 必须且只能配置 planner、executor、reflector 三个 Agent")
     return subagents
 
 
@@ -311,19 +356,13 @@ class SeaVideoHarness:
             middleware=build_middleware(
                 self.config,
                 self.model,
-                skills_attached=bool(sources),
-                evidence_tool="show_evidence"
-                if name == "reflector"
-                else "",  # 收尾提醒只给 reflector，由它判定证据够不够
+                agent_spec=spec,
                 shared_state=state,
-                allowed_tools={str(tool.name) for tool in selected} | {"read_file"},
                 cancelled=lambda: self._cancel is not None and self._cancel.is_set(),
                 model_timeout=self._model_timeout_seconds,
                 persist=lambda: (
                     self.state_store.save(self._thread_id, state) if self._thread_id else None
                 ),
-                agent_name=name,
-                tool_limit=int(harness.get("subagent_tool_calls", 6)),
             ),
             checkpointer=self._open_checkpoint(),
             name=f"sea_video_{name}",
@@ -404,12 +443,7 @@ class SeaVideoHarness:
 
     # 3.1.11 生成角色开工消息，要求先读取共享状态
     def _agent_prompt(self, role: str, question: str) -> str:
-        return (
-            f"用户问题：{question}\n"
-            f"当前角色：{role}\n"
-            "先调用 read_shared_state 读取唯一任务状态。只维护你负责的字段，"
-            "完成后调用对应的状态更新工具；任务版本由运行时内部维护。"
-        )
+        return str(self.agent_specs[role]["task_prompt"]).replace("{question}", question)
 
     # 3.1.11.1 统一选择新输入、检查点续接或人工确认恢复载荷
     def _agent_input_for_attempt(

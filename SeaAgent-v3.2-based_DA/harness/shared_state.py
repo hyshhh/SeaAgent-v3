@@ -193,7 +193,6 @@ class SharedTaskState:
             "iteration": 0,
             "version": 1,
             "pending_agent": None,
-            "tool_calls_run": 0,
             "agent_calls": {},
             "call_history": {},
             "role_write_counts": {},
@@ -382,44 +381,27 @@ class SharedTaskState:
                 self._values["conflicts"] = []
             self._changed()
 
-    # 2.1.9.1 查询已达到的预算，外层预算优先于角色预算
-    def limit_reason(self, role: str, limits: dict[str, int]) -> str:
+    # 2.1.9.1 查询当前角色是否达到自己的工具预算
+    def limit_reason(self, role: str, tool_budget: int) -> str:
         with self._lock:
-            for key, count, limit in (
-                ("run_tool_limit", self._values["tool_calls_run"], limits.get("run", 0)),
-                (
-                    "agent_tool_limit",
-                    self._values["agent_calls"].get(role, 0),
-                    limits.get("agent", 0),
-                ),
-            ):
-                if limit > 0 and count >= limit:
-                    return key
-        return ""
+            used = self._values["agent_calls"].get(role, 0)
+            return "agent_tool_limit" if tool_budget > 0 and used >= tool_budget else ""
 
     # 2.1.10 执行前原子占用工具预算并登记请求
     def claim_call(
         self,
         role: str,
         key: str | None,
-        limits: dict[str, int],
+        tool_budget: int,
         write: bool = False,
         count: bool = True,
+        max_attempts: int = 1,
     ) -> dict[str, Any]:
-        """在执行前原子占用预算并登记请求，重连不能重复写入。"""
+        """原子占用当前角色预算并登记请求，重连不能重复写入。"""
         with self._lock:
+            if count and tool_budget > 0 and self._values["agent_calls"].get(role, 0) >= tool_budget:
+                return {"blocked": "agent_tool_limit"}
             if count:
-                for reason, used, limit in (
-                    ("run_tool_limit", self._values["tool_calls_run"], limits.get("run", 0)),
-                    (
-                        "agent_tool_limit",
-                        self._values["agent_calls"].get(role, 0),
-                        limits.get("agent", 0),
-                    ),
-                ):
-                    if limit > 0 and used >= limit:
-                        return {"blocked": reason}
-                self._values["tool_calls_run"] += 1
                 self._values["agent_calls"][role] = self._values["agent_calls"].get(role, 0) + 1
             previous = self._values["call_history"].get(key) if key else None
             if key and previous is None:
@@ -432,7 +414,7 @@ class SharedTaskState:
                 previous
                 and previous["status"] == "error"
                 and not previous.get("write")
-                and previous.get("attempts", 1) < max(1, limits.get("attempts", 1))
+                and previous.get("attempts", 1) < max(1, max_attempts)
             ):
                 previous.update(status="pending", attempts=previous.get("attempts", 1) + 1)
                 self._changed()

@@ -8,6 +8,7 @@
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.language_models import FakeListChatModel
@@ -64,7 +65,18 @@ def test_bounded_payload_keeps_its_structure_when_it_exceeds_the_limit():
 
 
 def test_middleware_stack_includes_the_repeat_guard():
-    stack = build_middleware(load_config(), FakeListChatModel(responses=["ok"]))
+    stack = build_middleware(
+        load_config(),
+        FakeListChatModel(responses=["ok"]),
+        agent_spec={
+            "name": "executor",
+            "tool_budget": 6,
+            "tools": [SimpleNamespace(name="get_track")],
+            "skills": ["/skills/execution"],
+            "skill_reminder": {"max_per_run": 1, "message": "Read execution skills."},
+        },
+        shared_state=SharedTaskState("q"),
+    )
     assert any(isinstance(item, RepeatToolCallMiddleware) for item in stack)
 
 
@@ -73,12 +85,11 @@ def test_state_and_skill_reads_do_not_consume_tool_budgets():
     guard = RepeatToolCallMiddleware(
         state=state,
         scope="planner",
-        limits={"run": 1, "thread": 1, "agent": 1},
+        tool_budget=1,
     )
     guard.wrap_tool_call(_Request("read_shared_state", {}), _handler)
     guard.wrap_tool_call(_Request("read_file", {"file_path": "/skills/a/SKILL.md"}), _handler)
-    assert state.snapshot()["tool_calls_run"] == 0
-    assert state.snapshot()["tool_calls_run"] == 0
+    assert state.snapshot()["agent_calls"] == {}
     assert state.snapshot()["agent_calls"] == {}
 
 
@@ -87,7 +98,7 @@ def test_sync_domain_tool_timeout_returns_error_without_result_writeback():
     guard = RepeatToolCallMiddleware(
         state=state,
         scope="executor",
-        limits={"agent": 1},
+        tool_budget=1,
         tool_timeout=lambda: 0.01,
     )
     started = time.monotonic()
@@ -103,7 +114,7 @@ def test_sync_domain_tool_timeout_returns_error_without_result_writeback():
 
 @pytest.mark.asyncio
 async def test_async_domain_tool_timeout_returns_error():
-    guard = RepeatToolCallMiddleware(scope="executor", limits={"agent": 1}, tool_timeout=lambda: 0.01)
+    guard = RepeatToolCallMiddleware(scope="executor", tool_budget=1, tool_timeout=lambda: 0.01)
 
     async def slow(_request):
         await asyncio.sleep(0.1)

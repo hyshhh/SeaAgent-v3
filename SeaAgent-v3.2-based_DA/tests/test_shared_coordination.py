@@ -84,7 +84,7 @@ def test_plan_events_and_answer_only_come_from_shared_state():
 def test_state_tools_can_read_again_without_a_model_version_argument():
     state = SharedTaskState("q")
     tools = {tool.name: tool for tool in build_state_tools(state)}
-    guard = RepeatToolCallMiddleware(state=state, scope="planner", limits={"run": 10})
+    guard = RepeatToolCallMiddleware(state=state, scope="planner", tool_budget=10)
 
     def handler(req):
         value = tools[req.tool_call["name"]].invoke(req.tool_call["args"])
@@ -182,37 +182,6 @@ def test_reflection_assessment_text_becomes_a_final_answer_object():
     }
 
 
-def test_state_update_drops_legacy_version_before_tool_validation():
-    class Request:
-        def __init__(self):
-            self.tool_call = {
-                "name": "update_planner_state",
-                "args": {
-                    "patch": {"requirements": ["r"]},
-                    "expected_version": 3,
-                },
-                "id": "legacy-call",
-            }
-
-        def override(self, **updates):
-            self.tool_call = updates["tool_call"]
-            return self
-
-    seen = {}
-    guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="planner")
-
-    def handler(req):
-        seen.update(req.tool_call["args"])
-        return ToolMessage(
-            content='{"ok": true}',
-            name=req.tool_call["name"],
-            tool_call_id=req.tool_call["id"],
-        )
-
-    guard.wrap_tool_call(Request(), handler)
-    assert seen == {"patch": {"requirements": ["r"]}}
-
-
 def test_domain_results_are_reused_across_roles_and_reload(tmp_path):
     store = SharedStateStore(tmp_path / "state.sqlite")
     state = store.load("t", "q")
@@ -233,7 +202,7 @@ def test_domain_results_are_reused_across_roles_and_reload(tmp_path):
     result = other.wrap_tool_call(request("get_track", call_id="c2"), handler)
     assert json.loads(result.content) == {"trackId": "t1"}
     assert len(calls) == 1
-    assert restored.snapshot()["tool_calls_run"] == 2
+    assert restored.snapshot()["agent_calls"] == {"executor": 1, "reflector": 1}
 
 
 def test_uncertain_write_is_never_repeated(tmp_path):
@@ -256,9 +225,9 @@ def test_uncertain_write_is_never_repeated(tmp_path):
     assert len(calls) == 1
 
 
-def test_run_budget_resets_for_a_new_turn():
+def test_role_budget_resets_when_a_new_role_phase_starts():
     state = SharedTaskState("q")
-    guard = RepeatToolCallMiddleware(state=state, scope="executor", limits={"run": 2})
+    guard = RepeatToolCallMiddleware(state=state, scope="executor", tool_budget=2)
     calls = []
 
     def handler(req):
@@ -268,11 +237,11 @@ def test_run_budget_resets_for_a_new_turn():
     for index in range(5):
         guard.wrap_tool_call(request("get_track", {"i": index}), handler)
     assert len(calls) == 2
-    state.start_turn("next")
-    for index in range(5):
+    state.start_agent("executor")
+    for index in range(5, 10):
         guard.wrap_tool_call(request("get_track", {"i": index}), handler)
     assert len(calls) == 4
-    assert state.snapshot()["tool_calls_run"] == 2
+    assert state.snapshot()["agent_calls"]["executor"] == 2
 
 
 def test_multiple_store_instances_preserve_independent_sessions(tmp_path):
@@ -296,7 +265,7 @@ def test_stale_disk_snapshot_is_rejected_even_if_only_counters_changed(tmp_path)
     state = store.load("t", "q")
     store.save("t", state)
     old = store.load("t")
-    state.claim_call("executor", None, {})
+    state.claim_call("executor", None, 12)
     store.save("t", state)
     with pytest.raises(StateConflictError):
         store.save("t", old)
@@ -377,17 +346,27 @@ def test_failed_results_never_become_evidence():
     assert state.snapshot()["evidence_ids"] == []
 
 
-def test_retry_attempts_consume_the_shared_budget():
+def test_retry_attempts_consume_the_current_agent_budget():
+    from types import SimpleNamespace
+
     from langchain.agents.middleware import ToolRetryMiddleware
     from langchain_core.language_models import FakeListChatModel
 
     state = SharedTaskState("q")
+    tool = SimpleNamespace(name="get_track")
+    spec = {
+        "name": "executor",
+        "tool_budget": 2,
+        "tools": [tool],
+        "skills": [],
+        "skill_reminder": {"max_per_run": 0, "message": "read skills"},
+    }
     stack = build_middleware(
         {
-            "harness": {"tool_calls_per_run": 2, "retry_attempts": 5, "retry_delay_seconds": 0},
-            "tools": [{"name": "get_track"}],
+            "harness": {"retry_attempts": 5, "retry_delay_seconds": 0},
         },
         FakeListChatModel(responses=["ok"]),
+        agent_spec=spec,
         shared_state=state,
     )
     retry = next(item for item in stack if isinstance(item, ToolRetryMiddleware))
@@ -402,13 +381,13 @@ def test_retry_attempts_consume_the_shared_budget():
     req.tool = None
     result = retry.wrap_tool_call(req, lambda value: guard.wrap_tool_call(value, handler))
     assert result.status == "success"
-    assert result.artifact["budget_exhausted"] == "run_tool_limit"
-    assert len(calls) == state.snapshot()["tool_calls_run"] == 2
+    assert result.artifact["budget_exhausted"] == "agent_tool_limit"
+    assert len(calls) == state.snapshot()["agent_calls"]["executor"] == 2
 
 
 def test_failed_reads_can_retry_but_successful_reads_are_cached():
     state = SharedTaskState("q")
-    guard = RepeatToolCallMiddleware(state=state, limits={"attempts": 2})
+    guard = RepeatToolCallMiddleware(state=state, max_attempts=2)
     calls = []
 
     def handler(req):

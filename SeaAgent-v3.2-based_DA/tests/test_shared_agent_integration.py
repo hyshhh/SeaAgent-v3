@@ -2,8 +2,10 @@
 
 import json
 import uuid
+from pathlib import Path
 
 import pytest
+import yaml
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_openai import ChatOpenAI
@@ -132,18 +134,26 @@ class _Service:
         return invoke
 
 
-def _runtime(tmp_path, service, write=False, tool_limit=12, **model_settings):
+def _runtime(tmp_path, service, write=False, executor_budget=12, **model_settings):
     config = load_config()
     config["llm"]["model"] = "shared-state-offline-test"
+    role_config = yaml.safe_load(
+        (Path(__file__).parents[1] / config["harness"]["subagents_file"]).read_text(encoding="utf-8")
+    )
+    for spec in role_config["agents"]:
+        spec["skill_reminder"]["max_per_run"] = 0
+        if spec["name"] == "executor":
+            spec["tool_budget"] = executor_budget
+    spec_path = tmp_path / "subagents.yaml"
+    spec_path.write_text(yaml.safe_dump(role_config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     config["harness"].update(
         {
             "checkpointer": str(tmp_path / "checkpoint.sqlite"),
             "shared_state_file": str(tmp_path / "state.sqlite"),
+            "subagents_file": str(spec_path),
             "heartbeat_seconds": 0,
             "retry_delay_seconds": 0,
             "reconnect_attempts": 0,
-            "subagent_tool_calls": tool_limit,
-            "skill_reminder_max_per_run": 0,
         }
     )
     model = _ScriptedModel(
@@ -158,7 +168,7 @@ def _runtime(tmp_path, service, write=False, tool_limit=12, **model_settings):
 
 @pytest.mark.parametrize("stream", [False, True])
 def test_real_graph_completes_with_tool_budget_and_state_updates(tmp_path, stream):
-    runtime = _runtime(tmp_path, _Service(), tool_limit=4)
+    runtime = _runtime(tmp_path, _Service(), executor_budget=4)
     result = list(runtime.stream("scan", "t"))[-1]["result"] if stream else runtime.run("scan", "t")
     assert result["state"] == "completed" and not result["partial"]
     assert runtime.model.calls > 0
@@ -170,7 +180,7 @@ def test_real_graph_completes_with_tool_budget_and_state_updates(tmp_path, strea
 
 def test_real_graph_parallel_batch_cannot_exceed_budget(tmp_path):
     service = _Service()
-    runtime = _runtime(tmp_path, service, tool_limit=4, batch_tools=True)
+    runtime = _runtime(tmp_path, service, executor_budget=4, batch_tools=True)
     result = runtime.run("scan", "t")
     assert result["state"] == "completed" and not result["partial"]
     assert service.queries == 4
@@ -185,21 +195,14 @@ def test_real_graph_parallel_batch_cannot_exceed_budget(tmp_path):
     assert result["shared_state"]["step_status"] == {"step-1": "completed"}
 
 
-@pytest.mark.parametrize("limit", ["tool_calls_per_run", "max_iterations"])
-def test_real_graph_outer_limits_do_not_start_a_summary_request(tmp_path, limit):
-    runtime = _runtime(tmp_path, _Service(), replan=limit == "max_iterations")
-    runtime.config["harness"][limit] = 1
+def test_real_graph_iteration_limit_does_not_start_a_summary_request(tmp_path):
+    runtime = _runtime(tmp_path, _Service(), replan=True)
+    runtime.config["harness"]["max_iterations"] = 1
     result = runtime.run("scan", "t")
-    if limit == "tool_calls_per_run":
-        assert result["state"] == "completed" and not result["partial"]
-        assert result["shared_state"]["decision"] == "terminate"
-    else:
-        assert result["state"] == "stalled" and result["partial"]
-        assert result["shared_state"]["decision"] == "replan"
+    assert result["state"] == "stalled" and result["partial"]
+    assert result["shared_state"]["decision"] == "replan"
     assert result["shared_state"]["pending_agent"] is None
     assert result["evidence"]["shownKeyframeIds"] == ["kf1"]
-    if limit == "tool_calls_per_run":
-        assert result["shared_state"]["tool_calls_run"] == 1
 
 
 def test_agent_without_state_write_gets_one_forced_repair_turn(tmp_path):
@@ -215,14 +218,14 @@ def test_agent_without_state_write_gets_one_forced_repair_turn(tmp_path):
 @pytest.mark.parametrize("decision,writes", [("approve", 1), ("reject", 0)])
 def test_four_call_limit_preserves_confirmation_and_prevents_replay(tmp_path, decision, writes):
     service = _Service()
-    paused = _runtime(tmp_path, service, write=True, tool_limit=4).run("add 003", "t")
+    paused = _runtime(tmp_path, service, write=True, executor_budget=4).run("add 003", "t")
     assert paused["state"] == "awaiting_confirmation" and service.writes == 0
-    continued = _runtime(tmp_path, service, write=True, tool_limit=4).resume(decision, "t")
+    continued = _runtime(tmp_path, service, write=True, executor_budget=4).resume(decision, "t")
     assert continued["state"] == "completed"
     assert service.writes == writes
-    assert continued["shared_state"]["agent_calls"]["executor"] <= 4
+    assert continued["shared_state"]["agent_calls"]["executor"] == writes
     with pytest.raises(ValueError, match="没有待确认"):
-        _runtime(tmp_path, service, write=True, tool_limit=4).resume(decision, "t")
+        _runtime(tmp_path, service, write=True, executor_budget=4).resume(decision, "t")
     assert service.writes == writes
 
 
@@ -246,11 +249,11 @@ def test_confirmation_survives_a_new_runtime_and_cannot_be_replayed(tmp_path):
     paused = _runtime(tmp_path, service, write=True).run("add 003", "t")
     assert paused["state"] == "awaiting_confirmation"
     assert service.writes == 0
-    before = paused["shared_state"]["tool_calls_run"]
+    before = paused["shared_state"]["agent_calls"]["executor"]
     continued = _runtime(tmp_path, service, write=True).resume("approve", "t")
     assert continued["state"] == "completed"
     assert service.writes == 1
-    assert continued["shared_state"]["tool_calls_run"] > before
+    assert continued["shared_state"]["agent_calls"]["executor"] > before
     with pytest.raises(ValueError, match="没有待确认"):
         _runtime(tmp_path, service, write=True).resume("approve", "t")
     assert service.writes == 1
@@ -262,7 +265,7 @@ def test_same_question_after_completion_starts_fresh_task_state(tmp_path):
     second = runtime.run("scan", "t")
     assert second["state"] == "completed"
     assert second["shared_state"]["iteration"] == 1
-    assert second["shared_state"]["tool_calls_run"] > 0
+    assert second["shared_state"]["agent_calls"]["executor"] > 0
     assert second["shared_state"]["version"] > first["shared_state"]["version"]
 
 
@@ -317,7 +320,7 @@ def test_reconnect_retries_build_failures_without_resetting_budget(tmp_path, mon
 
         def stream(self, payload, **kwargs):
             assert payload is None
-            assert runtime.shared_state.snapshot()["tool_calls_run"] == 3
+            assert runtime.shared_state.snapshot()["agent_calls"]["executor"] == 3
             yield {}
 
     def rebuild(role):
@@ -328,7 +331,7 @@ def test_reconnect_retries_build_failures_without_resetting_budget(tmp_path, mon
 
     runtime._initialize_state("t", "q")
     for _ in range(3):
-        runtime.shared_state.claim_call("executor", None, {})
+        runtime.shared_state.claim_call("executor", None, 12)
     runtime.agents["executor"] = FailingGraph()
     monkeypatch.setattr(runtime, "_reconnect_agent", rebuild)
     from harness.trace import _Trace

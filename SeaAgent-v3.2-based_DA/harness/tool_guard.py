@@ -11,7 +11,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from .shared_state import STATE_TOOLS, STATE_UPDATE_TOOLS, SharedTaskState
+from .shared_state import STATE_TOOLS, SharedTaskState
 
 REPEAT_HINT = "Skipped: this exact call was already made. Reuse its recorded result; do not repeat the same tool and arguments."
 FREE_TOOLS = STATE_TOOLS | {"read_file", "show_evidence"}
@@ -43,7 +43,8 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         self,
         state: SharedTaskState | None = None,
         scope: str = "",
-        limits: dict[str, int] | None = None,
+        tool_budget: int = 0,
+        max_attempts: int = 1,
         persist: Callable[[], None] | None = None,
         allowed_tools: set[str] | None = None,
         cancelled: Callable[[], bool] | None = None,
@@ -52,7 +53,8 @@ class RepeatToolCallMiddleware(AgentMiddleware):
     ):
         self.state = state if state is not None else SharedTaskState("")
         self.scope = scope
-        self.limits = limits or {}
+        self.tool_budget = max(0, int(tool_budget))
+        self.max_attempts = max(1, int(max_attempts))
         self.persist = persist
         self.allowed_tools = allowed_tools
         self.cancelled = cancelled
@@ -67,7 +69,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         tools = list(request.tools or [])
         if self.allowed_tools is not None:
             tools = [tool for tool in tools if getattr(tool, "name", None) in self.allowed_tools]
-        if self.state.limit_reason(self.scope, self.limits):
+        if self.state.limit_reason(self.scope, self.tool_budget):
             tools = [tool for tool in tools if getattr(tool, "name", None) in FREE_TOOLS]
         if request.tools is not None or self.allowed_tools is not None:
             overrides["tools"] = tools
@@ -92,21 +94,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         if self.persist:
             self.persist()
 
-    @staticmethod
-    def _without_legacy_version(request: Any) -> Any:
-        """接受旧模型输出，但不再把版本号传给状态更新工具。"""
-        call = request.tool_call
-        name = str(call.get("name") or "")
-        args = call.get("args")
-        if (
-            name not in STATE_UPDATE_TOOLS
-            or not isinstance(args, dict)
-            or "expected_version" not in args
-        ):
-            return request
-        normalized = {key: value for key, value in args.items() if key != "expected_version"}
-        return request.override(tool_call={**call, "args": normalized})
-
     # 2.1.6 执行前原子占用预算，复用缓存或阻止重复写入
     def _prepare(self, request: Any) -> tuple[str | None, ToolMessage | None]:
         call = request.tool_call
@@ -127,9 +114,10 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         record = self.state.claim_call(
             self.scope,
             key,
-            self.limits,
+            self.tool_budget,
             write=name == "add_registry_vessel",
             count=budgeted,
+            max_attempts=self.max_attempts,
         )
         self._save()
         if record.get("execute"):
@@ -252,7 +240,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
 
     # 2.1.9 同步工具执行与异常登记
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
-        request = self._without_legacy_version(request)
         key, blocked = self._prepare(request)
         if blocked is not None:
             return blocked
@@ -280,7 +267,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
 
     # 2.1.10 异步工具执行与异常登记
     async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
-        request = self._without_legacy_version(request)
         key, blocked = self._prepare(request)
         if blocked is not None:
             return blocked

@@ -36,7 +36,7 @@ def test_evidence_in_current_turn_lets_the_answer_pass():
     assert _middleware().after_model(state) is None
 
 
-@pytest.mark.parametrize("artifact", [{"replayed": True}, {"budget_exhausted": "run_tool_limit"}])
+@pytest.mark.parametrize("artifact", [{"replayed": True}, {"budget_exhausted": "agent_tool_limit"}])
 def test_replayed_or_blocked_evidence_does_not_count_as_landed(artifact):
     state = _state(
         HumanMessage(content="有几艘船？"),

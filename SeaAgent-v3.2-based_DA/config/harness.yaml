@@ -9,11 +9,8 @@ harness:
   shared_state_file: data/memory/shared_task_state.sqlite
   max_iterations: 4
   skills_dir: skills
-  # 工具预算只限制领域工具；状态写入、共享状态读取、技能读取和证据展示不计入。
-  # 预算由共享状态在工具执行前原子检查；重连或人工确认不清零。
-  tool_calls_per_run: 40
-  # 每个独立 Agent 阶段的领域工具调用预算。
-  subagent_tool_calls: 6
+  # 每个角色的领域工具预算、任务提示和技能提醒均在 config/subagents.yaml 中显式声明。
+  # 共享状态读写、技能读取和证据展示不计入角色预算；重连或人工确认不清零。
   reconnect_attempts: 2
   reconnect_backoff_seconds: 1.0
   summarization_trigger_tokens: 12000
@@ -33,11 +30,6 @@ harness:
     # 证据富化载荷的键名（见 harness/evidence.py）：前端证据面板用它一次拿到全部证据 ID
     enriched_evidence_field: enrichedEvidence
   event_payload_max_chars: 4000
-  evidence_tool: show_evidence
-  # 收尾守卫：模型给出最终回答却还没落地证据时，最多补发几次提醒（见 harness/wrapup.py）。
-  evidence_wrapup_max_nudges: 2
-  # 技能披露提醒：整段会话还没读过技能正文时，在模型动手前最多补几句提醒（见 harness/disclosure.py）。
-  skill_reminder_max_per_run: 1
   # 文件读取权限按各 Agent 的 skills 目录生成（见 subagents.yaml），写入始终拒绝。
   # 仍然禁用的框架自带工具：写入、shell、目录探索。
   # ls/glob/grep 一并禁用是事故驱动的：模型拿到探索工具后会拿它去找**数据**（试过 /data、glob /），

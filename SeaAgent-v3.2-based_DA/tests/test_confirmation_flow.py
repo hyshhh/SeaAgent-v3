@@ -64,6 +64,9 @@ def _runtime_with_agent(agent):
         "tools": [{"name": "add_registry_vessel", "label": "先验库写入"}],
     }
     runtime.agents = {"executor": agent}
+    runtime.agent_specs = {
+        "executor": {"task_prompt": "用户问题：{question}，按 Executor 职责处理。"}
+    }
     runtime.shared_state = SharedTaskState("把 003 加进库里")
     runtime.state_store = _Store()
     runtime.event_handler = None

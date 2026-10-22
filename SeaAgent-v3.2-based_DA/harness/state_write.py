@@ -23,14 +23,14 @@ class StateWriteMiddleware(AgentMiddleware):
         self,
         role: str,
         shared_state: Any,
-        limits: dict[str, int],
+        tool_budget: int,
         allowed_tools: set[str] | None = None,
     ) -> None:
         if role not in ROLE_UPDATE_TOOLS:
             raise ValueError(f"unknown agent role: {role}")
         self.role = role
         self.shared_state = shared_state
-        self.limits = limits
+        self.tool_budget = max(0, int(tool_budget))
         self.allowed_tools = allowed_tools
         self.forcing = False
         self.reminder_sent = False
@@ -53,7 +53,7 @@ class StateWriteMiddleware(AgentMiddleware):
         ).strip()
 
     def _budget_exhausted(self) -> bool:
-        return bool(self.shared_state.limit_reason(self.role, self.limits))
+        return bool(self.shared_state.limit_reason(self.role, self.tool_budget))
 
     def _request(self, request: Any) -> Any:
         missing = self._write_required()

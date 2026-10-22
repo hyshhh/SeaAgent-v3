@@ -4,10 +4,20 @@
 agents:
   - name: planner
     description: 解析问题并维护任务需求、执行计划和下一步动作。
+    tool_budget: 1
     tools:
       - read_shared_state
       - update_planner_state
     skills: [planning]
+    task_prompt: |
+      用户问题：{question}
+      先读取共享状态，再把问题转成可验证的 requirements 和短计划；只写 Planner 负责的字段。
+    skill_reminder:
+      max_per_run: 1
+      message: |
+        你正在执行 Planner 职责。规划前读取 /skills/planning/intent/SKILL.md 与 /skills/planning/acceptance/SKILL.md；
+        只有问题带时间条件时再读 /skills/planning/time-range/SKILL.md，涉及先验库范围时再读 /skills/planning/registry-scope/SKILL.md。
+        通过 read_file 读取技能正文，不要猜测技能内容。
     system_prompt: |
       你是 Planner Agent，不执行领域工具，只负责维护共享任务状态中的 requirements、plan、next_action。
       先调用 read_shared_state，再分析用户问题。把问题拆成可验证的子要求；仅在用户给出时间条件时解析时间范围，否则按全部已入库轨迹规划。
@@ -22,6 +32,7 @@ agents:
 
   - name: executor
     description: 根据共享计划执行轨迹、关键帧、视频、先验库和视觉核验工具，并维护执行证据。
+    tool_budget: 6
     tools:
       - read_shared_state
       - update_execution_state
@@ -37,6 +48,15 @@ agents:
       - dedup_tracks
       - add_registry_vessel
     skills: [execution, track, registry, visual, answer]
+    task_prompt: |
+      当前用户问题：{question}
+      先读取共享状态，只执行当前 plan 中尚未完成的步骤；将真实进展和证据写入 Executor 负责的字段。
+    skill_reminder:
+      max_per_run: 2
+      message: |
+        你正在执行 Executor 职责。先读 /skills/execution/query-rules/SKILL.md 和 /skills/execution/tool-chains/SKILL.md。
+        轨迹任务再读 /skills/track/query/SKILL.md；先验库任务再读 /skills/registry/registry/SKILL.md；
+        图像核验再读 /skills/visual/evidence/SKILL.md。用 read_file 读取匹配本步骤的正文，再调用领域工具。
     interrupt_on:
       add_registry_vessel:
         allowed_decisions: [approve, reject]
@@ -61,6 +81,7 @@ agents:
 
   - name: reflector
     description: 按任务要求审查执行证据、记录缺口和冲突，并决定继续、重规划或终止。
+    tool_budget: 2
     tools:
       - read_shared_state
       - update_reflection_state
@@ -68,6 +89,18 @@ agents:
       - get_registry
       - list_registry
     skills: [reflection, answer]
+    task_prompt: |
+      当前用户问题：{question}
+      先读取共享状态，逐条按证据审查 requirements；仅在证据支持时给出结论，并写入 Reflector 负责的字段。
+    skill_reminder:
+      max_per_run: 1
+      message: |
+        你正在执行 Reflector 职责。先读 /skills/reflection/acceptance/SKILL.md 与 /skills/reflection/exit-rules/SKILL.md；
+        存在冲突或证据不足时再读 /skills/reflection/conflict-uncertain/SKILL.md；
+        生成最终回答前读 /skills/answer/finalize/SKILL.md。使用 read_file 获取正文。
+    evidence_wrapup:
+      tool: show_evidence
+      max_nudges: 2
     system_prompt: |
       你是 Reflector Agent，只负责维护 assessment、evidence_gaps、conflicts、decision。
       先调用 read_shared_state，逐条检查 requirements 是否被证据满足。工具执行过不等于结论成立；

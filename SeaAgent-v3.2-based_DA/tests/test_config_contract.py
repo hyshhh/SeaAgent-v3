@@ -1,4 +1,15 @@
+from deepagents import FilesystemPermission
+
 from config import load_config
+from harness.runtime import _load_subagents
+from harness.shared_state import SharedTaskState
+from harness.state_tools import build_state_tools
+from harness.tools import build_tools
+
+
+class _Service:
+    def __getattr__(self, name):
+        return lambda **kwargs: {"method": name, "kwargs": kwargs}
 
 
 def test_harness_config_contract():
@@ -40,11 +51,20 @@ def test_three_phase_mode_is_declared_by_config():
 def test_model_round_limit_is_gone():
     harness = load_config()["harness"]
     assert "model_calls_per_run" not in harness
-    assert int(harness["evidence_wrapup_max_nudges"]) >= 1
 
 
-def test_tool_budget_is_declared():
-    harness = load_config()["harness"]
-    assert int(harness["tool_calls_per_run"]) == 40
-    assert int(harness["subagent_tool_calls"]) == 6
-    assert "tool_calls_per_thread" not in harness
+def test_role_prompts_skill_reminders_and_budgets_are_explicit():
+    config = load_config()
+    tools = build_tools(config, _Service()) + build_state_tools(SharedTaskState(""))
+    agents = _load_subagents(config, tools, FilesystemPermission)
+    assert [agent["name"] for agent in agents] == ["planner", "executor", "reflector"]
+    assert [agent["tool_budget"] for agent in agents] == [1, 6, 2]
+    for agent in agents:
+        assert "{question}" in agent["task_prompt"]
+        assert agent["system_prompt"].strip()
+        assert agent["skill_reminder"]["message"].strip()
+        assert agent["skill_reminder"]["max_per_run"] >= 0
+    harness = config["harness"]
+    assert "tool_calls_per_run" not in harness
+    assert "subagent_tool_calls" not in harness
+    assert "skill_reminder_max_per_run" not in harness

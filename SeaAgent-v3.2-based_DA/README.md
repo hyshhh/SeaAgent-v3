@@ -8,7 +8,7 @@ Sea-Video-Harness 是面向海域监控视频问答的证据状态驱动多智�
 - `harness/shared_state.py`：唯一任务状态、字段归属、版本校验、证据 ID 收集和 SQLite 事务持久化。
 - `harness/trace.py`：将框架消息和共享计划投影为前端事件与审计记录。
 - `harness/state_tools.py`：各 Agent 读取共享状态并只更新自己负责的字段。
-- `harness/tool_guard.py`：从共享状态读取调用账本和预算，复用已完成的查询，阻止重复写入。
+- `harness/tool_guard.py`：按角色执行工具预算，复用已完成的查询，阻止重复写入。
 - `harness/state_write.py`：Agent 阶段结束仍未写入负责状态时，强制补写一次；预算耗尽后保留状态工具。
 - `config/subagents.yaml`：三个 Agent 的工具、技能、提示词和人工确认配置。
 - `skills/`：按组存放领域规则，Agent 只读取自己挂载的技能组。
@@ -25,7 +25,7 @@ requirements / plan / next_action              Planner
 evidence_ids / step_status / execution_status   Executor
 assessment / evidence_gaps / conflicts / decision Reflector
 task_status / iteration / pending_agent / version Runtime
-tool_results / evidence / call_history / 调用计数 Runtime 自动记账
+tool_results / evidence / call_history / 当前角色调用计数 Runtime 自动记账
 ```
 
 状态更新工具只提交当前角色负责的业务字段，模型不需要维护版本号；状态版本由运行时内部推进，SQLite 保存时仍校验存储修订号，避免旧运行时覆盖新状态。状态按 `thread_id` 存入 `data/memory/shared_task_state.sqlite`；旧的同名 JSON 存档首次启动时导入，原文件保留，删除后的会话不会再次导入。
@@ -34,11 +34,10 @@ tool_results / evidence / call_history / 调用计数 Runtime 自动记账
 
 ## 运行保护
 
-- 每个 Agent 阶段的 `subagent_tool_calls` 上限为 **6**，只统计领域工具调用；共享状态读写、技能读取和证据展示不占用预算，失败重试计入预算，并行批量请求也不能越过上限。
+- `config/subagents.yaml` 为 Planner、Executor、Reflector 分别配置任务提示词、技能提醒文本与次数、领域工具预算。当前额度分别为 **1 / 6 / 2**；共享状态读写、技能读取和证据展示不占预算，失败重试计入角色预算，并行批量请求也不能越过上限。
 - 单 Agent 阶段和整轮问答均不设墙钟时间限制；外部领域工具仍受独立的 `tool_timeout_seconds=60` 限制。
-- 整轮 `tool_calls_per_run` 上限为 40；每次新问答重新计算工具预算。
 - `max_iterations` 将 Planner、Executor、Reflector 的闭环次数限制为 4。
-- 阶段和整轮领域工具预算由共享状态在执行前统一拦截；共享状态读写、技能读取和证据展示不计预算，重连和人工确认不重置计数。
+- 当前角色的领域工具预算由共享状态在执行前原子拦截；重连和人工确认不重置当前阶段计数。
 - 相同领域查询复用成功结果；失败读取只允许有限重试，每次尝试计入预算。共享状态读取和更新可以多次调用。
 - 写库工具不自动重试；结果不确定时保留请求标记并阻止再次执行。
 - Agent 异常按 `reconnect_attempts` 和指数退避间隔重建，重连时保留共享状态和 SQLite 检查点。
@@ -47,7 +46,7 @@ tool_results / evidence / call_history / 调用计数 Runtime 自动记账
 - 人工确认保留中断与原调用计数；用户取消立即走取消路径，不触发总结。
 - 同一会话同时只允许一个 HTTP 问答；用户取消后等后台线程实际退出才释放登记。
 
-工具超时与取消在调用边界生效，不能强制终止阻塞中的外部服务。因此 60 秒是探索预算，最终总结另有请求预算，整次响应不保证在 60 秒内完成。SQLite 保护共享状态，CSV 记忆表的锁仍限于单进程，Web 服务应保持单 worker 运行。
+工具超时与取消在调用边界生效，不能强制终止阻塞中的外部服务。SQLite 保护共享状态，CSV 记忆表的锁仍限于单进程，Web 服务应保持单 worker 运行。
 
 ## 安装与启动
 

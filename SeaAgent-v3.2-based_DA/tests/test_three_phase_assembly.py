@@ -8,6 +8,7 @@
 """
 
 import pathlib
+from copy import deepcopy
 from typing import ClassVar
 
 from deepagents import FilesystemPermission
@@ -142,9 +143,14 @@ def test_each_phase_carries_its_own_guards_and_read_scope():
     subagents = _specs()
     for spec in subagents:
         assert "middleware" not in spec, "规格层不创建不会被运行时使用的中间件实例"
-        stack = build_middleware(load_config(), _Model(responses=["ok"]), agent_name=spec["name"])
+        stack = build_middleware(
+            load_config(),
+            _Model(responses=["ok"]),
+            agent_spec=spec,
+            shared_state=SharedTaskState(""),
+        )
         guard = next(item for item in stack if isinstance(item, RepeatToolCallMiddleware))
-        assert guard.limits["agent"] == int(load_config()["harness"]["subagent_tool_calls"])
+        assert guard.tool_budget == spec["tool_budget"]
     planner = _by_name(subagents)["planner"]
     allow = [rule for rule in planner["permissions"] if str(rule.mode) == "allow"]
     assert set(allow[0].paths) == set(_read_scope_paths(["/skills/planning"]))
@@ -205,11 +211,15 @@ def test_unknown_tool_name_and_structured_format_fail_loudly(tmp_path):
     spec_path.write_text(
         yaml.safe_dump(
             {
-                "subagents": [
+                "agents": [
                     {
                         "name": "x",
                         "description": "d",
                         "system_prompt": "s",
+                        "task_prompt": "{question}",
+                        "tool_budget": 1,
+                        "skill_reminder": {"max_per_run": 0, "message": "read skills"},
+                        "skills": [],
                         "tools": ["no_such_tool"],
                     }
                 ]
@@ -228,11 +238,15 @@ def test_unknown_tool_name_and_structured_format_fail_loudly(tmp_path):
     spec_path.write_text(
         yaml.safe_dump(
             {
-                "subagents": [
+                "agents": [
                     {
                         "name": "x",
                         "description": "d",
                         "system_prompt": "s",
+                        "task_prompt": "{question}",
+                        "tool_budget": 1,
+                        "skill_reminder": {"max_per_run": 0, "message": "read skills"},
+                        "skills": [],
                         "tools": [],
                         "response_format": "IntentPlan",
                     }
@@ -253,25 +267,35 @@ def test_unknown_tool_name_and_structured_format_fail_loudly(tmp_path):
 
 
 def test_middleware_is_framework_guards_only():
-    """中间件链里只有官方与本项目原有的通用守卫，没有任何自造的阶段判定。"""
+    """通用守卫依角色规格装配，只有 reflector 挂证据收尾守卫。"""
     config = load_config()
+    reflector = deepcopy(_by_name(_specs())["reflector"])
+    state = SharedTaskState("")
     names = [
         type(item).__name__
-        for item in build_middleware(config, _Model(responses=["ok"]), skills_attached=True)
+        for item in build_middleware(
+            config, _Model(responses=["ok"]), agent_spec=reflector, shared_state=state
+        )
     ]
     assert names == [
         "ToolRetryMiddleware",
         "ModelRetryMiddleware",
         "RepeatToolCallMiddleware",
+        "StateWriteMiddleware",
         "SkillDisclosureMiddleware",
         "SummarizationMiddleware",
         "EvidenceWrapUpMiddleware",
     ]
+    planner = deepcopy(_by_name(_specs())["planner"])
+    planner["skills"] = []
     without_skills = [
         type(item).__name__
-        for item in build_middleware(config, _Model(responses=["ok"]), skills_attached=False)
+        for item in build_middleware(
+            config, _Model(responses=["ok"]), agent_spec=planner, shared_state=state
+        )
     ]
     assert "SkillDisclosureMiddleware" not in without_skills
+    assert "EvidenceWrapUpMiddleware" not in without_skills
 
 
 def test_empty_read_scope_can_be_locked_down_explicitly():

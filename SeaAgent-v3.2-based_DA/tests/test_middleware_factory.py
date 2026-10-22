@@ -1,3 +1,6 @@
+from copy import deepcopy
+
+from deepagents import FilesystemPermission
 from langchain.agents.middleware import (
     ModelRetryMiddleware,
     SummarizationMiddleware,
@@ -8,17 +11,49 @@ from langchain_core.language_models import FakeListChatModel
 from config import load_config
 from harness.disclosure import SkillDisclosureMiddleware
 from harness.middleware import build_middleware
+from harness.runtime import _load_subagents
 from harness.shared_state import SharedTaskState
+from harness.state_tools import build_state_tools
+from harness.state_write import StateWriteMiddleware
 from harness.tool_guard import RepeatToolCallMiddleware
+from harness.tools import build_tools
 from harness.wrapup import EvidenceWrapUpMiddleware
 
 
-def test_official_middleware_stack():
-    stack = build_middleware(load_config(), FakeListChatModel(responses=["ok"]))
+class _Service:
+    def __getattr__(self, name):
+        return lambda **kwargs: {"method": name, "kwargs": kwargs}
+
+
+def _setup():
+    config = load_config()
+    tools = build_tools(config, _Service()) + build_state_tools(SharedTaskState(""))
+    specs = _load_subagents(config, tools, FilesystemPermission)
+    return config, {spec["name"]: spec for spec in specs}
+
+
+def _stack(role="reflector", skills=True):
+    config, specs = _setup()
+    spec = deepcopy(specs[role])
+    if not skills:
+        spec["skills"] = []
+    state = SharedTaskState("q")
+    stack = build_middleware(
+        config,
+        FakeListChatModel(responses=["ok"]),
+        agent_spec=spec,
+        shared_state=state,
+    )
+    return config, spec, stack
+
+
+def test_role_specific_middleware_stack():
+    _, _, stack = _stack()
     assert [type(item) for item in stack] == [
         ToolRetryMiddleware,
         ModelRetryMiddleware,
         RepeatToolCallMiddleware,
+        StateWriteMiddleware,
         SkillDisclosureMiddleware,
         SummarizationMiddleware,
         EvidenceWrapUpMiddleware,
@@ -26,56 +61,35 @@ def test_official_middleware_stack():
 
 
 def test_model_rounds_are_not_capped():
-    """轮次上限已移除：收尾时机交给模型自己判断，链路里只保留工具调用安全阀。"""
-    stack = build_middleware(load_config(), FakeListChatModel(responses=["ok"]))
+    _, _, stack = _stack()
     assert not any(type(item).__name__ == "ModelCallLimitMiddleware" for item in stack)
 
 
-def test_evidence_guard_reads_its_settings_from_config():
-    config = load_config()
-    guard = build_middleware(config, FakeListChatModel(responses=["ok"]))[-1]
-    assert guard.evidence_tool == config["harness"]["evidence_tool"]
-    assert guard.max_nudges == int(config["harness"]["evidence_wrapup_max_nudges"])
+def test_role_budget_and_reminder_are_read_from_role_spec():
+    _, spec, stack = _stack("executor")
+    guard = next(item for item in stack if isinstance(item, RepeatToolCallMiddleware))
+    reminder = next(item for item in stack if isinstance(item, SkillDisclosureMiddleware))
+    assert guard.tool_budget == spec["tool_budget"] == 6
+    assert reminder.max_reminders == spec["skill_reminder"]["max_per_run"] == 2
+    assert reminder.reminder == spec["skill_reminder"]["message"]
 
 
-def test_evidence_guard_receives_the_shared_task_state():
-    shared_state = SharedTaskState("问题")
-    guard = build_middleware(load_config(), FakeListChatModel(responses=["ok"]), shared_state=shared_state)[-1]
-    assert guard.shared_state is shared_state
+def test_reflector_evidence_guard_uses_its_role_configuration():
+    _, spec, stack = _stack("reflector")
+    guard = next(item for item in stack if isinstance(item, EvidenceWrapUpMiddleware))
+    assert guard.evidence_tool == spec["evidence_wrapup"]["tool"]
+    assert guard.max_nudges == spec["evidence_wrapup"]["max_nudges"]
 
 
-def test_disclosure_guard_reads_its_settings_from_config():
-    config = load_config()
-    guard = next(
-        item
-        for item in build_middleware(config, FakeListChatModel(responses=["ok"]))
-        if isinstance(item, SkillDisclosureMiddleware)
-    )
-    assert guard.max_reminders == int(config["harness"]["skill_reminder_max_per_run"])
-
-
-def test_disclosure_guard_is_skipped_when_no_skills_are_attached():
-    """没有技能目录还提醒"先读技能"，只会把模型推向读一个不存在的文件。"""
-    from harness.disclosure import SkillDisclosureMiddleware
-
-    config = load_config()
-    with_skills = build_middleware(
-        config, FakeListChatModel(responses=["ok"]), skills_attached=True
-    )
-    without_skills = build_middleware(
-        config, FakeListChatModel(responses=["ok"]), skills_attached=False
-    )
-
+def test_disclosure_guard_is_skipped_when_role_has_no_skills():
+    _, _, with_skills = _stack("planner")
+    _, _, without_skills = _stack("planner", skills=False)
     assert any(isinstance(item, SkillDisclosureMiddleware) for item in with_skills)
     assert not any(isinstance(item, SkillDisclosureMiddleware) for item in without_skills)
 
 
 def test_summarization_uses_the_domain_prompt_from_file():
-    """默认摘要会把时间范围与 ID 压没，续接会话时模型自己都说"不知道刚才指哪一段"。"""
-    from langchain.agents.middleware import SummarizationMiddleware
-
-    config = load_config()
-    stack = build_middleware(config, FakeListChatModel(responses=["ok"]))
+    _, _, stack = _stack()
     summarization = next(item for item in stack if isinstance(item, SummarizationMiddleware))
     assert "逐字保留" in summarization.summary_prompt
     assert "时间范围" in summarization.summary_prompt

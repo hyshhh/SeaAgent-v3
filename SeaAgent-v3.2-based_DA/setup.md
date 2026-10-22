@@ -23,12 +23,11 @@ py -m pip install -e ".[models]"
 关键 Harness 参数：
 
 - `shared_state_file`：SQLite 共享任务状态路径，旧的同名 JSON 存档首次启动时自动导入。
-- `subagent_tool_calls=6`：每个 Agent 阶段的领域工具调用上限；共享状态读写、技能读取和证据展示不占用预算，失败重试计入预算。
+- `config/subagents.yaml`：分别配置三个 Agent 的任务提示词、技能提醒和领域工具额度；当前额度为 Planner 1、Executor 6、Reflector 2。
 - 单 Agent 阶段和整轮问答不设墙钟时间限制；外部领域工具仍使用独立的 `tool_timeout_seconds=60`。
-- `tool_calls_per_run=40`：单次问答的领域工具调用上限。
 - `max_iterations`：闭环最大迭代次数。
 - `reconnect_attempts`、`reconnect_backoff_seconds`：Agent 重连次数和退避间隔。
-- 共享状态读写、技能读取和证据展示不占领域工具预算；预算耗尽后 Agent 仍可提交自己负责的状态。
+- 共享状态读写、技能读取和证据展示不占角色领域工具预算；预算耗尽后 Agent 仍可提交自己负责的状态。
 - 内部不使用 TodoList；Planner 写计划，Executor 写 `step_status`，前端进度由共享状态生成。
 
 ## 检查

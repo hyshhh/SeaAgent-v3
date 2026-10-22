@@ -16,7 +16,7 @@ from harness.trace import _Trace
 
 def _runtime(tmp_path, settings=None):
     instance = SeaVideoHarness.__new__(SeaVideoHarness)
-    instance.config = {"harness": {"subagent_tool_calls": 6, **(settings or {})}}
+    instance.config = {"harness": dict(settings or {})}
     instance.state_store = SharedStateStore(tmp_path / "state.sqlite")
     instance.shared_state = instance.state_store.load("t", "verify target")
     instance.shared_state.update(
@@ -26,6 +26,7 @@ def _runtime(tmp_path, settings=None):
     instance._cancel = None
     instance._connection = None
     instance.agents = {}
+    instance.agent_specs = {"executor": {"task_prompt": "当前问题：{question}"}}
     return instance
 
 
@@ -50,15 +51,16 @@ def _tool(name):
 
 def test_budget_settings_have_no_summary_request():
     settings = load_config()["harness"]
-    assert settings["subagent_tool_calls"] == 6
     assert settings["tool_timeout_seconds"] == 60
     assert "convergence_timeout_seconds" not in settings
+    assert "tool_calls_per_run" not in settings
+    assert "subagent_tool_calls" not in settings
 
 
 def test_new_turn_resets_shared_domain_tool_budget(tmp_path):
-    state = SharedTaskState("old", {"tool_calls_run": 40})
-    guard = RepeatToolCallMiddleware(state=state, scope="executor", limits={"run": 40})
-    assert state.limit_reason("executor", {"run": 40}) == "run_tool_limit"
+    state = SharedTaskState("old", {"agent_calls": {"executor": 40}})
+    guard = RepeatToolCallMiddleware(state=state, scope="executor", tool_budget=40)
+    assert state.limit_reason("executor", 40) == "agent_tool_limit"
 
     state.start_turn("next")
     request = SimpleNamespace(tool_call={"name": "get_track", "args": {}, "id": "c1"})
@@ -67,16 +69,16 @@ def test_new_turn_resets_shared_domain_tool_budget(tmp_path):
     )
 
     assert response.content == "ok"
-    assert state.snapshot()["tool_calls_run"] == 1
-    assert state.limit_reason("executor", {"run": 40}) == ""
+    assert state.snapshot()["agent_calls"]["executor"] == 1
+    assert state.limit_reason("executor", 40) == ""
 
 
 def test_budget_limit_blocks_domain_tools_but_keeps_state_tools():
-    state = SharedTaskState("q", {"tool_calls_run": 1})
+    state = SharedTaskState("q", {"agent_calls": {"executor": 1}})
     guard = RepeatToolCallMiddleware(
         state=state,
         scope="executor",
-        limits={"run": 1},
+        tool_budget=1,
         allowed_tools={"get_track", "read_shared_state", "update_execution_state"},
     )
     request = _Request(
@@ -96,7 +98,7 @@ def test_domain_tool_budget_is_atomic_and_status_tools_are_free():
     guard = RepeatToolCallMiddleware(
         state=state,
         scope="executor",
-        limits={"run": 2, "agent": 2},
+        tool_budget=2,
     )
     executed = []
 
@@ -112,7 +114,7 @@ def test_domain_tool_budget_is_atomic_and_status_tools_are_free():
             ),
         )
         if name == "get_clip":
-            assert result.artifact["budget_exhausted"] == "run_tool_limit"
+            assert result.artifact["budget_exhausted"] == "agent_tool_limit"
 
     snapshot = state.snapshot()
     assert executed == [
@@ -122,14 +124,14 @@ def test_domain_tool_budget_is_atomic_and_status_tools_are_free():
         "update_execution_state",
         "show_evidence",
     ]
-    assert snapshot["tool_calls_run"] == snapshot["agent_calls"]["executor"] == 2
+    assert snapshot["agent_calls"]["executor"] == 2
 
 
 def test_agent_stream_continues_after_budget_and_keeps_last_result(tmp_path):
     instance = _runtime(tmp_path)
     executed = []
     guard = RepeatToolCallMiddleware(
-        state=instance.shared_state, scope="executor", limits={"agent": 6}
+        state=instance.shared_state, scope="executor", tool_budget=6
     )
 
     class Graph:
@@ -166,7 +168,7 @@ def test_state_write_middleware_forces_one_status_only_repair():
     middleware = StateWriteMiddleware(
         "planner",
         state,
-        {"run": 10, "agent": 6},
+        6,
         {"read_shared_state", "update_planner_state", "get_track"},
     )
     middleware.before_agent({})
@@ -195,11 +197,11 @@ def test_state_write_middleware_forces_one_status_only_repair():
 
 
 def test_state_write_middleware_enters_status_only_mode_after_budget_exhaustion():
-    state = SharedTaskState("q", {"tool_calls_run": 1})
+    state = SharedTaskState("q", {"agent_calls": {"executor": 1}})
     middleware = StateWriteMiddleware(
         "executor",
         state,
-        {"run": 1, "agent": 6},
+        1,
         {"read_shared_state", "update_execution_state", "get_track"},
     )
     middleware.before_agent({})
@@ -223,7 +225,7 @@ def test_state_write_baseline_survives_checkpointed_resume(tmp_path):
     store = SharedStateStore(tmp_path / "state.sqlite")
     store.save("t", state)
     restored = store.load("t")
-    middleware = StateWriteMiddleware("planner", restored, {"run": 10, "agent": 6})
+    middleware = StateWriteMiddleware("planner", restored, 6)
 
     middleware.before_agent({})
 
@@ -231,9 +233,9 @@ def test_state_write_baseline_survives_checkpointed_resume(tmp_path):
     assert "agent_start_write_counts" not in restored.view()
 
 
-def test_run_budget_does_not_trigger_an_extra_model_summary(tmp_path):
-    instance = _runtime(tmp_path, {"tool_calls_per_run": 1})
-    instance.shared_state.claim_call("executor", None, {"run": 1})
+def test_agent_budget_does_not_trigger_an_extra_model_summary(tmp_path):
+    instance = _runtime(tmp_path)
+    instance.shared_state.claim_call("executor", None, 1)
     summary_calls = []
     instance.model = SimpleNamespace(invoke=lambda *args, **kwargs: summary_calls.append(args))
 
@@ -282,10 +284,15 @@ def test_model_timeout_setting_remains_independent_of_tool_budget(tmp_path):
     build_middleware(
         {"harness": {"retry_delay_seconds": 0}},
         FakeListChatModel(responses=["ok"]),
-        skills_attached=False,
+        agent_spec={
+            "name": "executor",
+            "tool_budget": 6,
+            "tools": [],
+            "skills": [],
+            "skill_reminder": {"max_per_run": 0, "message": "read skills"},
+        },
         shared_state=instance.shared_state,
         model_timeout=instance._model_timeout_seconds,
-        agent_name="executor",
     )
     assert instance._model_timeout_seconds() == 60
 
@@ -294,7 +301,7 @@ def test_restored_pending_agent_keeps_its_call_budget(tmp_path):
     instance = _runtime(tmp_path)
     instance.shared_state.runtime_update({"task_status": "running"})
     for _ in range(4):
-        instance.shared_state.claim_call("executor", None, {})
+        instance.shared_state.claim_call("executor", None, 6)
 
     def restored(role, *args):
         assert role == "executor"

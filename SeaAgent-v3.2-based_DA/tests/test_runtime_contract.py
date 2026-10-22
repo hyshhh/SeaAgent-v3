@@ -198,6 +198,7 @@ def _runtime_with_agent(agent):
         "tools": [{"name": "show_evidence", "label": "证据汇总"}],
     }
     runtime.agents = {"executor": agent}
+    runtime.agent_specs = {"executor": {"task_prompt": "用户问题：{question}"}}
     runtime.shared_state = SharedTaskState("问题")
     runtime.state_store = _Store()
     runtime.event_handler = None
