@@ -1,11 +1,12 @@
 """以 tracks 为主表的三层记忆仓库。"""
 from __future__ import annotations
 
+import heapq
 import json
 import logging
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -97,10 +98,9 @@ class MemoryRepository:
         row["track_id"] = str(row.get("track_id") or row.get("trackId"))
         self.tracks.upsert(row, "track_id")
 
-    def find_tracks(self, time_range: tuple[float, float] | None = None, hull_number: str | None = None, final_match_type: str | None = None) -> list[dict[str, Any]]:
+    def _iter_tracks(self, time_range: tuple[float, float] | None = None, hull_number: str | None = None, final_match_type: str | None = None) -> Iterator[dict[str, Any]]:
         wanted_hull = normalize_hull_number(hull_number)
-        results = []
-        for row in self.tracks.rows():
+        for row in self.tracks.iter_rows():
             start = float(row.get("start_time") or 0)
             end = float(row.get("end_time") or start)
             if time_range and (end < time_range[0] or start > time_range[1]):
@@ -112,8 +112,28 @@ class MemoryRepository:
             item = self._track_record(row)
             if time_range:
                 item.update(overlapStart=max(start, time_range[0]), overlapEnd=min(end, time_range[1]))
-            results.append(item)
-        return sorted(results, key=lambda item: (item["startTime"], item["trackId"]))
+            yield item
+
+    @staticmethod
+    def _track_sort_key(item: dict[str, Any]) -> tuple[float, str]:
+        return item["startTime"], item["trackId"]
+
+    def find_tracks(self, time_range: tuple[float, float] | None = None, hull_number: str | None = None, final_match_type: str | None = None) -> list[dict[str, Any]]:
+        return sorted(self._iter_tracks(time_range, hull_number, final_match_type), key=self._track_sort_key)
+
+    def find_tracks_page(
+        self,
+        time_range: tuple[float, float] | None = None,
+        hull_number: str | None = None,
+        final_match_type: str | None = None,
+        after: tuple[float, str] | None = None,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        tracks = self._iter_tracks(time_range, hull_number, final_match_type)
+        if after is not None:
+            tracks = (item for item in tracks if self._track_sort_key(item) > after)
+        candidates = heapq.nsmallest(limit + 1, tracks, key=self._track_sort_key)
+        return candidates[:limit], len(candidates) > limit
 
     def get_track(self, track_id: str | int) -> dict[str, Any] | None:
         rows = self.tracks.find(lambda row: row["track_id"] == str(track_id))

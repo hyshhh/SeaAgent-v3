@@ -1,6 +1,7 @@
 """把 config/tools.yaml 的声明翻译成 LangChain StructuredTool，执行体转发给 ToolService 的同名方法。"""
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 from pydantic import BeforeValidator
@@ -11,8 +12,6 @@ from pydantic import BeforeValidator
 # ------------------------------------------------------------------ #
 # 1.1 掰回字符串列表
 def _coerce_string_list(value: Any) -> list[str]:
-    import json
-
     if isinstance(value, str):
         candidate = value.strip()
         if not candidate:
@@ -35,39 +34,39 @@ def _coerce_string_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
-# 1.2 掰回时间区间
-def _coerce_float_pair(value: Any) -> tuple[float, float]:
-    import json
-
+def _coerce_time_pair(value: Any) -> tuple[str | float, str | float]:
     if isinstance(value, str):
         candidate = value.strip()
-        if not candidate:
-            raise ValueError("expected a pair of numbers")
         if candidate.startswith("["):
             try:
                 value = json.loads(candidate)
             except json.JSONDecodeError as error:
-                raise ValueError("expected a JSON array of two numbers") from error
+                raise ValueError("expected two ISO-8601 timestamps") from error
         elif "," in candidate:
-            try:
-                value = [float(part) for part in candidate.split(",")]
-            except ValueError as error:
-                raise ValueError("expected two comma-separated numbers") from error
+            value = [part.strip() for part in candidate.split(",", maxsplit=1)]
         else:
-            raise ValueError("expected a pair of numbers, got a single string")
-    if isinstance(value, (list, tuple)):
-        if len(value) != 2:
-            raise ValueError("expected exactly two numbers")
-        try:
-            return (float(value[0]), float(value[1]))
-        except (TypeError, ValueError) as error:
-            raise ValueError("expected two numbers") from error
-    raise ValueError("expected a pair of numbers")
+            raise ValueError("expected a pair of ISO-8601 timestamps")
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError("expected exactly two timestamps")
+    normalized = []
+    for part in value:
+        if isinstance(part, bool) or not isinstance(part, (str, int, float)):
+            raise TypeError("timestamps must be ISO-8601 strings or epoch seconds")
+        if isinstance(part, str):
+            part = part.strip()
+            if not part:
+                raise ValueError("timestamps cannot be empty")
+            try:
+                part = float(part)
+            except ValueError:
+                pass
+        normalized.append(part)
+    return normalized[0], normalized[1]
 
 
 # 1.3 声明类型 → Python 注解
 def _type_for(spec: dict[str, Any]) -> Any:
-    return {"string": str, "integer": int, "number": float, "string_list": Annotated[list[str], BeforeValidator(_coerce_string_list)], "tuple_float": Annotated[tuple[float, float], BeforeValidator(_coerce_float_pair)], "json": Any}.get(str(spec.get("type", "json")), Any)
+    return {"string": str, "integer": int, "number": float, "string_list": Annotated[list[str], BeforeValidator(_coerce_string_list)], "time_range": Annotated[tuple[str | float, str | float], BeforeValidator(_coerce_time_pair)], "json": Any}.get(str(spec.get("type", "json")), Any)
 
 # 1.4 由声明生成参数模型
 def _build_schema(name: str, arguments: dict[str, Any]):

@@ -3,18 +3,26 @@ tools:
     label: 轨迹记忆
     method: getTrack
     description: >-
-      查询视频轨迹记忆。可按时间范围、舷号或匹配状态过滤，并支持分页；limit=0 表示不分页返回全部。
-      全量扫描代价很高（轨迹多时下游取关键帧、做去重会成倍放大），务必带上时间范围或分页。
-      注意 hull_number 只筛「已识别出舷号且与之一致」的轨迹：识别失败的轨迹不会被它匹配到，
-      因此返回空**不代表这艘船没有出现**。要确认某个舷号是否出现，正确顺序是先用先验库工具
-      （match_hull / get_registry）确认该舷号在库，再按时间范围列出轨迹并用图像匹配核对；
-      按舷号过滤返回空时不要重复调用，改按时间范围全量筛查。
+      查询已入库轨迹。省略 time_range 表示全部监控时间；显式时间范围使用 ISO-8601 时间，省略时区按 Asia/Shanghai 解释。
+      每页默认 50 条、最多 100 条。hasMore=true 时把 nextCursor.afterStartTime 传给 after_start_time，
+      把 nextCursor.afterTrackId 传给 after_track_id，并保留相同筛选条件读取下一页；不要一次请求全量关键帧。
+      改变时间或舷号筛选时，必须清空游标并从第一页重新查询。
+      hull_number 只匹配已识别舷号的轨迹。按舷号查询无结果时，不得据此判定未出现；去掉舷号筛选继续检查未识别轨迹。
+      只有相关分页全部查完且候选证据检查完成，才能报告在当前已入库轨迹中未检出。
     arguments:
-      time_range: {type: tuple_float, required: false, target: timeRange}
+      time_range:
+        type: time_range
+        required: false
+        target: timeRange
+        description: >-
+          可选的起止时间。优先传两个带时区的 ISO-8601 时间，例如
+          ["2026-10-22T10:00:00+08:00", "2026-10-22T11:00:00+08:00"]；
+          省略表示全部监控时间。epoch 秒仅为旧调用兼容格式。
       hull_number: {type: string, required: false, target: hullNumber}
       final_match_type: {type: string, required: false, target: finalMatchType}
-      offset: {type: integer, required: false, default: 0}
-      limit: {type: integer, required: false, default: 0}
+      after_start_time: {type: number, required: false, target: afterStartTime, description: 上一页 nextCursor.afterStartTime。}
+      after_track_id: {type: string, required: false, target: afterTrackId, description: 上一页 nextCursor.afterTrackId。}
+      limit: {type: integer, required: false, default: 50, description: 每页条数，0 表示默认 50，最大 100。}
   - name: get_frames
     label: 关键帧
     method: getFrames
@@ -25,10 +33,11 @@ tools:
   - name: get_clip
     label: 视频片段
     method: getClip
-    description: 为指定轨迹生成视频证据片段。
+    description: >-
+      为指定轨迹生成视频证据片段。time_range 使用 ISO-8601 起止时间，时区处理与 get_track 相同；省略时返回整条轨迹片段。
     arguments:
       track_id: {type: string, required: true, target: trackId}
-      time_range: {type: tuple_float, required: false, target: timeRange}
+      time_range: {type: time_range, required: false, target: timeRange}
       scale: {type: number, required: false}
   - name: get_registry
     label: 先验库

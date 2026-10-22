@@ -9,6 +9,10 @@ from config.settings import public_settings, reset_settings, update_settings
 from web.models import ApiResponse
 
 
+# ------------------------------------------------------------------ #
+# 一、配置管理                                                             #
+# ------------------------------------------------------------------ #
+# 1.1 同步运行时服务
 def _sync_runtime_services(request: Request) -> None:
     config = request.app.state.config
     llm = getattr(request.app.state, "llm", None)
@@ -23,11 +27,13 @@ def _sync_runtime_services(request: Request) -> None:
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
+# 1.2 读取设置
 @router.get("")
 async def get_settings(request: Request):
     return public_settings(request.app.state.config)
 
 
+# 1.3 保存设置
 @router.put("", response_model=ApiResponse)
 async def save_settings(body: dict[str, Any], request: Request):
     try:
@@ -38,6 +44,7 @@ async def save_settings(body: dict[str, Any], request: Request):
     return ApiResponse(success=True, message="运行参数与提示词已保存，下一轮任务与问答生效", data=data)
 
 
+# 1.4 恢复默认设置
 @router.post("/reset", response_model=ApiResponse)
 async def restore_settings(request: Request):
     data = reset_settings(request.app.state.config)

@@ -60,7 +60,7 @@ def build_middleware(
     }
     stack: list[Any] = [
         # 重试包在预算守卫外，每次实际尝试都先占用共享预算。
-        ToolRetryMiddleware(
+        ToolRetryMiddleware(  #用配置参数构造一个中间件实例
             tools=[
                 str(item["name"])
                 for item in config.get("tools", [])
@@ -70,7 +70,7 @@ def build_middleware(
             max_retries=int(settings.get("retry_attempts", 2)),
             initial_delay=float(settings.get("retry_delay_seconds", 1.0)),
         ),
-        model_retry,  # 模型重试包在工具守卫外；取消信号直接返回 Runtime。
+        model_retry,  # 把实例上的方法替换成新函数（装饰器模式：在原有函数外包一层，增加行为）
         RepeatToolCallMiddleware(
             state=shared_state,
             scope=agent_name,
@@ -81,6 +81,11 @@ def build_middleware(
             tool_timeout=lambda: tool_timeout_seconds,
             limits=limits,
         ),
+        #1. 每次工具调用前检查取消/权限，查询共享状态的额度预算，预算耗尽终止
+        #2. 去重
+        #3. 增加工具执行上限
+        #4. 工具调用结束后把结果写入共享状态，并触发共享记忆的持久化
+        #5. 模型请求预算
     ]
     if shared_state is not None and agent_name in {"planner", "executor", "reflector"}:
         stack.append(StateWriteMiddleware(agent_name, shared_state, limits, allowed_tools))

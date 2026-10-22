@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-size", default=None, help="输出尺寸，格式为宽x高")
     parser.add_argument("--pipe-scale", type=float, default=None, help="输出缩放比例")
     parser.add_argument("--stop-file", default=None, help="停止信号文件")
+    parser.add_argument("--pool-preview-events", action="store_true", help="为网页监控池事件附加缩略图")
     parser.add_argument("--verbose", "-v", action="store_true", help="输出详细日志")
     return parser
 
@@ -98,6 +99,8 @@ def _merge_args_to_config(args, config: dict) -> dict:
         pipeline["pipe_output_size"] = [max(16, int(width * args.pipe_scale)) // 2 * 2, max(16, int(height * args.pipe_scale)) // 2 * 2]
     if args.stop_file:
         pipeline["stop_file"] = args.stop_file
+    if args.pool_preview_events:
+        pipeline["pool_preview_events"] = True
     return config
 
 def _print_config(args, config: dict) -> None:

@@ -14,7 +14,12 @@ from tools import ToolService
 logger = logging.getLogger(__name__)
 
 
+# ------------------------------------------------------------------ #
+# 一、控制器与问答流程                                                         #
+# ------------------------------------------------------------------ #
+# 1.1 装配服务并驱动一轮问答
 class AgentController:
+    # 1.1.1 装配配置、仓库与工具服务
     def __init__(self, config: dict[str, Any] | None = None, repository: Any = None, tools: Any = None, llm: Any = None, embedder: Any = None, vectors: Any = None, event_handler: Callable[[dict[str, Any]], None] | None = None):
         self.config = config or load_config()
         self.repository = repository or MemoryRepository(self.config)
@@ -22,16 +27,8 @@ class AgentController:
         self.llm = llm
         self.event_handler = event_handler
 
+    # 1.1.2 跑一轮问答并写入会话记忆
     def answer(self, question: str, session_id: str | None = None, cancel: Any = None) -> dict[str, Any]:
-        """跑一轮问答，并把这轮问答写进会话记忆。
-
-        ``session_id`` 决定这一轮是「新会话」还是「追问」：不传（或会话已不存在）就新建并
-        以本轮问题作标题；传入已存在的会话则沿用同一个 thread_id —— SQLite 检查点会带回
-        该会话的历史消息，模型因此看得到上文，前端也在这条会话下继续追加轮次。
-
-        ``cancel`` 是可选的中断信号（``threading.Event``）：置位后本轮以 ``cancelled`` 收尾，
-        问题仍会作为一轮记录留在会话里，只是没有回答——用户停掉的那一轮不该凭空消失。
-        """
         session_id = str(session_id or "").strip() or f"session-{uuid.uuid4().hex[:12]}"
         session = self.repository.get_session(session_id)
         if session is None:
@@ -55,15 +52,8 @@ class AgentController:
         result["turnIndex"] = self.repository.append_turn(session_id, question, result)
         return result
 
+    # 1.1.3 人工确认后继续上一轮
     def resume(self, decision: str, session_id: str, feedback: str = "", cancel: Any = None) -> dict[str, Any]:
-        """人工拍板后继续上一轮。
-
-        中断点存在 SQLite 检查点里，所以恢复必须带着**同一个 session_id**（即同一个 thread_id）。
-        批准则执行那个被拦下的工具；拒绝则把反馈交回模型让它换个做法，本轮继续往下跑。
-
-        结果同样按一轮问答留档：用户看到的是「提问 → 确认 → 回答」，中间那次人工介入
-        不该让这轮记录凭空消失。
-        """
         session_id = str(session_id or "").strip()
         if not session_id:
             raise ValueError("恢复确认必须带上 session_id（中断点是按它会话存的）")
@@ -86,6 +76,7 @@ class AgentController:
         result["turnIndex"] = self.repository.append_turn(session_id, question, result)
         return result
 
+    # 1.1.4 异常时构造对外错误结果
     def _error_result(
         self, session_id: str, question: str, error: Exception, answer_text: str
     ) -> dict[str, Any]:
@@ -108,12 +99,8 @@ class AgentController:
             "errorType": type(error).__name__,
         }
 
+    # 1.1.5 把内部状态投成对外结构并写审计表
     def _project(self, session_id: str, state: dict[str, Any], turn_index: int = 1, question: str = "") -> dict[str, Any]:
-        """把一轮的内部状态投成对外结果，并把工具调用落进 qa_rounds / qa_evidence。
-
-        ``turn_index`` 必须进主键：runtime 的轮次编号是**单轮内**计数（1..N），只按它拼 id 的话，
-        会话第二轮的 `-round-1` 会把第一轮的同一行覆盖掉——审计表就只剩最后一轮了。
-        """
         records = state.get("tool_records") or []
         rounds = state.get("rounds") or []
         persisted_rounds = {

@@ -817,9 +817,9 @@ async function pollPoolStatus(targetTaskId = null) {
     const resp = await fetch(`${PIPE_API}/pool-status/${taskId}`);
     if (!resp.ok) return;
     const data = await resp.json();
-    renderPoolRows('candidatePoolRows', data.candidate || [], '等待候选帧');
-    renderPoolRows('keyframePoolRows', data.keyframe || [], '等待正式关键帧');
-    renderTrackRows(data.track || []);
+    renderPoolRows('candidatePoolRows', data.candidate || [], 'Waiting for candidate frames', 'candidate');
+    renderPoolRows('keyframePoolRows', data.keyframe || [], 'Waiting for confirmed keyframes', 'keyframe');
+    renderTrackRows(data.track || [], data.captions || []);
   } catch (e) {}
 }
 
@@ -864,7 +864,7 @@ function pipelineProgressText(status, value) {
   return text || status;
 }
 
-function renderPoolRows(elementId, rows, emptyText) {
+function renderPoolRows(elementId, rows, emptyText, pool) {
   const box = document.getElementById(elementId);
   if (!box) return;
   if (!rows.length) {
@@ -872,12 +872,23 @@ function renderPoolRows(elementId, rows, emptyText) {
     return;
   }
   box.innerHTML = rows.slice(0, 40).map(row => {
-    const hull = row.hullNumber || 'Unreadable';
-    const status = pipelineRecordStatus(row.status);
-    return `<div class="pool-table-row">
-      <div class="pool-track"><strong>${escHtml(row.trackId || '-')}</strong><span>${escHtml(status)} · ${escHtml(row.time || '-')}</span></div>
-      <div class="pool-hull">${escHtml(hull)}</div>
-      <div class="pool-description" title="${safeAttr(row.description || '-')}">${escHtml(row.description || '-')}</div>
+    const track = `<div class="pool-track"><strong>Track #${escHtml(row.trackId || '-')}</strong></div>`;
+    if (pool === 'keyframe') {
+      return `<div class="pool-table-row keyframe-pool-row" data-track-id="${safeAttr(String(row.trackId || '-'))}">
+        ${track}
+        <div class="pool-hull">${escHtml(row.hullNumber || 'Unreadable')}</div>
+        <div class="pool-description" title="${safeAttr(row.description || '-')}">${escHtml(row.description || '-')}</div>
+      </div>`;
+    }
+    const frames = (row.frames || []).map(frame => {
+      const image = frame.imageUrl
+        ? `<img src="${safeAttr(frame.imageUrl)}" alt="Track ${escHtml(row.trackId)} frame">`
+        : '<div class="pool-frame-placeholder">Frame</div>';
+      return `<div class="pool-frame-thumb">${image}</div>`;
+    }).join('');
+    return `<div class="pool-table-row candidate-pool-row" data-track-id="${safeAttr(String(row.trackId || '-'))}">
+      ${track}
+      <div class="pool-frame-gallery">${frames || '<span class="pool-no-frames">No frames</span>'}</div>
     </div>`;
   }).join('');
 }
@@ -970,26 +981,31 @@ function markSequenceVideo(filename, state) {
   if (label) label.textContent = stateLabels[state] || 'Queued';
 }
 
-function renderActiveTrackMonitor(rows) {
+function renderActiveTrackMonitor(rows, captions = []) {
   const container = document.getElementById('activeTrackMonitorRows');
   if (!container) return;
-  const activeRows = Array.isArray(rows) ? rows : [];
+  const activeRows = [...(Array.isArray(rows) ? rows : []), ...(Array.isArray(captions) ? captions : [])]
+    .sort((left, right) => Number(right.eventAt || 0) - Number(left.eventAt || 0))
+    .slice(0, 40);
   const previousScrollTop = container.scrollTop;
   const previousScrollHeight = container.scrollHeight;
   const followsLatest = previousScrollTop < 12;
   if (!activeRows.length) {
-    container.innerHTML = '<div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong><small>Time · Status · Track<br>Visual description</small></div>';
+    container.innerHTML = '<div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong></div>';
     return;
   }
   container.innerHTML = activeRows.slice(0, 40).map((row) => {
     const trackId = row.trackId || '-';
+    if (row.kind === 'caption') {
+      return `<article class="active-track-live-row pool-refresh-caption"><div class="active-track-live-line"><strong>Track #${escHtml(trackId)}</strong></div><p>${escHtml(row.status || '')}</p></article>`;
+    }
     const status = pipelineRecordStatus(row.status);
     const hull = row.hullNumber || 'Unreadable';
     const description = row.description || 'No visual description';
     const descriptionText = hull === 'Unreadable' ? description : `${hull} · ${description}`;
     return `<article class="active-track-live-row">
-      <div class="active-track-live-line"><time>${escHtml(row.time || '--:--:--')}</time><i aria-hidden="true">·</i><span>${escHtml(status)}</span><i aria-hidden="true">·</i><strong>Track #${escHtml(trackId)}</strong></div>
-      <p><span class="active-track-description-label">Description:</span><b>${escHtml(descriptionText)}</b></p>
+      <div class="active-track-live-line"><strong>Track #${escHtml(trackId)}</strong><span>${escHtml(status)}</span></div>
+      <p><b>${escHtml(descriptionText)}</b></p>
     </article>`;
   }).join('');
   if (followsLatest) {
@@ -999,8 +1015,8 @@ function renderActiveTrackMonitor(rows) {
   }
 }
 
-function renderTrackRows(rows) {
-  renderActiveTrackMonitor(rows);
+function renderTrackRows(rows, captions = []) {
+  renderActiveTrackMonitor(rows, captions);
   const box = document.getElementById('trackStatusRows');
   if (!box) return;
   if (!rows.length) {
@@ -1021,9 +1037,9 @@ function renderTrackRows(rows) {
 }
 
 function clearPoolTables() {
-  renderPoolRows('candidatePoolRows', [], 'Waiting for candidate frames');
-  renderPoolRows('keyframePoolRows', [], 'Waiting for confirmed keyframes');
-  renderTrackRows([]);
+  renderPoolRows('candidatePoolRows', [], 'Waiting for candidate frames', 'candidate');
+  renderPoolRows('keyframePoolRows', [], 'Waiting for confirmed keyframes', 'keyframe');
+  renderTrackRows([], []);
 }
 
 function updatePipelineStatus(status, text) {

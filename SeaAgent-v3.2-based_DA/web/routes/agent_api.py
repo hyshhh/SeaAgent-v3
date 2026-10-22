@@ -20,6 +20,10 @@ from web.models import AgentQuery, AgentResume
 router = APIRouter(tags=["agent-memory"])
 logger = logging.getLogger(__name__)
 
+# ------------------------------------------------------------------ #
+# 一、请求入口                                                             #
+# ------------------------------------------------------------------ #
+# 1.1 构造控制器，注入事件回调
 def _controller(request: Request, event_handler=None) -> AgentController:
     return AgentController(
         request.app.state.config,
@@ -32,12 +36,14 @@ def _controller(request: Request, event_handler=None) -> AgentController:
     )
 
 
+# 1.2 把证据图片路径包成响应
 async def _evidence_image_response(request: Request, image_path: Path, scale: float):
     preview_path = await run_in_threadpool(request.app.state.tool_service.getImagePreview, image_path, scale)
     media_type = "image/jpeg" if preview_path.suffix.lower() in {".jpg", ".jpeg"} else None
     return FileResponse(preview_path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
+# 1.3 同步问答入口
 @router.post("/api/agent/query")
 async def query_agent(body: AgentQuery, request: Request):
     session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
@@ -48,6 +54,7 @@ async def query_agent(body: AgentQuery, request: Request):
         request.app.state.agent_runs.pop(session_id, None)
 
 
+# 1.4 人工确认后恢复
 @router.post("/api/agent/query/resume")
 async def resume_agent_query(body: AgentResume, request: Request):
     cancel = _begin_run(request, body.session_id)
@@ -57,6 +64,10 @@ async def resume_agent_query(body: AgentResume, request: Request):
         request.app.state.agent_runs.pop(body.session_id, None)
 
 
+# ------------------------------------------------------------------ #
+# 二、运行控制                                                             #
+# ------------------------------------------------------------------ #
+# 2.1 登记进行中的问答
 def _begin_run(request: Request, session_id: str) -> threading.Event:
     """登记一次进行中的问答，返回它的中断信号。
 
@@ -72,6 +83,7 @@ def _begin_run(request: Request, session_id: str) -> threading.Event:
     return cancel
 
 
+# 1.5 NDJSON 事件流入口
 @router.post("/api/agent/query/stream")
 async def stream_agent_query(body: AgentQuery, request: Request):
     """逐行返回 Harness 状态、工具与最终回答事件。"""
@@ -186,6 +198,7 @@ async def stream_agent_query(body: AgentQuery, request: Request):
     )
 
 
+# 2.2 请求停止当前问答
 @router.post("/api/agent/sessions/{session_id}/stop")
 async def stop_agent_run(session_id: str, request: Request):
     """请求停止某个会话正在进行的问答；只置中断信号，不删除会话与历史。"""
@@ -195,6 +208,10 @@ async def stop_agent_run(session_id: str, request: Request):
     cancel.set()
     return {"success": True, "message": "已请求停止，本轮会在当前步骤结束后收尾", "data": {"sessionId": session_id}}
 
+# ------------------------------------------------------------------ #
+# 三、会话管理                                                             #
+# ------------------------------------------------------------------ #
+# 3.1 清空会话与检查点
 @router.delete("/api/agent/memory")
 async def clear_agent_memory(request: Request):
     if request.app.state.agent_runs or getattr(request.app.state, "agent_memory_clearing", False):
@@ -206,12 +223,14 @@ async def clear_agent_memory(request: Request):
         request.app.state.agent_memory_clearing = False
     return {"success": True, "message": "问答记忆已清除", "data": result}
 
+# 3.2 会话摘要列表
 @router.get("/api/agent/sessions")
 async def list_agent_sessions(request: Request, limit: int = 50):
     """会话摘要列表，最近更新的在前；不含轮次正文。"""
     sessions = await run_in_threadpool(request.app.state.repository.list_sessions, limit)
     return {"sessions": sessions, "total": len(sessions)}
 
+# 3.3 单个会话完整记录
 @router.get("/api/agent/sessions/{session_id}")
 async def get_agent_session(session_id: str, request: Request):
     """单个会话的完整记录（含每轮问答），供前端还原对话并继续追问。"""
@@ -220,6 +239,7 @@ async def get_agent_session(session_id: str, request: Request):
         raise HTTPException(404, "会话不存在")
     return session
 
+# 3.4 删除会话
 @router.delete("/api/agent/sessions/{session_id}")
 async def delete_agent_session(session_id: str, request: Request):
     cancel = _begin_run(request, session_id)
@@ -236,6 +256,7 @@ async def delete_agent_session(session_id: str, request: Request):
     return {"success": True, "message": "会话已删除", "data": {"sessionId": session_id}}
 
 
+# 3.5 删除运行时状态
 def _delete_runtime_state(config: dict, session_id: str) -> None:
     from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -248,6 +269,7 @@ def _delete_runtime_state(config: dict, session_id: str) -> None:
             for role in ("planner", "executor", "reflector"):
                 saver.delete_thread(f"{session_id}:{role}")
 
+# 3.6 记忆概览
 @router.get("/api/agent/memory-summary")
 async def memory_summary(request: Request):
     snapshot = request.app.state.memory_manager.snapshot()
@@ -267,10 +289,15 @@ async def memory_summary(request: Request):
         "broadMatchTopK": max(0, int(config["pipeline"]["retrieval"].get("broad_match_top_k", 0))),
     }
 
+# ------------------------------------------------------------------ #
+# 四、证据与媒体                                                            #
+# ------------------------------------------------------------------ #
+# 4.1 轨迹关键帧
 @router.get("/api/memory/tracks/{track_id}/frames")
 async def track_frames(track_id: str, request: Request):
     return request.app.state.tool_service.getFrames([track_id])
 
+# 4.2 关键帧文件
 @router.get("/api/evidence/keyframes/{keyframe_id}")
 async def keyframe_file(keyframe_id: str, request: Request, scale: float = 1.0):
     item = request.app.state.repository.get_keyframe(keyframe_id)
@@ -280,6 +307,7 @@ async def keyframe_file(keyframe_id: str, request: Request, scale: float = 1.0):
     media_type = "image/jpeg" if preview_path.suffix.lower() in {".jpg", ".jpeg"} else None
     return FileResponse(preview_path, media_type=media_type, headers={"Cache-Control": "no-store, max-age=0"})
 
+# 4.3 视频片段文件
 @router.get("/api/evidence/clips/{segment_id}")
 async def clip_file(segment_id: str, request: Request):
     if Path(segment_id).name != segment_id:
@@ -289,6 +317,7 @@ async def clip_file(segment_id: str, request: Request):
         raise HTTPException(404, "目标船片段不存在")
     return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "no-store, max-age=0"})
 
+# 4.4 片段封面
 @router.get("/api/evidence/clips/{segment_id}/poster")
 async def clip_poster(segment_id: str, request: Request, scale: float = 1.0):
     if Path(segment_id).name != segment_id:
@@ -305,6 +334,7 @@ async def clip_poster(segment_id: str, request: Request, scale: float = 1.0):
     media_type = "image/jpeg" if preview_path.suffix.lower() in {".jpg", ".jpeg"} else None
     return FileResponse(preview_path, media_type=media_type, headers={"Cache-Control": "no-store, max-age=0"})
 
+# 4.5 轨迹片段
 @router.get("/api/evidence/tracks/{track_id}/clip")
 async def track_clip(track_id: str, request: Request, startTime: float | None = None, endTime: float | None = None, scale: float = 1.0):
     time_range = (startTime, endTime) if startTime is not None and endTime is not None else None
@@ -314,6 +344,7 @@ async def track_clip(track_id: str, request: Request, startTime: float | None = 
         raise HTTPException(404, result.get("error") or "目标船片段不存在")
     return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "no-store, max-age=0"})
 
+# 4.6 先验库参考图
 @router.get("/api/evidence/registry/{reference_id}")
 async def registry_file(reference_id: str, request: Request, scale: float = 1.0):
     items = request.app.state.repository.references_by_ids([reference_id])
@@ -321,6 +352,10 @@ async def registry_file(reference_id: str, request: Request, scale: float = 1.0)
         raise HTTPException(404, "先验库参考图不存在")
     return await _evidence_image_response(request, Path(items[0]["imagePath"]), scale)
 
+# ------------------------------------------------------------------ #
+# 五、前端配置                                                             #
+# ------------------------------------------------------------------ #
+# 5.1 暴露给前端的公开配置
 @router.get("/api/config")
 async def public_config(request: Request):
     config = request.app.state.config

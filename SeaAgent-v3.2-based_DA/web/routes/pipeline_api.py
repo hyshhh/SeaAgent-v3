@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -13,8 +14,10 @@ import sys
 import threading
 import time
 import uuid
+from collections import OrderedDict
+from concurrent.futures import Future
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -26,13 +29,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
-# ── 并发控制 ──
 # 限制同时运行的 pipeline 数量，防止多人访问时 GPU/CPU 被打爆
 _MAX_PARALLEL_PIPELINES = 1
 _pipeline_semaphore: asyncio.Semaphore | None = None
 _state_lock = asyncio.Lock()
 
 
+# ------------------------------------------------------------------ #
+# 一、配置与路径工具                                                          #
+# ------------------------------------------------------------------ #
+# 1.1 延迟初始化并发信号量
 def _get_semaphore() -> asyncio.Semaphore:
     """延迟初始化信号量，从 config 读取最大并发数"""
     global _pipeline_semaphore, _MAX_PARALLEL_PIPELINES
@@ -46,23 +52,23 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _pipeline_semaphore
 
 
-# ── 全局状态 ──
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
 _task_status: dict[str, dict[str, Any]] = {}
 _stop_signals: set[str] = set()  # 已发送停止信号的任务
 
-# ── H.264 推流状态 ──
 # 每个 task 的 ffmpeg 进程和 WebSocket 观众
 _h264_streams: dict[str, dict[str, Any]] = {}  # task_id → {ffmpeg, viewers, init_segment, ...}
 
-# ── Pipeline 日志缓冲 ──
 _pipeline_logs: dict[str, list[dict]] = {}  # task_id → [{time, line}, ...]
 _log_start: dict[str, int] = {}             # task_id → logs[0] 的全局索引
 _MAX_LOG_LINES = 10  # 每个任务最大日志条数，运行时可通过 API 动态调整
 _POOL_EVENT_PREFIX = "__POOL_EVENT__:"
 _PIPELINE_SEGMENT_PREFIX = "__PIPELINE_SEGMENT__:"
 _MAX_POOL_ROWS = 40
+_MAX_CANDIDATE_FRAMES_PER_TRACK = 12
 _pool_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
+_pool_images: dict[str, dict[tuple[str, str, str], bytes]] = {}
+_pool_captions: dict[str, list[dict[str, Any]]] = {}
 _pool_rows_lock = threading.Lock()
 _VIDEO_LIST_CACHE_TTL = 300.0
 _video_list_cache: dict[str, Any] = {"directory": "", "expires_at": 0.0, "videos": [], "directories": []}
@@ -70,6 +76,7 @@ _video_list_lock = asyncio.Lock()
 _PIPE_SCALE_MIN = 0.05
 
 
+# 1.2 按推流比例算偶数尺寸
 def _get_pipe_output_size(width: int, height: int, scale: float) -> tuple[int, int]:
     """根据推流比例计算偶数尺寸；非法比例回退到原始尺寸。"""
     if not _PIPE_SCALE_MIN <= scale < 1.0:
@@ -80,6 +87,7 @@ def _get_pipe_output_size(width: int, height: int, scale: float) -> tuple[int, i
     )
 
 
+# 1.3 是否已有任务在跑
 def has_running_pipeline() -> bool:
     return bool(_running_processes) or any(item.get("status") == "running" for item in _task_status.values())
 
@@ -89,6 +97,7 @@ _BYTE_PROGRESS_RE = re.compile(r"\d+(?:\.\d+)?[KMG]?/\d+(?:\.\d+)?[KMG]?")
 _PERCENT_RE = re.compile(r"(?<!\d)(\d{1,3})%")
 
 
+# 1.4 清理终端控制符，折叠动态进度
 def _normalize_pipeline_output(line: str) -> str:
     """清理终端控制符，并将回车刷新的动态进度折叠为最新状态。"""
     cleaned = _ANSI_ESCAPE_RE.sub("", line).replace("\b", "")
@@ -96,6 +105,7 @@ def _normalize_pipeline_output(line: str) -> str:
     return segments[-1] if segments else cleaned.strip()
 
 
+# 1.5 把模型下载进度压成短状态
 def _compact_download_progress(text: str) -> str | None:
     """将模型下载器的长进度条转换为适合网页展示的短状态。"""
     if "B/s" not in text or not _BYTE_PROGRESS_RE.search(text):
@@ -107,6 +117,7 @@ def _compact_download_progress(text: str) -> str | None:
     return "检测模型下载完成" if percent >= 100 else f"正在下载检测模型：{percent}%"
 
 
+# 1.6 追加任务日志并按上限淘汰
 def _append_pipeline_log(task_id: str, line: str, level: str | None = None) -> None:
     """追加任务日志并按 FIFO 上限淘汰最旧记录。"""
     text = line.strip()
@@ -126,60 +137,183 @@ def _append_pipeline_log(task_id: str, line: str, level: str | None = None) -> N
         _log_start[task_id] = _log_start.get(task_id, 0) + overflow
 
 
+# 1.7 初始化临时池状态行
 def _init_pool_rows(task_id: str) -> None:
     with _pool_rows_lock:
         _pool_rows[task_id] = {"candidate": [], "keyframe": [], "track": []}
+        _pool_images[task_id] = {}
+        _pool_captions[task_id] = []
 
 
+# 1.8 记录一次池事件
 def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
     pool = str(event.get("pool") or "")
     if pool not in {"candidate", "keyframe", "track"}:
         return
     record_id = str(event.get("recordId") or "")
-    if not record_id:
+    track_id = str(event.get("trackId") or "")
+    if not record_id or (pool != "track" and not track_id):
         return
     with _pool_rows_lock:
-        rows = _pool_rows.setdefault(task_id, {"candidate": [], "keyframe": [], "track": []})[pool]
-        rows[:] = [row for row in rows if row["recordId"] != record_id]
-        if event.get("action") == "remove":
+        pools = _pool_rows.setdefault(task_id, {"candidate": [], "keyframe": [], "track": []})
+        images = _pool_images.setdefault(task_id, {})
+        event_at = time.time()
+        now = time.strftime("%H:%M:%S")
+        if pool == "track":
+            rows = pools[pool]
+            if event.get("action") == "remove":
+                rows[:] = [row for row in rows if row["recordId"] != record_id]
+                return
+            if not track_id:
+                return
+            rows[:] = [row for row in rows if row["recordId"] != record_id]
+            rows.insert(0, {
+                "recordId": record_id,
+                "trackId": track_id,
+                "time": now,
+                "eventAt": event_at,
+                "hullNumber": event.get("hullNumber"),
+                "description": str(event.get("description") or "-"),
+                "status": str(event.get("status") or "-"),
+                "memoryInfo": str(event.get("memoryInfo") or "-"),
+            })
+            del rows[_MAX_POOL_ROWS:]
             return
-        rows.insert(0, {
-            "recordId": record_id,
-            "time": time.strftime("%H:%M:%S"),
-            "trackId": str(event.get("trackId") or "-"),
-            "hullNumber": event.get("hullNumber"),
-            "description": str(event.get("description") or "-"),
-            "status": str(event.get("status") or "-"),
-            "memoryInfo": str(event.get("memoryInfo") or "-"),
-        })
+
+        if pool == "keyframe":
+            rows = pools[pool]
+            row = next((item for item in rows if item["trackId"] == track_id), None)
+            if event.get("action") == "remove":
+                if row and row["recordId"] == record_id:
+                    rows.remove(row)
+            else:
+                rows[:] = [item for item in rows if item["trackId"] != track_id]
+                rows.insert(0, {
+                    "recordId": record_id,
+                    "trackId": track_id,
+                    "time": now,
+                    "eventAt": event_at,
+                    "hullNumber": event.get("hullNumber"),
+                    "description": str(event.get("description") or "-"),
+                    "status": str(event.get("status") or "-"),
+                })
+                del rows[_MAX_POOL_ROWS:]
+            captions = _pool_captions.setdefault(task_id, [])
+            captions.insert(0, {
+                "recordId": f"keyframe-{track_id}-{record_id}-{event.get('action')}",
+                "trackId": track_id,
+                "kind": "caption",
+                "status": "轨迹关键帧池刷新",
+                "eventAt": event_at,
+            })
+            del captions[_MAX_POOL_ROWS:]
+            return
+
+        rows = pools[pool]
+        row = next((item for item in rows if item["trackId"] == track_id), None)
+        if event.get("action") == "remove":
+            if row:
+                row["frames"] = [frame for frame in row["frames"] if frame["recordId"] != record_id]
+                if not row["frames"]:
+                    rows.remove(row)
+            images.pop((pool, track_id, record_id), None)
+            captions = _pool_captions.setdefault(task_id, [])
+            captions.insert(0, {
+                "recordId": f"{pool}-{track_id}-{record_id}-removed",
+                "trackId": track_id,
+                "kind": "caption",
+                "status": "轨迹候选池刷新" if pool == "candidate" else "轨迹关键帧池刷新",
+                "eventAt": event_at,
+            })
+            del captions[_MAX_POOL_ROWS:]
+            return
+
+        if row is None:
+            row = {"recordId": track_id, "trackId": track_id, "frames": []}
+            rows.insert(0, row)
+        row["time"] = now
+        row["eventAt"] = event_at
+        row["hullNumber"] = event.get("hullNumber")
+        row["description"] = str(event.get("description") or row.get("description") or "-")
+        row["status"] = str(event.get("status") or row.get("status") or "-")
+        frames = row["frames"]
+        frame = next((item for item in frames if item["recordId"] == record_id), None)
+        frame_changed = frame is None or any(
+            frame.get(key) != value
+            for key, value in {
+                "hullNumber": event.get("hullNumber"),
+                "description": str(event.get("description") or ""),
+                "status": str(event.get("status") or ""),
+            }.items()
+        )
+        if frame is None:
+            frame = {"recordId": record_id}
+            frames.insert(0, frame)
+        frame.update(
+            time=now,
+            hullNumber=event.get("hullNumber"),
+            description=str(event.get("description") or ""),
+            status=str(event.get("status") or ""),
+        )
+        image = event.get("image")
+        if isinstance(image, str) and image.startswith("data:image/jpeg;base64,"):
+            try:
+                images[(pool, track_id, record_id)] = base64.b64decode(image.partition(",")[2], validate=True)
+            except (ValueError, TypeError):
+                logger.warning("池缩略图解码失败 [%s/%s/%s]", pool, track_id, record_id)
+        expired_frames = frames[_MAX_CANDIDATE_FRAMES_PER_TRACK:]
+        frames[:] = frames[:_MAX_CANDIDATE_FRAMES_PER_TRACK]
+        for expired in expired_frames:
+            images.pop((pool, track_id, expired["recordId"]), None)
+        rows[:] = [item for item in rows if item["trackId"] != track_id]
+        rows.insert(0, row)
+        for expired_row in rows[_MAX_POOL_ROWS:]:
+            for expired_frame in expired_row["frames"]:
+                images.pop((pool, expired_row["trackId"], expired_frame["recordId"]), None)
         del rows[_MAX_POOL_ROWS:]
+        if frame_changed:
+            captions = _pool_captions.setdefault(task_id, [])
+            captions.insert(0, {
+                "recordId": f"{pool}-{track_id}-{record_id}",
+                "trackId": track_id,
+                "kind": "caption",
+                "status": "轨迹候选池刷新" if pool == "candidate" else "轨迹关键帧池刷新",
+                "eventAt": event_at,
+            })
+            del captions[_MAX_POOL_ROWS:]
 
 
+# 1.9 读取 demo 配置段
 def _get_demo_config() -> dict:
     config = load_config()
     return config.get("demo_video", {})
 
 
+# 1.10 视频目录（默认 ./demovid）
 def _get_demo_dir() -> Path:
     cfg = _get_demo_config()
     return Path(cfg.get("dir", "./demovid"))
 
 
+# 1.11 输出目录（默认 ./demo_output）
 def _get_output_dir() -> Path:
     cfg = _get_demo_config()
     return Path(cfg.get("output_dir", "./demo_output"))
 
 
+# 1.12 确保目录存在
 def _ensure_dirs():
     _get_demo_dir().mkdir(parents=True, exist_ok=True)
     _get_output_dir().mkdir(parents=True, exist_ok=True)
 
 
+# 1.13 允许上传的视频后缀
 def _get_allowed_extensions() -> set[str]:
     cfg = _get_demo_config()
     return set(cfg.get("allowed_extensions", [".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv", ".webm"]))
 
 
+# 1.14 探测摄像头/RTSP 分辨率
 def _probe_camera_resolution(source: str) -> tuple[int, int] | None:
     """快速探测摄像头/RTSP 分辨率，用于 H.264 编码器初始化。"""
     import cv2
@@ -200,6 +334,7 @@ def _probe_camera_resolution(source: str) -> tuple[int, int] | None:
         return None
 
 
+# 1.15 摄像头帧共享目录
 def _get_stream_dir(task_id: str) -> Path:
     """获取摄像头帧共享目录"""
     d = Path("./_camera_frames") / task_id
@@ -207,8 +342,10 @@ def _get_stream_dir(task_id: str) -> Path:
     return d
 
 
-# ── 请求/响应模型 ──
-
+# ------------------------------------------------------------------ #
+# 二、请求与响应模型                                                          #
+# ------------------------------------------------------------------ #
+# 2.1 启动 Pipeline 的请求体
 class PipelineStartRequest(BaseModel):
     video_filename: str
     video_filenames: list[str] | None = None
@@ -236,6 +373,7 @@ class PipelineStartRequest(BaseModel):
     yolo_model: str = ""
 
 
+# 2.2 启动浏览器摄像头的请求体
 class BrowserCameraStartRequest(BaseModel):
     stream_mode: str = "mjpeg"  # "mjpeg" 或 "h264"
     # ── 核心检测参数 ──
@@ -258,6 +396,7 @@ class BrowserCameraStartRequest(BaseModel):
     yolo_model: str = ""
 
 
+# 2.3 启动结果
 class PipelineStartResponse(BaseModel):
     success: bool
     message: str
@@ -266,6 +405,7 @@ class PipelineStartResponse(BaseModel):
     capture_fps: int | None = None
 
 
+# 2.4 单个任务状态
 class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
@@ -283,17 +423,23 @@ class TaskStatusResponse(BaseModel):
     playlist_results: list[dict[str, Any]] | None = None
 
 
+# 2.5 视频列表
 class VideoListResponse(BaseModel):
     videos: list[dict[str, Any]]
     directories: list[dict[str, Any]] = []
 
 
+# 2.6 全部任务状态
 class PipelineStatusResponse(BaseModel):
     running: bool
     active_tasks: int
     tasks: list[dict[str, Any]]
 
 
+# ------------------------------------------------------------------ #
+# 三、路径校验与视频探测                                                        #
+# ------------------------------------------------------------------ #
+# 3.1 校验单个文件名，防目录遍历
 def _safe_filename(filename: str) -> str:
     """安全校验文件名，防止目录遍历；仅用于上传/输出目录的单文件名。"""
     import re
@@ -304,6 +450,7 @@ def _safe_filename(filename: str) -> str:
     return name
 
 
+# 3.2 规范化相对路径，拒绝绝对路径与穿越
 def _normalize_video_relative_path(video_filename: str) -> str:
     """规范化 demo 视频相对路径，允许子目录，拒绝绝对路径和目录穿越。"""
     if not isinstance(video_filename, str):
@@ -329,6 +476,7 @@ def _normalize_video_relative_path(video_filename: str) -> str:
     return rel_path
 
 
+# 3.3 把相对路径解析到 demo 目录内
 def _resolve_demo_video_path(video_filename: str) -> Path:
     """把前端传入的相对视频路径解析到 demo 目录内，防止路径逃逸。"""
     rel_path = _normalize_video_relative_path(video_filename)
@@ -341,6 +489,7 @@ def _resolve_demo_video_path(video_filename: str) -> Path:
     return video_path
 
 
+# 3.4 取靠前有效帧编码为 JPEG
 def _extract_video_preview(video_path: Path) -> bytes:
     """读取视频靠前的有效帧并编码为 JPEG。"""
     import cv2
@@ -373,10 +522,9 @@ def _extract_video_preview(video_path: Path) -> bytes:
         capture.release()
 
 
-# ── 视频编码检测与转码 ──
-
 _BROWSER_COMPATIBLE_CODECS = {"h264", "vp8", "vp9", "av1", "mpeg4part10"}
 
+# 3.5 查找 ffmpeg/ffprobe 可执行文件
 def _find_binary(name: str) -> str | None:
     """查找二进制文件，支持多种路径。"""
     import shutil
@@ -392,7 +540,13 @@ def _find_binary(name: str) -> str | None:
 
 _FFMPEG: str | None = None
 _FFPROBE: str | None = None
+_PROBE_CACHE_CAPACITY = 128
+_probe_cache: OrderedDict[tuple[str, str, int, int], Any] = OrderedDict()
+_probe_cache_lock = threading.Lock()
+_probe_inflight: dict[tuple[str, str, int, int], Future[Any]] = {}
+_ProbeResult = TypeVar("_ProbeResult")
 
+# 3.6 延迟查找并缓存二进制路径
 def _ensure_ffmpeg():
     """延迟查找 ffmpeg/ffprobe，首次调用时检测。"""
     global _FFMPEG, _FFPROBE
@@ -403,54 +557,114 @@ def _ensure_ffmpeg():
         _FFPROBE = _find_binary("ffprobe") or ""
         logger.info("ffprobe 查找结果: %s", _FFPROBE or "(未找到)")
 
+
+def _cached_probe(
+    probe_type: str,
+    video_path: str,
+    probe: Callable[[], _ProbeResult],
+) -> _ProbeResult | None:
+    """按文件身份缓存探测结果，并合并同一文件的并发探测。"""
+    try:
+        normalized_path = Path(video_path).expanduser().resolve(strict=False)
+        stat = normalized_path.stat()
+    except (OSError, RuntimeError):
+        return probe()
+
+    key = (
+        probe_type,
+        os.path.normcase(str(normalized_path)),
+        stat.st_size,
+        getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)),
+    )
+    with _probe_cache_lock:
+        if key in _probe_cache:
+            _probe_cache.move_to_end(key)
+            return _probe_cache[key]
+        future = _probe_inflight.get(key)
+        is_owner = future is None
+        if is_owner:
+            future = Future()
+            _probe_inflight[key] = future
+
+    if not is_owner:
+        return future.result()
+
+    try:
+        result = probe()
+        if result is not None:
+            with _probe_cache_lock:
+                _probe_cache[key] = result
+                _probe_cache.move_to_end(key)
+                while len(_probe_cache) > _PROBE_CACHE_CAPACITY:
+                    _probe_cache.popitem(last=False)
+        future.set_result(result)
+        return result
+    except BaseException as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _probe_cache_lock:
+            if _probe_inflight.get(key) is future:
+                del _probe_inflight[key]
+
+
+# 3.7 用 ffprobe 检测视频编码
 def _probe_codec(video_path: str) -> str | None:
     """用 ffprobe 检测视频编码。"""
     _ensure_ffmpeg()
     if not _FFPROBE:
         logger.warning("ffprobe 不可用，跳过编码检测")
         return None
-    try:
-        ret = subprocess.run(
-            [_FFPROBE, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_name",
-             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-            capture_output=True, text=True, timeout=30,
-        )
-        if ret.returncode == 0:
-            codec = ret.stdout.strip().lower()
-            if codec:
-                return codec
-            logger.warning("ffprobe 输出为空 (rc=%d): %s | stderr: %s", ret.returncode, video_path, ret.stderr.strip()[:200])
-        else:
-            logger.warning("ffprobe 失败 (rc=%d): %s | stderr: %s", ret.returncode, video_path, ret.stderr.strip()[:200])
-    except Exception as e:
-        logger.warning("ffprobe 异常: %s → %s", video_path, e)
-    return None
+    def run_probe() -> str | None:
+        try:
+            ret = subprocess.run(
+                [_FFPROBE, "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=codec_name",
+                 "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            if ret.returncode == 0:
+                codec = ret.stdout.strip().lower()
+                if codec:
+                    return codec
+                logger.warning("ffprobe 输出为空 (rc=%d): %s | stderr: %s", ret.returncode, video_path, ret.stderr.strip()[:200])
+            else:
+                logger.warning("ffprobe 失败 (rc=%d): %s | stderr: %s", ret.returncode, video_path, ret.stderr.strip()[:200])
+        except Exception as e:
+            logger.warning("ffprobe 异常: %s → %s", video_path, e)
+        return None
+
+    return _cached_probe("codec", video_path, run_probe)
 
 
+# 3.8 用 ffprobe 检测分辨率
 def _probe_video_size(video_path: str) -> tuple[int, int] | None:
     """用 ffprobe 检测视频分辨率。"""
     _ensure_ffmpeg()
     if not _FFPROBE:
         return None
-    try:
-        ret = subprocess.run(
-            [_FFPROBE, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-            capture_output=True, text=True, timeout=30,
-        )
-        if ret.returncode == 0:
-            lines = ret.stdout.strip().split("\n")
-            if len(lines) >= 2:
-                w, h = int(lines[0]), int(lines[1])
-                if w > 0 and h > 0:
-                    return w, h
-    except Exception as e:
-        logger.warning("ffprobe 分辨率检测失败: %s → %s", video_path, e)
-    return None
+    def run_probe() -> tuple[int, int] | None:
+        try:
+            ret = subprocess.run(
+                [_FFPROBE, "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height",
+                 "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            if ret.returncode == 0:
+                lines = ret.stdout.strip().split("\n")
+                if len(lines) >= 2:
+                    w, h = int(lines[0]), int(lines[1])
+                    if w > 0 and h > 0:
+                        return w, h
+        except Exception as e:
+            logger.warning("ffprobe 分辨率检测失败: %s → %s", video_path, e)
+        return None
+
+    return _cached_probe("video_size", video_path, run_probe)
 
 
+# 3.9 确保视频为浏览器兼容的 H264
 def _ensure_h264(video_path: Path) -> Path:
     """
     确保视频为浏览器兼容的 H264 编码。
@@ -506,6 +720,10 @@ def _ensure_h264(video_path: Path) -> Path:
     return video_path
 
 
+# ------------------------------------------------------------------ #
+# 四、视频文件管理                                                           #
+# ------------------------------------------------------------------ #
+# 4.1 是否为摄像头/RTSP 输入
 def _is_camera_input(video_filename: str) -> bool:
     """判断是否为摄像头/RTSP 输入"""
     return (
@@ -517,6 +735,7 @@ def _is_camera_input(video_filename: str) -> bool:
     )
 
 
+# 4.2 解析视频文件路径
 def _get_video_path(video_filename: str) -> Path | None:
     """获取视频文件路径，摄像头输入返回 None；本地视频支持子目录相对路径。"""
     if _is_camera_input(video_filename):
@@ -524,8 +743,7 @@ def _get_video_path(video_filename: str) -> Path | None:
     return _resolve_demo_video_path(video_filename)
 
 
-# ── 视频管理 ──
-
+# 4.3 递归扫描视频目录
 def _scan_video_files(demo_dir: Path, allowed: set[str]) -> list[dict[str, Any]]:
     """递归扫描挂载目录，返回相对路径，避免子目录同名视频冲突。"""
     started = time.perf_counter()
@@ -560,6 +778,7 @@ def _scan_video_files(demo_dir: Path, allowed: set[str]) -> list[dict[str, Any]]
     return sorted(videos, key=lambda item: item["filename"].lower())
 
 
+# 4.4 按一级子目录分组
 def _build_video_directories(videos: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """按根目录下的一级子目录分组；子目录下的多级视频仍归入其一级目录。"""
     counts: dict[str, int] = {"": 0}
@@ -581,9 +800,11 @@ def _build_video_directories(videos: list[dict[str, Any]]) -> list[dict[str, Any
     return directories
 
 
+# 4.5 让视频列表缓存失效
 def _invalidate_video_list_cache() -> None:
     _video_list_cache["expires_at"] = 0.0
 
+# 4.6 获取 demo 视频列表
 @router.get("/videos", response_model=VideoListResponse)
 async def list_videos():
     """获取 demo 视频列表"""
@@ -614,6 +835,7 @@ async def list_videos():
     return VideoListResponse(videos=videos, directories=directories)
 
 
+# 4.7 上传视频（流式写入）
 @router.post("/videos/upload")
 async def upload_video(file: UploadFile = File(...)):
     """上传视频到 demovid 目录（流式写入，带大小预检和超时保护）"""
@@ -698,6 +920,7 @@ async def upload_video(file: UploadFile = File(...)):
     }
 
 
+# 4.8 删除视频及转码缓存
 @router.delete("/videos/{filename:path}")
 async def delete_video(filename: str):
     """删除 demo 视频（同时清理同目录转码缓存）"""
@@ -714,8 +937,7 @@ async def delete_video(filename: str):
     return {"success": True, "message": f"已删除: {filename}"}
 
 
-# ── 视频编码检测 ──
-
+# 4.9 诊断 ffmpeg/ffprobe 可用性
 @router.get("/debug/ffmpeg")
 async def debug_ffmpeg():
     """诊断 ffmpeg/ffprobe 可用性"""
@@ -757,6 +979,7 @@ async def debug_ffmpeg():
 
     return result
 
+# 4.10 检测编码与浏览器兼容性
 @router.get("/videos/{filename:path}/codec")
 async def check_video_codec(filename: str):
     """检测视频编码格式及浏览器兼容性"""
@@ -784,6 +1007,7 @@ async def check_video_codec(filename: str):
     }
 
 
+# 4.11 手动转码为 H264
 @router.post("/videos/{filename:path}/transcode")
 async def transcode_video(filename: str):
     """手动触发视频转码为 H264（浏览器兼容）"""
@@ -810,8 +1034,10 @@ async def transcode_video(filename: str):
     }
 
 
-# ── Pipeline 控制 ──
-
+# ------------------------------------------------------------------ #
+# 五、Pipeline 任务管理                                                    #
+# ------------------------------------------------------------------ #
+# 5.1 启动视频处理任务
 @router.post("/start", response_model=PipelineStartResponse)
 async def start_pipeline(req: PipelineStartRequest):
     """启动视频处理 Pipeline（支持文件和摄像头/RTSP 输入）"""
@@ -946,6 +1172,7 @@ async def start_pipeline(req: PipelineStartRequest):
         if req.display:
             cmd.append("--display")
     cmd.append("--demo")
+    cmd.append("--pool-preview-events")
 
     logger.info("启动 Pipeline: %s (camera=%s)", " ".join(cmd), is_camera)
 
@@ -957,7 +1184,7 @@ async def start_pipeline(req: PipelineStartRequest):
             "video_filenames": video_names,
             "output_filename": None,
             "output_path": None,
-            "progress": "等待流水线启动",
+            "progress": "Waiting for pipeline to start",
             "error": None,
             "is_camera": is_camera,
             "monitor_start_time": req.monitor_start_time,
@@ -1028,6 +1255,7 @@ async def start_pipeline(req: PipelineStartRequest):
     )
 
 
+# 5.2 等待任务完成并读取进度
 async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem: asyncio.Semaphore):
     """异步等待 pipeline 完成，从 stderr 读取进度（stdout 用于 raw 帧输出）"""
     try:
@@ -1164,6 +1392,7 @@ async def _wait_pipeline(task_id: str, process: asyncio.subprocess.Process, sem:
         _cleanup_old_tasks()
 
 
+# 5.3 获取全部任务状态
 @router.get("/status", response_model=PipelineStatusResponse)
 async def get_pipeline_status():
     """获取所有 Pipeline 任务状态"""
@@ -1172,6 +1401,7 @@ async def get_pipeline_status():
     return PipelineStatusResponse(running=running > 0, active_tasks=running, tasks=tasks)
 
 
+# 5.4 获取单个任务状态
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
     """获取单个任务状态"""
@@ -1181,6 +1411,7 @@ async def get_task_status(task_id: str):
     return TaskStatusResponse(**t)
 
 
+# 5.5 增量拉取识别日志
 @router.get("/logs/{task_id}")
 async def get_pipeline_logs(task_id: str, since: int = 0):
     """获取 Pipeline 识别日志（since 指定起始索引，用于增量拉取）"""
@@ -1200,25 +1431,59 @@ async def get_pipeline_logs(task_id: str, since: int = 0):
     return result
 
 
+# 5.6 临时池状态与有效关键帧
 @router.get("/pool-status/{task_id}")
 async def get_pool_status(task_id: str):
-    """返回临时池最近状态和正式池当前有效关键帧。"""
+    """返回按轨迹聚合的候选帧、关键帧及字幕事件。"""
     with _pool_rows_lock:
         pools = _pool_rows.get(task_id, {"candidate": [], "keyframe": [], "track": []})
+        images = _pool_images.get(task_id, {})
+        grouped = {}
+        for name in ("candidate", "keyframe"):
+            grouped[name] = []
+            for row in pools[name]:
+                item = {key: value for key, value in row.items() if key != "frames"}
+                if name == "keyframe":
+                    grouped[name].append(item)
+                    continue
+                item["frames"] = []
+                for frame in row["frames"]:
+                    frame_data = dict(frame)
+                    if (name, row["trackId"], frame["recordId"]) in images:
+                        frame_data["imageUrl"] = (
+                            f"{router.prefix}/pool-previews/{task_id}/{name}/"
+                            f"{row['trackId']}/{frame['recordId']}"
+                        )
+                    item["frames"].append(frame_data)
+                grouped[name].append(item)
         return {
-            "candidate": [dict(row) for row in pools["candidate"]],
-            "keyframe": [dict(row) for row in pools["keyframe"]],
+            **grouped,
             "track": [dict(row) for row in pools["track"]],
+            "captions": [dict(row) for row in _pool_captions.get(task_id, [])],
             "maxRows": _MAX_POOL_ROWS,
         }
 
 
+@router.get("/pool-previews/{task_id}/{pool}/{track_id}/{record_id}")
+async def get_pool_preview(task_id: str, pool: str, track_id: str, record_id: str):
+    """返回池中一帧的缩略图。"""
+    if pool not in {"candidate", "keyframe"}:
+        raise HTTPException(status_code=404, detail="池类型不存在")
+    with _pool_rows_lock:
+        image = _pool_images.get(task_id, {}).get((pool, track_id, record_id))
+    if image is None:
+        raise HTTPException(status_code=404, detail="池帧缩略图不存在")
+    return Response(content=image, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
+
+
+# 5.7 读取日志运行时设置
 @router.get("/settings/logs")
 async def get_log_settings():
     """获取日志模块的运行时设置"""
     return {"max_log_lines": _MAX_LOG_LINES}
 
 
+# 5.8 调整日志条数上限
 @router.post("/settings/logs")
 async def update_log_settings(data: dict[str, Any]):
     """动态调整最大日志条数"""
@@ -1233,6 +1498,7 @@ async def update_log_settings(data: dict[str, Any]):
     return {"max_log_lines": _MAX_LOG_LINES}
 
 
+# 5.9 停止运行中的任务
 @router.post("/stop/{task_id}")
 async def stop_pipeline(task_id: str):
     """停止正在运行的 Pipeline"""
@@ -1304,6 +1570,10 @@ async def stop_pipeline(task_id: str):
     return {"success": True, "message": f"已停止任务: {task_id}"}
 
 
+# ------------------------------------------------------------------ #
+# 六、进程与资源清理                                                          #
+# ------------------------------------------------------------------ #
+# 6.1 按平台终止子进程
 async def _terminate_pipeline_process(process: asyncio.subprocess.Process, timeout: float = 1.0) -> None:
     """按平台终止子进程，超时后强制杀掉。"""
     import signal
@@ -1334,6 +1604,7 @@ async def _terminate_pipeline_process(process: asyncio.subprocess.Process, timeo
         pass
 
 
+# 6.2 清理旧任务记录
 def _cleanup_old_tasks():
     """清理已完成/失败的旧任务记录，防止内存泄漏（需在 _state_lock 下调用或单独使用）"""
     global _task_status
@@ -1352,9 +1623,12 @@ def _cleanup_old_tasks():
                 _log_start.pop(task_id, None)
                 with _pool_rows_lock:
                     _pool_rows.pop(task_id, None)
+                    _pool_images.pop(task_id, None)
+                    _pool_captions.pop(task_id, None)
         logger.info("自动清理旧任务记录，保留 %d 条", len(_task_status))
 
 
+# 6.3 清理帧目录与队列
 def _cleanup_stream_dir(task_id: str):
     """清理帧共享目录、内存队列和停止信号文件"""
     import shutil
@@ -1369,6 +1643,7 @@ def _cleanup_stream_dir(task_id: str):
     _frame_queues.pop(task_id, None)
 
 
+# 6.4 等任务自然结束后再清理
 async def _delayed_cleanup(task_id: str, delay: int = 10):
     """延迟清理：等待 pipeline 自然结束后再清理目录"""
     await asyncio.sleep(delay)
@@ -1389,10 +1664,13 @@ async def _delayed_cleanup(task_id: str, delay: int = 10):
     _cleanup_stream_dir(task_id)
 
 
-# ── 浏览器摄像头帧队列（内存直传，零磁盘 I/O）──
 _frame_queues: dict[str, queue.Queue] = {}  # task_id → Queue(numpy BGR frames)
 
 
+# ------------------------------------------------------------------ #
+# 七、H.264 推流                                                         #
+# ------------------------------------------------------------------ #
+# 7.1 队列满时丢最旧帧
 def _queue_put_latest(q: queue.Queue, item) -> None:
     """向队列放入最新帧：满时丢掉最旧的，保证消费者总是拿到最新帧。"""
     try:
@@ -1408,6 +1686,7 @@ def _queue_put_latest(q: queue.Queue, item) -> None:
             pass  # 极端情况：仍然满，丢弃此帧
 
 
+# 7.2 浏览器摄像头帧目录
 def _get_browser_frames_dir(task_id: str) -> Path:
     """获取浏览器摄像头帧目录（仅作为 fallback）"""
     d = Path("./_browser_frames") / task_id
@@ -1415,8 +1694,7 @@ def _get_browser_frames_dir(task_id: str) -> Path:
     return d
 
 
-# ── H.264 推流管理 ──
-
+# 7.3 从 stdout 读原始帧并编码
 async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, w: int = 640, h: int = 480, fps: int = 15):
     """后台任务：从 pipeline stdout 读取 raw BGR 帧，启动 ffmpeg 编码为 H.264 fMP4"""
 
@@ -1573,6 +1851,7 @@ async def _start_h264_reader(task_id: str, process: asyncio.subprocess.Process, 
         logger.info("H.264 推流结束: %s", task_id)
 
 
+# 7.4 向单个观众顺序发送分片
 async def _viewer_sender(ws: WebSocket, queue: asyncio.Queue, task_id: str):
     """每观众独立发送任务：严格按顺序发送初始化段和媒体分片。"""
     try:
@@ -1614,6 +1893,7 @@ async def _viewer_sender(ws: WebSocket, queue: asyncio.Queue, task_id: str):
             pass
 
 
+# 7.5 向所有观众广播 fMP4
 async def _broadcast_h264(task_id: str, data: bytes):
     """向所有观众广播 fMP4 数据；慢连接关闭后由前端完整重连。"""
     async with _state_lock:
@@ -1636,6 +1916,7 @@ async def _broadcast_h264(task_id: str, data: bytes):
             pass
 
 
+# 7.6 停止 H.264 推流
 async def _stop_h264_stream(task_id: str):
     """停止 H.264 推流"""
     async with _state_lock:
@@ -1660,8 +1941,10 @@ async def _stop_h264_stream(task_id: str):
             pass
 
 
-# ── WebSocket H.264 推流端点 ──
-
+# ------------------------------------------------------------------ #
+# 八、实时视频端点                                                           #
+# ------------------------------------------------------------------ #
+# 8.1 WebSocket H.264 推流
 @router.websocket("/ws/h264/{task_id}")
 async def ws_h264_stream(websocket: WebSocket, task_id: str):
     """WebSocket H.264 推流 — fMP4 over WebSocket，前端用 MSE 播放"""
@@ -1714,12 +1997,11 @@ async def ws_h264_stream(websocket: WebSocket, task_id: str):
             st.cancel()
 
 
-# ── WebSocket JPEG 推流（兼容） ──
-
 # 每个 task 的 WebSocket 观众集合
 _ws_viewers: dict[str, set[WebSocket]] = {}
 
 
+# 8.2 WebSocket 通用实时推流
 @router.websocket("/ws/stream/{task_id}")
 async def ws_stream(websocket: WebSocket, task_id: str):
     """WebSocket 实时推流 — 比 MJPEG 效率更高，支持多客户端、跳帧、低延迟"""
@@ -1802,8 +2084,7 @@ async def ws_stream(websocket: WebSocket, task_id: str):
                 _ws_viewers.pop(task_id, None)
 
 
-# ── 保留旧 MJPEG 端点兼容（摄像头 Demo 仍用 img 标签）──
-
+# 8.3 MJPEG 兼容端点
 @router.get("/stream/{task_id}")
 async def camera_stream(task_id: str):
     """MJPEG 兼容端点 — 供摄像头 Demo 的 img 标签使用"""
@@ -1888,8 +2169,10 @@ async def camera_stream(task_id: str):
     )
 
 
-# ── 浏览器摄像头 ──
-
+# ------------------------------------------------------------------ #
+# 九、浏览器摄像头                                                           #
+# ------------------------------------------------------------------ #
+# 9.1 启动浏览器摄像头任务
 @router.post("/start-browser-camera", response_model=PipelineStartResponse)
 async def start_browser_camera(req: BrowserCameraStartRequest):
     """启动浏览器摄像头 Pipeline（内存队列模式，零磁盘 I/O）
@@ -2033,6 +2316,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
             "save_output_video": req.save_output_video,
             "save_screenshots": False,
             "raw_stdout": True,
+            "pool_preview_events": True,
             "output_size": [640, 480],
             "stop_file": str(stream_dir / "__STOP__"),
         })
@@ -2152,6 +2436,7 @@ async def start_browser_camera(req: BrowserCameraStartRequest):
     )
 
 
+# 9.2 接收浏览器视频流的 WebSocket
 @router.websocket("/ws/camera/{task_id}")
 async def browser_camera_ws(websocket: WebSocket, task_id: str):
     """WebSocket 端点 — 接收浏览器摄像头视频流（支持 MJPEG 和 H264 两种模式）"""
@@ -2203,6 +2488,7 @@ async def browser_camera_ws(websocket: WebSocket, task_id: str):
         await websocket.close(code=4001, reason="未知消息格式")
 
 
+# 9.3 MJPEG 模式逐帧接收
 async def _receive_mjpeg_camera_frames(
     websocket: WebSocket, task_id: str,
     frame_queue: queue.Queue | None, use_queue: bool,
@@ -2270,14 +2556,13 @@ async def _receive_mjpeg_camera_frames(
         asyncio.create_task(_delayed_cleanup(task_id, delay=10))
 
 
-# ── WebRTC 摄像头 ──
-
 # 每个 task 对应一个 PeerConnection，停止时需要关闭
 _webrtc_pcs: dict[str, Any] = {}
 # 用于同步 pipeline 线程等待 WebRTC track 就绪
 _webrtc_ready_events: dict[str, threading.Event] = {}
 
 
+# 9.4 WebRTC 模式接收视频轨
 async def _receive_webrtc_camera_frames(
     pc: Any,
     task_id: str,
@@ -2384,6 +2669,10 @@ async def _receive_webrtc_camera_frames(
             asyncio.create_task(_delayed_cleanup(task_id, delay=10))
 
 
+# ------------------------------------------------------------------ #
+# 十、WebRTC 信令                                                        #
+# ------------------------------------------------------------------ #
+# 10.1 SDP offer 请求体
 class WebRTCOfferRequest(BaseModel):
     sdp: str
     type: str = "offer"
@@ -2392,6 +2681,7 @@ class WebRTCOfferRequest(BaseModel):
 # 服务端 STUN 探索：让 aioice Connection 默认使用 Google STUN 获取 srflx 公网候选
 _PATCHED_AIOICE_STUN = False
 
+# 10.2 修补 aioice 的 STUN 配置
 def _patch_aioice_stun():
     global _PATCHED_AIOICE_STUN
     if _PATCHED_AIOICE_STUN:
@@ -2410,6 +2700,7 @@ def _patch_aioice_stun():
         logger.warning("无法导入 aioice，跳过 STUN 补丁")
 
 
+# 10.3 处理 SDP offer 并返回 answer
 @router.post("/webrtc/offer/{task_id}")
 async def webrtc_offer(task_id: str, req: WebRTCOfferRequest, request: Request):
     """WebRTC 信令端点：接收 SDP offer，返回 SDP answer"""
@@ -2536,12 +2827,14 @@ async def webrtc_offer(task_id: str, req: WebRTCOfferRequest, request: Request):
     }
 
 
+# 10.4 ICE 候选请求体
 class WebRTCCandidateRequest(BaseModel):
     candidate: str | None
     sdpMid: str | None
     sdpMLineIndex: int | None
 
 
+# 10.5 接收 trickle ICE 候选
 @router.post("/webrtc/candidate/{task_id}")
 async def webrtc_candidate(task_id: str, req: WebRTCCandidateRequest):
     """接收 WebRTC trickle ICE 候选（STUN 响应可能晚于 offer）
@@ -2573,6 +2866,10 @@ async def webrtc_candidate(task_id: str, req: WebRTCCandidateRequest):
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ #
+# 十一、H.264 摄像头接收                                                     #
+# ------------------------------------------------------------------ #
+# 11.1 接收 MediaRecorder 的 H264 流
 async def _receive_h264_camera_frames(
     websocket: WebSocket, task_id: str,
     frame_queue: queue.Queue | None, use_queue: bool,
@@ -2764,8 +3061,10 @@ async def _receive_h264_camera_frames(
         asyncio.create_task(_delayed_cleanup(task_id, delay=10))
 
 
-# ── 结果视频 ──
-
+# ------------------------------------------------------------------ #
+# 十二、输出与预览                                                           #
+# ------------------------------------------------------------------ #
+# 12.1 获取已完成输出视频
 @router.get("/outputs")
 async def list_outputs():
     """获取已完成的 Demo 输出视频列表"""
@@ -2784,6 +3083,7 @@ async def list_outputs():
     return {"outputs": outputs}
 
 
+# 12.2 下载/播放输出视频
 @router.get("/outputs/{filename}")
 async def get_output_video(request: Request, filename: str):
     """下载/播放输出视频（自动转码 + Range 支持）"""
@@ -2857,6 +3157,7 @@ async def get_output_video(request: Request, filename: str):
     )
 
 
+# 12.3 返回视频的一张预览帧
 @router.get("/video-preview/{filename:path}")
 async def get_video_preview(filename: str):
     """返回所选视频的一张预览帧。"""
@@ -2875,6 +3176,7 @@ async def get_video_preview(filename: str):
     )
 
 
+# 12.4 播放源视频（自动转码）
 @router.get("/video/{filename:path}")
 async def get_source_video(request: Request, filename: str):
     """获取源视频用于播放（自动转码 HEVC → H264，支持 Range 请求）"""
@@ -2945,8 +3247,7 @@ async def get_source_video(request: Request, filename: str):
     )
 
 
-# ── 清理历史 ──
-
+# 12.5 清除已完成/失败任务
 @router.delete("/tasks/clear")
 async def clear_finished_tasks():
     """清除已完成/失败的任务记录"""
@@ -2958,6 +3259,8 @@ async def clear_finished_tasks():
         expired = [task_id for task_id in _pool_rows if task_id not in retained]
         for task_id in expired:
             _pool_rows.pop(task_id, None)
+            _pool_images.pop(task_id, None)
+            _pool_captions.pop(task_id, None)
     for task_id in expired:
         _pipeline_logs.pop(task_id, None)
         _log_start.pop(task_id, None)

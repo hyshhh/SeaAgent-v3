@@ -15,7 +15,7 @@ def test_tools_are_config_driven():
         "add_registry_vessel",
     ]
     result = tools[0].invoke({"time_range": [1.0, 2.0], "hull_number": "0857"})
-    assert result["kwargs"] == {"timeRange": (1.0, 2.0), "hullNumber": "0857", "offset": 0, "limit": 0}
+    assert result["kwargs"] == {"timeRange": (1.0, 2.0), "hullNumber": "0857", "limit": 50}
 
 
 def test_match_text_requires_and_explains_its_gallery():

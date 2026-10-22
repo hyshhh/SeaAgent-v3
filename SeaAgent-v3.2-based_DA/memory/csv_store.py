@@ -6,7 +6,7 @@ import csv
 import logging
 import os
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import ClassVar
 
@@ -43,9 +43,12 @@ class CsvTable:
             with self.path.open("r", encoding="utf-8-sig", newline="") as stream:
                 return tuple(next(csv.reader(stream), []))
 
-    def rows(self) -> list[dict[str, str]]:
+    def iter_rows(self) -> Iterator[dict[str, str]]:
         with self._lock, self.path.open("r", encoding="utf-8-sig", newline="") as stream:
-            return [dict(row) for row in csv.DictReader(stream)]
+            yield from (dict(row) for row in csv.DictReader(stream))
+
+    def rows(self) -> list[dict[str, str]]:
+        return list(self.iter_rows())
 
     def find(self, predicate: Callable[[dict[str, str]], bool]) -> list[dict[str, str]]:
         return [row for row in self.rows() if predicate(row)]

@@ -11,12 +11,17 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templa
 router = APIRouter(tags=["pages"])
 
 
+# ------------------------------------------------------------------ #
+# 一、页面                                                               #
+# ------------------------------------------------------------------ #
+# 1.1 主页
 @router.get("/")
 async def index(request: Request):
     """主页 — 船只管理界面"""
     return templates.TemplateResponse(request=request, name="index.html")
 
 
+# 1.2 任务详情页
 @router.get("/task/{task_id}")
 async def task_page(request: Request, task_id: str):
     """任务详情页 — SPA catch-all，返回同一页面由前端渲染"""

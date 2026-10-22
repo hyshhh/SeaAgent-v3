@@ -1,5 +1,6 @@
 """SeaAgent 原子工具服务。"""
 from __future__ import annotations
+
 import hashlib
 import json
 import math
@@ -7,16 +8,25 @@ import re
 import shutil
 import subprocess
 import uuid
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
 import cv2
 import numpy as np
+
 from config import load_config
 from memory import MemoryRepository, normalize_hull_number
 from services import AgentLLMService, QwenMultimodalEmbedder
 from vector_store import VectorCatalog
 
+
 class ToolService:
+    DEFAULT_TRACK_PAGE_SIZE = 50
+    MAX_TRACK_PAGE_SIZE = 100
+    DEFAULT_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
+
     def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None):
         self.config = config or load_config()
         self.repository = repository or MemoryRepository(self.config)
@@ -25,63 +35,96 @@ class ToolService:
         self.vectors = vectors or VectorCatalog(self.config)
         self.settings = self.config["pipeline"]["retrieval"]
 
-    # 时间窗口的合理性下限：比这更窄的窗口在监控视频里不可能有意义。
-    # 取一小时而不是一天，是为了不误伤"只看某几分钟"这种真实需求。
-    MIN_TRACK_WINDOW_SECONDS = 60.0
     # epoch 秒的合理下限（2017 年）：早于此说明模型在编数字，而不是在描述监控录像
-    MIN_PLAUSIBLE_EPOCH = 1483228800.0
+    MIN_PLAUSIBLE_EPOCH = datetime(2017, 1, 1, tzinfo=DEFAULT_TIMEZONE).timestamp()
+
+    @classmethod
+    def _epoch_seconds(cls, value: Any) -> float:
+        if isinstance(value, bool):
+            raise TypeError("boolean is not a timestamp")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            text = str(value).strip()
+            try:
+                timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError as error:
+                raise ValueError("expected an ISO-8601 timestamp") from error
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=cls.DEFAULT_TIMEZONE)
+            return timestamp.timestamp()
 
     @classmethod
     def _validate_time_range(cls, time_range: Any) -> tuple[tuple[float, float] | None, str]:
-        """校验时间窗口。返回 (归一化后的范围, 错误原因)；范围合法时错误为空串。
-
-        拒绝三类：反了的、窄到没有意义的、以及明显是在编数字的（起点早于 2017）。
-        这不是"帮模型猜意图"，而是不让一个无意义的窗口伪装成一次成功查询。
-        """
+        """将 ISO-8601 时间或 epoch 秒转成统一的 epoch 范围。"""
         if time_range is None:
             return None, ""
+        if not isinstance(time_range, (list, tuple)) or len(time_range) != 2:
+            return None, "time_range 必须包含起点和终点"
+        if isinstance(time_range[0], str) != isinstance(time_range[1], str):
+            return None, "time_range 两端必须使用相同格式：均为 ISO-8601 时间，或均为 epoch 秒"
         try:
-            start, end = (float(time_range[0]), float(time_range[1]))
-        except (TypeError, ValueError, IndexError):
-            return None, "time_range 必须是两个数字 [start, end]（epoch 秒）"
+            start, end = (cls._epoch_seconds(value) for value in time_range)
+        except (TypeError, ValueError, OverflowError):
+            return None, "time_range 必须是两个 ISO-8601 时间或 epoch 秒"
         if not (math.isfinite(start) and math.isfinite(end)):
-            return None, "time_range 必须是有限的 epoch 秒，不能是 nan 或 inf"
+            return None, "time_range 不能包含 nan 或 inf"
+        try:
+            datetime.fromtimestamp(start, cls.DEFAULT_TIMEZONE)
+            datetime.fromtimestamp(end, cls.DEFAULT_TIMEZONE)
+        except (OverflowError, OSError, ValueError):
+            return None, "time_range 超出支持的日期范围"
         if end < start:
             return None, f"time_range 的起点晚于终点：{[start, end]}"
-        if end - start < cls.MIN_TRACK_WINDOW_SECONDS:
-            return None, (
-                f"time_range 太窄（{end - start:g} 秒）：监控轨迹按分钟到小时分布，"
-                f"窗口至少 {cls.MIN_TRACK_WINDOW_SECONDS:g} 秒才有意义。"
-                "如果问题里没有明确的时间段，先向用户确认，不要自己缩小窗口反复试探。"
-            )
         if start < cls.MIN_PLAUSIBLE_EPOCH:
             return None, (
-                f"time_range 的起点 {start:g} 早于监控数据的时间范围（起点应在 2017 年之后）。"
-                "这通常是把占位数字当成了真实时间：请用户给出具体时段，或留空表示全部监控时段。"
+                "time_range 早于监控数据支持的 2017 年。请核对时间；没有时间条件时省略此参数。"
             )
         return (start, end), ""
 
-    def getTrack(self, timeRange: tuple[float, float] | None = None, hullNumber: str | None = None, finalMatchType: str | None = None, offset: int = 0, limit: int = 0) -> dict[str, Any]:
+    def getTrack(
+        self,
+        timeRange: tuple[str | float, str | float] | None = None,
+        hullNumber: str | None = None,
+        finalMatchType: str | None = None,
+        afterStartTime: float | None = None,
+        afterTrackId: str | None = None,
+        limit: int = DEFAULT_TRACK_PAGE_SIZE,
+    ) -> dict[str, Any]:
         scope, problem = self._validate_time_range(timeRange)
         if problem:
-            # 不回"成功的空结果"：那等于告诉模型这条路可行，它会继续缩窗口试探
-            return {
-                "ok": False,
-                "error": "invalid_time_range",
-                "hint": problem,
-                "queryScope": list(timeRange) if isinstance(timeRange, (list, tuple)) and len(timeRange) == 2 else None,
-                "tracks": [],
-                "trackIds": [],
-                "totalTrackCount": 0,
-                "returnedTrackCount": 0,
-            }
-        timeRange = scope
-        tracks = self.repository.find_tracks(timeRange, hullNumber, finalMatchType)
-        start = max(0, int(offset or 0))
-        page_size = max(0, min(200, int(limit or 0)))
-        selected = tracks[start:start + page_size] if page_size else tracks[start:]
-        next_offset = start + len(selected)
-        return {"ok": True, "queryScope": list(timeRange) if timeRange else None, "queryHullNumber": normalize_hull_number(hullNumber), "queryFinalMatchType": finalMatchType, "trackIds": [item["trackId"] for item in selected], "tracks": selected, "totalTrackCount": len(tracks), "returnedTrackCount": len(selected), "offset": start, "limit": page_size, "hasMore": next_offset < len(tracks), "nextOffset": next_offset if next_offset < len(tracks) else None}
+            return {"ok": False, "error": "invalid_time_range", "hint": problem}
+        try:
+            requested_limit = int(limit or self.DEFAULT_TRACK_PAGE_SIZE)
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "invalid_pagination", "hint": "limit 必须是整数"}
+        if requested_limit < 0:
+            return {"ok": False, "error": "invalid_pagination", "hint": "limit 不能为负数"}
+        if (afterStartTime is None) != (afterTrackId is None):
+            return {"ok": False, "error": "invalid_pagination", "hint": "分页游标必须同时包含 after_start_time 和 after_track_id"}
+        after = None
+        if afterStartTime is not None:
+            if isinstance(afterStartTime, bool):
+                return {"ok": False, "error": "invalid_pagination", "hint": "after_start_time 必须是有限数字"}
+            try:
+                cursor_time = float(afterStartTime)
+            except (TypeError, ValueError, OverflowError):
+                return {"ok": False, "error": "invalid_pagination", "hint": "after_start_time 必须是有限数字"}
+            if not math.isfinite(cursor_time) or not str(afterTrackId).strip():
+                return {"ok": False, "error": "invalid_pagination", "hint": "分页游标时间必须有限，轨迹 ID 不能为空"}
+            after = cursor_time, str(afterTrackId)
+        page_size = min(requested_limit or self.DEFAULT_TRACK_PAGE_SIZE, self.MAX_TRACK_PAGE_SIZE)
+        selected, has_more = self.repository.find_tracks_page(scope, hullNumber, finalMatchType, after, page_size)
+        return {
+            "ok": True,
+            "queryScope": [datetime.fromtimestamp(value, self.DEFAULT_TIMEZONE).isoformat() for value in scope] if scope is not None else None,
+            "tracks": selected,
+            "hasMore": has_more,
+            "nextCursor": {
+                "afterStartTime": selected[-1]["startTime"],
+                "afterTrackId": selected[-1]["trackId"],
+            } if has_more else None,
+        }
 
     def getFrames(self, trackIds: Iterable[str | int]) -> dict[str, Any]:
         ids = [str(value) for value in dict.fromkeys(trackIds)]
@@ -119,12 +162,15 @@ class ToolService:
             "unsearchableTrackIds": missing,
         }
 
-    def getClip(self, trackId: str | int, timeRange: tuple[float, float] | None = None, scale: float | None = None) -> dict[str, Any]:
+    def getClip(self, trackId: str | int, timeRange: tuple[str | float, str | float] | None = None, scale: float | None = None) -> dict[str, Any]:
+        scope, problem = self._validate_time_range(timeRange)
+        if problem:
+            return {"ok": False, "error": "invalid_time_range", "hint": problem, "trackId": str(trackId)}
         track = self.repository.get_track(trackId)
         if not track:
             return {"ok": False, "error": "track_not_found", "trackId": str(trackId)}
         start, end = track["startTime"], track["endTime"]
-        monitor_scope = (max(start, timeRange[0]), min(end, timeRange[1])) if timeRange else (start, end)
+        monitor_scope = (max(start, scope[0]), min(end, scope[1])) if scope else (start, end)
         if monitor_scope[0] > monitor_scope[1]:
             return {"ok": True, "found": False, "trackId": str(trackId)}
         trajectory_value = track.get("trajectoryPath")
@@ -137,9 +183,9 @@ class ToolService:
         source_value = trajectory.get("sourceVideoPath")
         source_path = Path(source_value) if source_value else None
         all_boxes = trajectory.get("boxes", [])
-        if timeRange and any("observedAt" in item for item in all_boxes):
+        if scope and any("observedAt" in item for item in all_boxes):
             boxes = [item for item in all_boxes if monitor_scope[0] <= float(item.get("observedAt") or 0) <= monitor_scope[1]]
-        elif timeRange:
+        elif scope:
             # Older trajectory files only have source-video timestamps. Map the
             # requested monitoring window into that video-time domain instead of
             # silently rendering the full track.

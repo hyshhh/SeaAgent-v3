@@ -29,7 +29,7 @@
       <section class="panel monitor-panel" id="pipelineControl">
         <div class="monitor-control-bar">
           <div class="monitor-control-title"><span class="eyebrow">Maritime Monitoring</span><h2>Vessel Detection &amp; Trajectory Memory Construction</h2></div>
-          <div class="status-line monitor-processing-status" id="pipelineStatus"><span class="status-dot idle"></span><div><small>Processing Status</small><strong id="pipelineStatusText">Select a monitoring video</strong></div></div>
+          <div class="status-line monitor-processing-status" id="pipelineStatus"><span class="status-dot idle"></span><strong id="pipelineStatusText">Select a monitoring video</strong></div>
           <div class="panel-actions monitor-control-actions">
             <button class="btn primary" id="btnStartPipeline" onclick="startVideoPipeline()">▶ Start Processing</button>
             <button class="btn danger" id="btnStopPipeline" onclick="stopVideoPipeline()" style="display:none">■ Stop Processing</button>
@@ -38,19 +38,19 @@
         <div class="result-area">
           <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
           <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="实时轨迹字幕流">
-            <div id="activeTrackMonitorRows" class="active-track-monitor-rows" role="log" aria-live="polite" aria-relevant="additions text"><div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong><small>Time · Status · Track<br>Visual description</small></div></div>
+            <div id="activeTrackMonitorRows" class="active-track-monitor-rows" role="log" aria-live="polite" aria-relevant="additions text"><div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong></div></div>
           </aside>
         </div>
         <div class="pipeline-log-box" id="pipelineLogBox" style="display:none">
           <div class="pool-status-grid">
             <section class="pool-status-panel candidate-pool-panel">
-              <div class="log-head"><div><strong>Candidate Pool</strong><span>Temporary observations</span></div><em>Up to 40 rows</em></div>
-              <div class="pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
+              <div class="log-head"><strong>Candidate Pool</strong></div>
+              <div class="pool-table-head"><span>Track ID</span><span>Pool Frames</span></div>
               <div id="candidatePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for candidate frames</div></div>
             </section>
             <section class="pool-status-panel keyframe-pool-panel">
-              <div class="log-head"><div><strong>Keyframe Pool</strong><span>Confirmed memory frames</span></div><em>Up to 40 rows</em></div>
-              <div class="pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
+              <div class="log-head"><strong>Keyframe Pool</strong></div>
+              <div class="pool-table-head keyframe-pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
               <div id="keyframePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for confirmed keyframes</div></div>
             </section>
           </div>
