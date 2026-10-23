@@ -11,7 +11,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from .shared_state import ROLE_UPDATE_TOOLS, STATE_TOOLS, SharedTaskState
+from .shared_state import STATE_TOOLS, SharedTaskState
 
 REPEAT_LIMIT = 4
 REPEAT_HINT = (
@@ -76,12 +76,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
     def _model_request(self, request: Any) -> Any:
         if self.cancelled and self.cancelled():
             raise AgentCancelled("cancelled")
-        snapshot = self.state.snapshot()
-        self.state.require_closeout_after_repeats(
-            self.scope,
-            int(snapshot.get("iteration", 0)),
-            self.repeat_limit,
-        )
         overrides: dict[str, Any] = {}
         if self.allowed_tools is not None and request.tools is not None:
             overrides["tools"] = [
@@ -117,41 +111,18 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         snapshot = self.state.snapshot()
         iteration = int(snapshot.get("iteration", 0))
         key = f"{_signature(name, call.get('args') or {})}|agent={self.scope}|iteration={iteration}"
-        closeout_tools = {"read_shared_state"}
-        if self.scope in ROLE_UPDATE_TOOLS:
-            closeout_tools.add(ROLE_UPDATE_TOOLS[self.scope])
         record = self.state.claim_tool_call(
             self.scope,
             key,
             name,
             write=name == "add_registry_vessel",
             repeat_limit=self.repeat_limit,
-            closeout_tools=closeout_tools,
-            iteration=iteration,
         )
         self._save()
 
-        if record.get("blocked") == "closeout_required":
-            return None, _message(
-                request,
-                "重复调用已触发收尾；请读取共享状态并提交本角色负责的状态。",
-                artifact={"closeout_required": True},
-            )
         if name == "read_shared_state" and record.get("status") == "invalidated":
             return key, None
-        if record.get("blocked"):
-            if record.get("blocked") == "repeat_limit":
-                return None, _message(
-                    request,
-                    _REPEAT_CLOSEOUT_MESSAGE,
-                    artifact={"closeout_required": True, "repeat_count": record["repeat_count"]},
-                )
-            if self.state.is_closeout_required(self.scope):
-                return None, _message(
-                    request,
-                    "收尾模式只允许读取共享状态和提交本角色状态；本次工具调用未执行。",
-                    artifact={"closeout_required": True},
-                )
+        if record.get("blocked") == "repeat_limit":
             return None, _message(
                 request,
                 _REPEAT_CLOSEOUT_MESSAGE,

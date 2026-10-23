@@ -28,7 +28,7 @@ class MissingStateWrite(RuntimeError):
 
 
 class StateWriteMiddleware(AgentMiddleware):
-    """Enforce per-role model limits and keep the final model calls status-only."""
+    """Enforce per-role model limits and restrict closeout to state and skill reads."""
 
     def __init__(
         self,
@@ -74,9 +74,9 @@ class StateWriteMiddleware(AgentMiddleware):
                 self.persist()
             return request
 
-        # This limits the next model request; the shared-state call guard separately
-        # handles ordinary calls already emitted in the current model response.
         permitted = {"read_shared_state", ROLE_UPDATE_TOOLS[self.role]}
+        if self.allowed_tools is None or "read_file" in self.allowed_tools:
+            permitted.add("read_file")
         if self.allowed_tools is not None:
             permitted &= self.allowed_tools
         overrides: dict[str, Any] = {}

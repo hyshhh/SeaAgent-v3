@@ -88,17 +88,20 @@ def test_second_and_third_exact_calls_replay_and_fourth_enters_closeout():
     assert len(calls) == 1
     assert state.is_closeout_required("executor")
 
-    blocked = guard.wrap_tool_call(_call("get_frames", {"track_id": 1}, "5"), handler)
-    assert blocked.artifact["closeout_required"] is True
-    assert len(calls) == 1
+    emitted_call = guard.wrap_tool_call(
+        _call("get_frames", {"track_id": 1}, "5"), handler
+    )
+    assert emitted_call.status == "success"
+    assert len(calls) == 2
 
 
-def test_closeout_filters_next_model_request_and_blocks_remaining_batch_calls():
+def test_closeout_narrows_tools_without_intercepting_emitted_tool_calls():
     state = SharedTaskState("q")
     state.start_agent("executor")
     tools = [
         _tool("read_shared_state"),
         _tool("update_execution_state"),
+        _tool("read_file"),
         _tool("get_track"),
     ]
     request = _Request(tools)
@@ -114,6 +117,7 @@ def test_closeout_filters_next_model_request_and_blocks_remaining_batch_calls():
     assert {tool.name for tool in middleware._request(request).tools} == {
         "read_shared_state",
         "update_execution_state",
+        "read_file",
         "get_track",
     }
     for index in range(4):
@@ -121,14 +125,17 @@ def test_closeout_filters_next_model_request_and_blocks_remaining_batch_calls():
             _call("get_track", {"track_id": 7}, str(index)), _result
         )
 
-    remaining_call = guard.wrap_tool_call(
+    calls = []
+    guard.wrap_tool_call(
         _call("get_frames", {"track_id": 7}, "remaining"),
-        lambda _request: pytest.fail("remaining call from the current batch executed"),
+        lambda current: calls.append(current) or _result(current),
     )
-    assert remaining_call.artifact["closeout_required"] is True
-    assert {tool.name for tool in middleware._request(request).tools} == {
+    assert len(calls) == 1
+    closeout = guard.wrap_model_call(request, lambda current: middleware._request(current))
+    assert {tool.name for tool in closeout.tools} == {
         "read_shared_state",
         "update_execution_state",
+        "read_file",
     }
 
 
@@ -138,6 +145,7 @@ def test_repeat_threshold_switches_next_model_request_to_closeout_tools():
     tools = [
         _tool("read_shared_state"),
         _tool("update_execution_state"),
+        _tool("read_file"),
         _tool("get_track"),
     ]
     request = _Request(tools)
@@ -146,7 +154,7 @@ def test_repeat_threshold_switches_next_model_request_to_closeout_tools():
     )
     guard = RepeatToolCallMiddleware(state=state, scope="executor")
 
-    for index in range(3):
+    for index in range(4):
         guard.wrap_tool_call(_call("get_track", {"track_id": 7}, str(index)), _result)
 
     closeout = guard.wrap_model_call(request, lambda current: middleware._request(current))
@@ -154,26 +162,8 @@ def test_repeat_threshold_switches_next_model_request_to_closeout_tools():
     assert {tool.name for tool in closeout.tools} == {
         "read_shared_state",
         "update_execution_state",
+        "read_file",
     }
-
-
-def test_repeat_threshold_is_scoped_to_agent_and_iteration():
-    state = SharedTaskState("q")
-    state.start_agent("executor")
-    for index in range(3):
-        state.claim_tool_call(
-            "planner", f"call-{index}", "get_track", iteration=state.snapshot()["iteration"]
-        )
-    state.claim_tool_call("executor", "old-iteration", "get_track", iteration=-1)
-    middleware = StateWriteMiddleware("executor", state, 6, 2)
-    guard = RepeatToolCallMiddleware(state=state, scope="executor")
-
-    guard.wrap_model_call(
-        _Request([_tool("get_track")]),
-        lambda current: middleware._request(current),
-    )
-
-    assert not state.is_closeout_required("executor")
 
 
 def test_repeat_signature_normalizes_argument_order_and_is_scoped_by_role_and_iteration():

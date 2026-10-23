@@ -428,23 +428,6 @@ class SharedTaskState:
             self._changed()  # 有变化就推进版本
             return mode  # "normal" / "closeout" / "exhausted"
 
-    def require_closeout_after_repeats(
-        self, role: str, iteration: int, repeat_limit: int
-    ) -> bool:
-        """Enter closeout before the model can request a repeated tool again."""
-        threshold = max(1, int(repeat_limit)) - 1  # 提前一次：达到上限前就切收尾
-        with self._lock:  # 读账本和改标志必须原子
-            repeated = any(  # 本轮这个角色有没有调用快到重复上限
-                record.get("agent") == role  # 只看这个角色
-                and record.get("iteration") == iteration  # 只看本轮
-                and int(record.get("repeat_count", 1)) >= threshold  # 重复次数到阈值
-                for record in self._values["call_history"].values()
-            )
-            if repeated and not self._values["closeout_required"].get(role):  # 有重复且还没切
-                self._values["closeout_required"][role] = True  # 切到收尾模式
-                self._changed()  # 推进版本
-            return bool(self._values["closeout_required"].get(role))  # 返回当前是否已要求收尾
-
     def require_closeout(self, role: str) -> None:
         with self._lock:
             if not self._values["closeout_required"].get(role):
@@ -479,8 +462,6 @@ class SharedTaskState:
         tool_name: str,
         write: bool = False,
         repeat_limit: int = 4,
-        closeout_tools: set[str] | None = None,
-        iteration: int | None = None,
     ) -> dict[str, Any]:
         """统计所有工具请求；重复达到阈值时切换到状态收尾。"""
         with self._lock:
@@ -490,11 +471,6 @@ class SharedTaskState:
             # A model response may already contain several tool calls. If an earlier
             # call in that batch entered closeout, stop its remaining ordinary calls;
             # StateWriteMiddleware filters tools on the next model request.
-            if self._values["closeout_required"].get(role) and tool_name not in (
-                closeout_tools or set()
-            ):
-                self._changed()
-                return {"blocked": "closeout_required"}
             if not key:
                 self._changed()
                 return {"execute": True}
@@ -503,14 +479,10 @@ class SharedTaskState:
                     "status": "pending",
                     "write": write,
                     "tool": tool_name,
-                    "agent": role,
-                    "iteration": iteration,
                     "repeat_count": 1,
                 }
                 previous = None
             else:
-                previous.setdefault("agent", role)
-                previous.setdefault("iteration", iteration)
                 previous["repeat_count"] = int(previous.get("repeat_count", 1)) + 1
                 if previous["repeat_count"] >= max(1, repeat_limit):
                     self._values["closeout_required"][role] = True
