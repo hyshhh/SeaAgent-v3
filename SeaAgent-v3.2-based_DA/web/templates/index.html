@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=30">
 <link rel="stylesheet" href="/static/css/academic.css?v=37">
-<link rel="stylesheet" href="/static/css/qa.css?v=12">
+<link rel="stylesheet" href="/static/css/qa.css?v=13">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -176,6 +176,20 @@
       </aside>
 
       <main class="qa-main" aria-label="Video question answering workspace">
+        <section id="agentConfirmPanel" class="qa-confirm" data-state="idle" hidden aria-label="Write confirmation" aria-live="polite">
+          <div class="qa-confirm-head">
+            <span class="qa-confirm-title">待确认 · 写入先验库</span>
+            <span id="agentConfirmHint" class="qa-confirm-hint"></span>
+          </div>
+          <dl id="agentConfirmBody" class="qa-confirm-body"></dl>
+          <div class="qa-confirm-actions">
+            <button type="button" id="btnConfirmApprove" class="qa-confirm-approve">批准写入</button>
+            <button type="button" id="btnConfirmReject" class="qa-confirm-reject">拒绝</button>
+          </div>
+          <label class="qa-confirm-feedback"><span>拒绝理由（会交回模型，让它换个做法）</span>
+            <textarea id="agentConfirmFeedback" rows="2" placeholder="例如：这条不该入库，先查它在不在库里"></textarea>
+          </label>
+        </section>
         <div class="qa-view" id="qaChatView">
         <div class="qa-conversation" id="qaConversationScroll">
           <div class="qa-welcome" id="qaWelcome">
@@ -195,21 +209,6 @@
           <div class="qa-user-turn" id="qaUserTurn" hidden>
             <div class="qa-user-bubble"><span class="qa-message-label">You</span><p id="qaUserQuestion"></p></div>
           </div>
-
-          <section id="agentConfirmPanel" class="qa-confirm" data-state="idle" hidden aria-label="Write confirmation">
-<div class="qa-confirm-head">
-<span class="qa-confirm-title">待确认 · 写入先验库</span>
-<span id="agentConfirmHint" class="qa-confirm-hint"></span>
-</div>
-<dl id="agentConfirmBody" class="qa-confirm-body"></dl>
-<div class="qa-confirm-actions">
-<button type="button" id="btnConfirmApprove" class="qa-confirm-approve">批准写入</button>
-<button type="button" id="btnConfirmReject" class="qa-confirm-reject">拒绝</button>
-</div>
-<label class="qa-confirm-feedback"><span>拒绝理由（会交回模型，让它换个做法）</span>
-<textarea id="agentConfirmFeedback" rows="2" placeholder="例如：这条不该入库，先查它在不在库里"></textarea></label>
-</section>
-
 
 <section id="agentPlanPanel" class="qa-plan" data-state="idle" hidden aria-label="Plan checklist">
 <div class="qa-plan-head">
@@ -449,7 +448,7 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=22"></script>
   <script src="/static/js/memory.js?v=8"></script>
-<script src="/static/js/agent.js?v=84"></script>
+<script src="/static/js/agent.js?v=85"></script>
 <script src="/static/js/settings.js?v=12"></script>
 </body>
 </html>

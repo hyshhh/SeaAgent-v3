@@ -138,6 +138,9 @@
 #tab-agent-qa .qa-runtime-badge i.failed,
 #tab-agent-qa #agentThinkingDot.failed,
 #tab-agent-qa #qaHeaderDot.failed { background: var(--qa-red); }
+#tab-agent-qa .qa-runtime-badge i.awaiting_confirmation,
+#tab-agent-qa #agentThinkingDot.awaiting_confirmation,
+#tab-agent-qa #qaHeaderDot.awaiting_confirmation { background: #d89b32; }
 #tab-agent-qa .qa-layout {
   flex: 1 1 auto;
   height: auto;
@@ -147,7 +150,7 @@
   grid-template-columns: 236px minmax(0, 1fr) clamp(360px, 26vw, 520px);
 }
 /* 主列的两种视图：对话（消息流 + 输入区）与轨迹（执行步骤表），各自铺满主列 */
-#tab-agent-qa .qa-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+#tab-agent-qa .qa-view { flex: 1 1 0; height: auto; min-height: 0; display: flex; flex-direction: column; }
 /* 会话栏：对话记忆的入口，布局参考主流对话产品的侧栏——新建按钮在最上，
    下面是分区标题 + 会话条目（图标 / 标题 / 时间·轮数，悬停才露出删除）。 */
 #tab-agent-qa .qa-sessions {
@@ -561,6 +564,7 @@
 #tab-agent-qa .qa-step-badge.is-ok { color: #2d7a5d; background: var(--qa-green-soft); }
 #tab-agent-qa .qa-step-badge.is-error { color: var(--qa-red); background: var(--qa-red-soft); }
 #tab-agent-qa .qa-step-badge.is-running { color: #8a6d1f; background: #fdf6e3; }
+#tab-agent-qa .qa-step-badge.is-confirmation { color: #704d13; background: #fff2cf; }
 #tab-agent-qa .qa-step-result { display: -webkit-box; margin-top: 2px; overflow: hidden; color: #8593a0; font: 10px/1.5 Consolas, monospace; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 #tab-agent-qa .qa-step-detail { margin-top: 4px; }
 #tab-agent-qa .qa-step-detail summary { color: #9aa5b1; cursor: pointer; font-size: 9.5px; }
@@ -773,6 +777,12 @@
 
 .qa-confirm[data-state='pending'] {
   border-left-color: var(--qa-blue);
+}
+
+#tab-agent-qa .qa-confirm[data-state='pending'] {
+  flex: 0 0 auto;
+  margin: 12px 18px 0;
+  box-shadow: 0 8px 24px rgba(24, 52, 78, .08);
 }
 
 .qa-confirm[data-state='failed'] {

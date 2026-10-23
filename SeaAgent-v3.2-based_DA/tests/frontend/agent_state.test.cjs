@@ -5,12 +5,14 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../../web/static/js/agent.js'), 'utf8');
+const template = fs.readFileSync(path.join(__dirname, '../../web/templates/index.html'), 'utf8');
 
 function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: [] }) })) {
   const elements = new Map();
   for (const id of [
     'agentPlanPanel', 'agentPlanList', 'agentPlanProgress', 'agentPlanMeterFill',
     'agentConfirmPanel', 'agentConfirmBody', 'agentConfirmHint', 'agentConfirmFeedback',
+    'btnConfirmApprove', 'btnConfirmReject',
     'agentFinalView', 'agentAnswer', 'btnAskAgent', 'btnStopAgent',
     'agentThinkingState',
   ]) {
@@ -59,6 +61,32 @@ test('a split NDJSON confirmation is accepted as a terminal result', async () =>
   assert.equal(returned.state, 'awaiting_confirmation');
   assert.equal(ui.elements.get('agentConfirmPanel').hidden, false);
   assert.equal(ui.run('pendingConfirmation.sessionId'), 't');
+});
+
+test('confirmation remains actionable from the trace view and marks its tool as waiting', () => {
+  const ui = page();
+  ui.run(`currentSessionId = 't'; qaView = 'trace';
+    const run = { id: 't', status: 'running', events: [
+      { type: 'tool_start', tool: 'add_registry_vessel', label: '先验库写入', callId: 'c1', agent: 'executor' }
+    ] };
+    sessionRuns.set('t', run);
+    dispatchRunEvent(run, { type: 'confirm', confirmation: ${JSON.stringify(confirmation)} });`);
+
+  assert.equal(ui.elements.get('agentConfirmPanel').hidden, false);
+  assert.equal(ui.run("sessionRuns.get('t').status"), 'awaiting_confirmation');
+  assert.equal(ui.run("stepsFromEvents(sessionRuns.get('t').events)[0].status"), 'awaiting_confirmation');
+  assert.equal(ui.elements.get('btnAskAgent').disabled, true);
+  assert.equal(ui.elements.get('btnStopAgent').hidden, true);
+});
+
+test('confirmation controls are outside both mutually exclusive QA views', () => {
+  const confirmIndex = template.indexOf('id="agentConfirmPanel"');
+  const chatIndex = template.indexOf('id="qaChatView"');
+  const traceIndex = template.indexOf('id="qaTraceView"');
+
+  assert.ok(confirmIndex >= 0 && confirmIndex < chatIndex && confirmIndex < traceIndex);
+  assert.match(template, /qa\.css\?v=13/);
+  assert.match(template, /agent\.js\?v=85/);
 });
 
 test('confirming twice sends one request and displays the actual returned answer', async () => {

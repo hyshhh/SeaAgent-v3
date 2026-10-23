@@ -268,6 +268,10 @@ function renderAgentConfirmation(event) {
   if (hint) hint.textContent = action.description || `工具：${action.tool}`;
   const feedback = document.getElementById('agentConfirmFeedback');
   if (feedback) { feedback.value = ''; feedback.disabled = false; }
+  for (const id of ['btnConfirmApprove', 'btnConfirmReject']) {
+    const button = document.getElementById(id);
+    if (button) button.disabled = false;
+  }
   panel.hidden = false;
   panel.dataset.state = 'pending';
 }
@@ -294,6 +298,10 @@ async function submitConfirmation(decision) {
   sessionRuns.set(sessionId, run);
   syncComposer(run);
   if (panel) panel.dataset.state = 'sending';
+  for (const id of ['btnConfirmApprove', 'btnConfirmReject']) {
+    const button = document.getElementById(id);
+    if (button) button.disabled = true;
+  }
   try {
     const response = await fetch('/api/agent/query/resume', {
       method: 'POST',
@@ -319,6 +327,10 @@ async function submitConfirmation(decision) {
     run.status = 'awaiting_confirmation';
     if (currentSessionId === sessionId) {
       if (panel) panel.dataset.state = 'failed';
+      for (const id of ['btnConfirmApprove', 'btnConfirmReject']) {
+        const button = document.getElementById(id);
+        if (button) button.disabled = false;
+      }
       syncComposer(run);
       appendStandardEvent({ title: '恢复失败' }, 'error', '!', 'CONFIRM', String(error && error.message ? error.message : error));
     }
@@ -340,7 +352,14 @@ function stepsFromEvents(events) {
     // 从智能体的步骤带 agent 标记：轨迹里要能看出「这一步是谁做的」
     const agent = event.agent || '';
     if (event.type === 'plan') renderAgentPlan(event);
-    else if (event.type === 'confirm') renderAgentConfirmation(event);
+    else if (event.type === 'confirm') {
+      renderAgentConfirmation(event);
+      const action = event.confirmation?.actions?.[0];
+      const pending = [...steps].reverse().find((step) =>
+        step.kind === 'tool' && step.status === 'running' && step.tool === action?.tool,
+      );
+      if (pending) pending.status = 'awaiting_confirmation';
+    }
     if (event.type === 'status') push('system', event.title || event.message || '状态更新');
     else if (event.type === 'skill') push('skill', `加载技能 ${event.skill || event.title || ''}`, { agent });
     else if (event.type === 'model') {
@@ -401,7 +420,8 @@ function renderTrajectory() {
   }
   list.innerHTML = steps.map((step, index) => {
     const kind = STEP_KINDS[step.kind] || STEP_KINDS.system;
-    const badge = step.status === 'running' ? '<span class="qa-step-badge is-running">执行中</span>'
+    const badge = step.status === 'awaiting_confirmation' ? '<span class="qa-step-badge is-confirmation">等待人工确认</span>'
+      : step.status === 'running' ? '<span class="qa-step-badge is-running">执行中</span>'
       : step.status === 'error' ? '<span class="qa-step-badge is-error">失败</span>'
       : step.status === 'ok' ? '<span class="qa-step-badge is-ok">完成</span>' : '';
     // 从智能体做的步骤降一级并挂上名字，主从结构在轨迹里一眼可见
@@ -528,7 +548,7 @@ function renderRestoredTurn(turn) {
   if (turn?.state === 'awaiting_confirmation') {
     renderAgentConfirmation({ confirmation: turn.confirmation });
     syncComposer({ status: 'awaiting_confirmation' });
-    setHarnessState('等待确认', 'running');
+    setHarnessState('等待确认', 'awaiting_confirmation');
     return;
   }
   const view = document.getElementById('agentFinalView');
@@ -844,7 +864,7 @@ function appendHarnessEvent(event) {
     setHarnessState(event.result?.state === 'cancelled' ? 'Stopped' : 'Complete', event.result?.state === 'cancelled' ? '' : 'complete');
   } else if (event.type === 'confirm') {
     renderAgentConfirmation(event);
-    setHarnessState('等待确认', 'running');
+    setHarnessState('等待确认', 'awaiting_confirmation');
   } else if (event.type === 'error') {
     const detail = harnessErrorDetail(event);
     appendStandardEvent(event, 'error', '!', 'ERROR', detail || 'Harness failed');
@@ -937,7 +957,7 @@ function renderAgentAnswer(result) {
   if (shared) renderAgentPlan({ steps: (shared.plan || []).map((step) => ({ ...step, status: (shared.step_status || {})[step.id] || 'pending' })) });
   if (payload.state === 'awaiting_confirmation') {
     renderAgentConfirmation({ confirmation: payload.confirmation });
-    setHarnessState('等待确认', 'running');
+    setHarnessState('等待确认', 'awaiting_confirmation');
     return;
   }
   const cancelled = payload.state === 'cancelled';
@@ -1048,8 +1068,13 @@ async function clearAgentMemory() {
 /* 事件先入该轮的缓冲区，再决定要不要落到 DOM：正在看这个会话才渲染。 */
 function dispatchRunEvent(run, event) {
   run.events.push(event);
+  if (event.type === 'confirm') {
+    run.status = 'awaiting_confirmation';
+    run.result = event.result || run.result;
+  }
   if (run.events.length > 500) run.events.splice(0, run.events.length - 500);
   if (currentSessionId !== run.id) return;
+  if (event.type === 'confirm') syncComposer(run);
   appendHarnessEvent(event);
   // 轨迹页正开着就跟着长；没开着等切回去再重画
   if (qaView === 'trace') renderTrajectory();
