@@ -276,7 +276,11 @@ class SharedTaskState:
                     - set(self._values["evidence_ids"])
                 )
                 if unknown:
-                    raise ValueError(f"evidence_ids must come from successful tool results: {', '.join(unknown)}")
+                    raise ValueError(
+                        "evidence_ids 只能包含成功工具结果中的实体证据 ID（如 trackId、keyframeId、"
+                        "shipSegmentId、registryReferenceId），不能填 tool_call_id；运行时已自动收集证据，"
+                        f"通常可省略此字段。无效 ID：{', '.join(unknown)}"
+                    )
             changed = any(self._values.get(key) != value for key, value in patch.items())
             counts = self._values["role_write_counts"]
             counts[role] = counts.get(role, 0) + 1
