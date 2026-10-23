@@ -74,6 +74,8 @@ class StateWriteMiddleware(AgentMiddleware):
                 self.persist()
             return request
 
+        # This limits the next model request; the shared-state call guard separately
+        # handles ordinary calls already emitted in the current model response.
         permitted = {"read_shared_state", ROLE_UPDATE_TOOLS[self.role]}
         if self.allowed_tools is not None:
             permitted &= self.allowed_tools

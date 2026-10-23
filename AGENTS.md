@@ -4,6 +4,7 @@
 
 - The maintained application is `SeaAgent-v3.2-based_DA`. Treat `SeaAgent-v3.1-based_LG` and archived documents as historical references; do not update them unless the user asks.
 - Keep edits scoped to the requested project and task. Do not include unrelated workspace changes in a commit.
+- Preserve existing and user-marked code comments. Do not remove or rewrite comments during cleanup unless the user explicitly asks for comment edits.
 
 ## Model-facing prompts and tools
 

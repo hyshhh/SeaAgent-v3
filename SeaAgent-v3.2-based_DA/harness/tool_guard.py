@@ -76,6 +76,12 @@ class RepeatToolCallMiddleware(AgentMiddleware):
     def _model_request(self, request: Any) -> Any:
         if self.cancelled and self.cancelled():
             raise AgentCancelled("cancelled")
+        snapshot = self.state.snapshot()
+        self.state.require_closeout_after_repeats(
+            self.scope,
+            int(snapshot.get("iteration", 0)),
+            self.repeat_limit,
+        )
         overrides: dict[str, Any] = {}
         if self.allowed_tools is not None and request.tools is not None:
             overrides["tools"] = [
@@ -121,6 +127,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             write=name == "add_registry_vessel",
             repeat_limit=self.repeat_limit,
             closeout_tools=closeout_tools,
+            iteration=iteration,
         )
         self._save()
 

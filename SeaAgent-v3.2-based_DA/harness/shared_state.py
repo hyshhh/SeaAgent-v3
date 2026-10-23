@@ -331,14 +331,14 @@ class SharedTaskState:
             "execution_status": {"idle", "running", "success", "failed"},
             "decision": {None, "terminate", "replan", "continue", "failed"},
             "task_status": {
-                "running",
-                "completed",
-                "stalled",
-                "cancelled",
-                "awaiting_confirmation",
-                "awaiting_input",
-                "failed",
-                "error",
+                "running",                # 正在执行
+                "completed",              # 正常完成
+                "stalled",                # 推进不下去（重复调用/超时/没写状态）
+                "cancelled",              # 用户主动停止
+                "awaiting_confirmation",  # 写库前等待人工批准
+                "awaiting_input",         # 等待用户补充信息（澄清）
+                "failed",                 # 反思阶段判定任务无法继续
+                "error",                  # 系统故障
             },
             "pending_agent": {None, "planner", "executor", "reflector"},
         }
@@ -381,10 +381,10 @@ class SharedTaskState:
             version = self._values["version"]
             self._values = SharedTaskState(
                 question, artifact_dir=self._artifact_dir, artifact_root=self._artifact_root
-            ).snapshot()
+            ).snapshot()#新建一个实例，所有字段回到初始值 #新实例继续用同一个外置结果目录，不会丢配置
             self._values.update(version=version + 1)
 
-    def _clear_turn_artifacts(self) -> None:
+    def _clear_turn_artifacts(self) -> None:  #会话开始时，清理上一轮的大工具结果文件
         self._cleanup_artifacts(self._external_refs(self._values.get("tool_results", [])))
         if self._artifact_dir != self._artifact_root:
             shutil.rmtree(self._artifact_dir, ignore_errors=True)
@@ -411,22 +411,39 @@ class SharedTaskState:
     def claim_model_request(
         self, role: str, model_budget: int, closeout_budget: int
     ) -> str:
-        with self._lock:
-            regular = self._values["model_requests"].get(role, 0)
-            closeout = self._values["closeout_requests"].get(role, 0)
-            required = self._values["closeout_required"].get(role, False)
-            if required or regular >= model_budget:
-                self._values["closeout_required"][role] = True
-                if closeout >= closeout_budget:
-                    self._changed()
-                    return "exhausted"
-                self._values["closeout_requests"][role] = closeout + 1
-                mode = "closeout"
-            else:
-                self._values["model_requests"][role] = regular + 1
-                mode = "normal"
-            self._changed()
-            return mode
+        with self._lock:  # 计数必须原子，避免并发请求超卖
+            regular = self._values["model_requests"].get(role, 0)  # 已用掉的常规模型请求
+            closeout = self._values["closeout_requests"].get(role, 0)  # 已用掉的收尾请求，单独计数
+            required = self._values["closeout_required"].get(role, False)  # 是否已进入收尾模式
+            if required or regular >= model_budget:  # 已要求收尾，或常规额度用完
+                self._values["closeout_required"][role] = True  # 切到收尾模式
+                if closeout >= closeout_budget:  # 收尾额度也用完
+                    self._changed()  # 先推进版本再返回
+                    return "exhausted"  # 彻底没额度了
+                self._values["closeout_requests"][role] = closeout + 1  # 收尾请求 +1
+                mode = "closeout"  # 返回收尾模式
+            else:  # 常规额度还有
+                self._values["model_requests"][role] = regular + 1  # 常规请求 +1
+                mode = "normal"  # 返回常规模式
+            self._changed()  # 有变化就推进版本
+            return mode  # "normal" / "closeout" / "exhausted"
+
+    def require_closeout_after_repeats(
+        self, role: str, iteration: int, repeat_limit: int
+    ) -> bool:
+        """Enter closeout before the model can request a repeated tool again."""
+        threshold = max(1, int(repeat_limit)) - 1  # 提前一次：达到上限前就切收尾
+        with self._lock:  # 读账本和改标志必须原子
+            repeated = any(  # 本轮这个角色有没有调用快到重复上限
+                record.get("agent") == role  # 只看这个角色
+                and record.get("iteration") == iteration  # 只看本轮
+                and int(record.get("repeat_count", 1)) >= threshold  # 重复次数到阈值
+                for record in self._values["call_history"].values()
+            )
+            if repeated and not self._values["closeout_required"].get(role):  # 有重复且还没切
+                self._values["closeout_required"][role] = True  # 切到收尾模式
+                self._changed()  # 推进版本
+            return bool(self._values["closeout_required"].get(role))  # 返回当前是否已要求收尾
 
     def require_closeout(self, role: str) -> None:
         with self._lock:
@@ -434,11 +451,11 @@ class SharedTaskState:
                 self._values["closeout_required"][role] = True
                 self._changed()
 
-    def is_closeout_required(self, role: str) -> bool:
+    def is_closeout_required(self, role: str) -> bool:  # 这个角色是否已被要求收尾
         with self._lock:
             return bool(self._values["closeout_required"].get(role))
 
-    def mark_closeout_reminder(self, role: str) -> bool:
+    def mark_closeout_reminder(self, role: str) -> bool:  # 标记收尾提醒已发；已发过返回 False
         with self._lock:
             if self._values.get("closeout_reminder_sent", {}).get(role):
                 return False
@@ -446,7 +463,7 @@ class SharedTaskState:
             self._changed()
             return True
 
-    def claim_closeout_repair(self, role: str) -> bool:
+    def claim_closeout_repair(self, role: str) -> bool:  # 领取一次补写机会；用过返回 False
         with self._lock:
             if self._values["closeout_repair_used"].get(role):
                 return False
@@ -463,12 +480,16 @@ class SharedTaskState:
         write: bool = False,
         repeat_limit: int = 4,
         closeout_tools: set[str] | None = None,
+        iteration: int | None = None,
     ) -> dict[str, Any]:
         """统计所有工具请求；重复达到阈值时切换到状态收尾。"""
         with self._lock:
             counts = self._values["tool_calls"]
             counts[role] = counts.get(role, 0) + 1
             previous = self._values["call_history"].get(key) if key else None
+            # A model response may already contain several tool calls. If an earlier
+            # call in that batch entered closeout, stop its remaining ordinary calls;
+            # StateWriteMiddleware filters tools on the next model request.
             if self._values["closeout_required"].get(role) and tool_name not in (
                 closeout_tools or set()
             ):
@@ -482,10 +503,14 @@ class SharedTaskState:
                     "status": "pending",
                     "write": write,
                     "tool": tool_name,
+                    "agent": role,
+                    "iteration": iteration,
                     "repeat_count": 1,
                 }
                 previous = None
             else:
+                previous.setdefault("agent", role)
+                previous.setdefault("iteration", iteration)
                 previous["repeat_count"] = int(previous.get("repeat_count", 1)) + 1
                 if previous["repeat_count"] >= max(1, repeat_limit):
                     self._values["closeout_required"][role] = True
