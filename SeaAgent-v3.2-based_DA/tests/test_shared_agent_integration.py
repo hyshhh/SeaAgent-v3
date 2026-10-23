@@ -259,6 +259,22 @@ def test_confirmation_survives_a_new_runtime_and_cannot_be_replayed(tmp_path):
     assert service.writes == 1
 
 
+def test_real_graph_emits_frontend_confirmation_with_pending_write_details(tmp_path):
+    events = []
+    runtime = _runtime(tmp_path, _Service(), write=True)
+    runtime.event_handler = events.append
+
+    paused = runtime.run("add 003", "t")
+
+    confirmation_events = [event for event in events if event.get("type") == "confirm"]
+    assert paused["state"] == "awaiting_confirmation"
+    assert len(confirmation_events) == 1
+    action = confirmation_events[0]["confirmation"]["actions"][0]
+    assert action["tool"] == "add_registry_vessel"
+    assert action["arguments"]["hull_number"] == "003"
+    assert confirmation_events[0]["result"]["state"] == "awaiting_confirmation"
+
+
 def test_same_question_after_completion_starts_fresh_task_state(tmp_path):
     runtime = _runtime(tmp_path, _Service())
     first = runtime.run("scan", "t")

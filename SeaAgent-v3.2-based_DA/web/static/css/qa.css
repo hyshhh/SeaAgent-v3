@@ -781,7 +781,7 @@
 
 #tab-agent-qa .qa-confirm[data-state='pending'] {
   flex: 0 0 auto;
-  margin: 12px 18px 0;
+  margin: 12px 0;
   box-shadow: 0 8px 24px rgba(24, 52, 78, .08);
 }
 

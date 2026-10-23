@@ -12,13 +12,14 @@ function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: []
   for (const id of [
     'agentPlanPanel', 'agentPlanList', 'agentPlanProgress', 'agentPlanMeterFill',
     'agentConfirmPanel', 'agentConfirmBody', 'agentConfirmHint', 'agentConfirmFeedback',
+    'qaChatConfirmationMount', 'qaTraceConfirmationMount',
     'btnConfirmApprove', 'btnConfirmReject',
     'agentFinalView', 'agentAnswer', 'btnAskAgent', 'btnStopAgent',
     'agentThinkingState',
   ]) {
     elements.set(id, {
       hidden: true, innerHTML: '', textContent: '', value: '', disabled: false,
-      dataset: {}, style: { setProperty() {} },
+      dataset: {}, style: { setProperty() {} }, appendChild(child) { child.parentElement = this; },
     });
   }
   const context = vm.createContext({
@@ -79,14 +80,42 @@ test('confirmation remains actionable from the trace view and marks its tool as 
   assert.equal(ui.elements.get('btnStopAgent').hidden, true);
 });
 
-test('confirmation controls are outside both mutually exclusive QA views', () => {
+test('confirmation card is mounted in the visible chat or trace view', () => {
   const confirmIndex = template.indexOf('id="agentConfirmPanel"');
+  const chatMountIndex = template.indexOf('id="qaChatConfirmationMount"');
   const chatIndex = template.indexOf('id="qaChatView"');
+  const traceMountIndex = template.indexOf('id="qaTraceConfirmationMount"');
   const traceIndex = template.indexOf('id="qaTraceView"');
+  const chatAnswerIndex = template.indexOf('id="agentFinalView"');
+  const traceListIndex = template.indexOf('id="qaTraceList"');
 
-  assert.ok(confirmIndex >= 0 && confirmIndex < chatIndex && confirmIndex < traceIndex);
-  assert.match(template, /qa\.css\?v=13/);
-  assert.match(template, /agent\.js\?v=85/);
+  assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
+  assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
+  assert.match(template, /qa\.css\?v=14/);
+  assert.match(template, /agent\.js\?v=86/);
+  const ui = page();
+  ui.run(`currentSessionId = 't'; qaView = 'chat';
+    renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);
+  assert.equal(ui.elements.get('agentConfirmPanel').parentElement, ui.elements.get('qaChatConfirmationMount'));
+  ui.run("switchQaView('trace')");
+  assert.equal(ui.elements.get('agentConfirmPanel').parentElement, ui.elements.get('qaTraceConfirmationMount'));
+  ui.run("switchQaView('chat')");
+  assert.equal(ui.elements.get('agentConfirmPanel').parentElement, ui.elements.get('qaChatConfirmationMount'));
+});
+
+test('a pending confirmation survives a full conversation rerender', () => {
+  const ui = page();
+  const event = { type: 'confirm', confirmation, result: { state: 'awaiting_confirmation', confirmation } };
+  ui.run(`currentSessionId = 't';
+    currentSession = { sessionId: 't', turns: [] };
+    sessionRuns.set('t', { id: 't', question: 'add 003', status: 'awaiting_confirmation',
+      events: [${JSON.stringify(event)}], result: ${JSON.stringify(event.result)} });
+    renderView();`);
+
+  assert.equal(ui.elements.get('agentConfirmPanel').hidden, false);
+  assert.equal(ui.elements.get('agentConfirmPanel').parentElement, ui.elements.get('qaChatConfirmationMount'));
+  assert.equal(ui.elements.get('btnAskAgent').disabled, true);
+  assert.equal(ui.run('pendingConfirmation.sessionId'), 't');
 });
 
 test('confirming twice sends one request and displays the actual returned answer', async () => {

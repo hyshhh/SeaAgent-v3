@@ -184,6 +184,7 @@ function switchQaView(view) {
   traceTab?.classList.toggle('is-active', qaView === 'trace');
   chatTab?.setAttribute('aria-selected', String(qaView === 'chat'));
   traceTab?.setAttribute('aria-selected', String(qaView === 'trace'));
+  if (pendingConfirmation) mountConfirmationPanel();
   if (qaView === 'trace') renderTrajectory();
   else { scrollConversation(true); autoGrowComposer(); }
 }
@@ -241,6 +242,15 @@ function renderAgentPlan(event) {
  * ------------------------------------------------------------------------- */
 let pendingConfirmation = null;
 
+function mountConfirmationPanel() {
+  const panel = document.getElementById('agentConfirmPanel');
+  const mount = document.getElementById(
+    qaView === 'trace' ? 'qaTraceConfirmationMount' : 'qaChatConfirmationMount',
+  );
+  if (panel && mount && panel.parentElement !== mount) mount.appendChild(panel);
+  if (panel && !panel.hidden && qaView === 'chat') scrollConversation(true);
+}
+
 const CONFIRM_FIELD_LABEL = {
   hull_number: '舷号',
   description: '描述',
@@ -258,6 +268,7 @@ function renderAgentConfirmation(event) {
   const actions = Array.isArray(confirmation.actions) ? confirmation.actions : [];
   const action = actions[0] || {};
   if (!action.tool) return;
+  mountConfirmationPanel();
   pendingConfirmation = { interruptId: confirmation.interruptId || '', sessionId: currentSessionId || '' };
   const rows = Object.entries(action.arguments || {}).map(([key, value]) => {
     const label = CONFIRM_FIELD_LABEL[key] || key;
@@ -274,6 +285,8 @@ function renderAgentConfirmation(event) {
   }
   panel.hidden = false;
   panel.dataset.state = 'pending';
+  if (qaView === 'chat') scrollConversation(true);
+  else panel.scrollIntoView?.({ block: 'nearest' });
 }
 
 function closeAgentConfirmation(state) {
