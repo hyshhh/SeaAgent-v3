@@ -9,18 +9,17 @@ harness:
   shared_state_file: data/memory/shared_task_state.sqlite
   max_iterations: 4
   skills_dir: skills
-  # 每个角色的领域工具预算、任务提示和技能提醒均在 config/subagents.yaml 中显式声明。
-  # 共享状态读写、技能读取和证据展示不计入角色预算；重连或人工确认不清零。
+  # 每个角色的模型请求额度、收尾额度、任务提示和技能提醒均在 config/subagents.yaml 中显式声明。
   reconnect_attempts: 2
   reconnect_backoff_seconds: 1.0
   summarization_trigger_tokens: 12000
   summarization_keep_messages: 12
-  retry_attempts: 2
+  model_retry_attempts: 2
   retry_delay_seconds: 1.0
   checkpointer: data/memory/checkpoints.sqlite
   stream_mode: updates
-  # 外部领域工具有独立超时；同步超时后底层线程无法被强制终止，结果不会回写。
-  tool_timeout_seconds: 60
+  # 所有工具统一超时；Python 同步线程超时后无法被强制终止。
+  tool_timeout_seconds: 120
   # 心跳：每隔这么多秒发一条「仍在执行」状态，避免看起来像卡死；0 表示关闭。
   heartbeat_seconds: 15
   output:

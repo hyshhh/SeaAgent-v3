@@ -2,8 +2,7 @@
 
 1. 终局事件的 result 曾经在超限时被压成字符串，前端读不到 answerText/state/toolRecords，
    界面显示「未生成回答、0 tool records」——结构必须永远保住。
-2. 4B 模型会把同一个技能文件读 8 遍：中间件要在第二次就跳过并提示，
-   把模型推回正轨，而不是等运行时把整轮停掉（那样用户拿到的是没有回答）。
+2. 4B 模型会反复调用同一工具：首次执行，第二、三次复用结果并提醒，第四次进入状态收尾。
 """
 import asyncio
 import json
@@ -36,7 +35,9 @@ def test_repeat_call_is_skipped_with_a_hint():
     second = guard.wrap_tool_call(_Request("read_file", {"file_path": "/skills/a/SKILL.md"}), _handler)
 
     assert first.content == "executed:read_file", "第一次照常执行"
-    assert second.content == REPEAT_HINT, "第二次跳过并给出提示"
+    replay = json.loads(second.content)
+    assert replay["cached_result"] == "executed:read_file"
+    assert replay["message"] == REPEAT_HINT
     assert second.status == "success", "跳过不是失败，否则会误触发连续失败守卫"
 
 
@@ -70,7 +71,8 @@ def test_middleware_stack_includes_the_repeat_guard():
         FakeListChatModel(responses=["ok"]),
         agent_spec={
             "name": "executor",
-            "tool_budget": 6,
+            "model_request_budget": 12,
+            "closeout_request_budget": 2,
             "tools": [SimpleNamespace(name="get_track")],
             "skills": ["/skills/execution"],
             "skill_reminder": {"max_per_run": 1, "message": "Read execution skills."},
@@ -80,17 +82,15 @@ def test_middleware_stack_includes_the_repeat_guard():
     assert any(isinstance(item, RepeatToolCallMiddleware) for item in stack)
 
 
-def test_state_and_skill_reads_do_not_consume_tool_budgets():
+def test_state_and_skill_reads_are_counted_like_all_other_tools():
     state = SharedTaskState("q")
     guard = RepeatToolCallMiddleware(
         state=state,
         scope="planner",
-        tool_budget=1,
     )
     guard.wrap_tool_call(_Request("read_shared_state", {}), _handler)
     guard.wrap_tool_call(_Request("read_file", {"file_path": "/skills/a/SKILL.md"}), _handler)
-    assert state.snapshot()["agent_calls"] == {}
-    assert state.snapshot()["agent_calls"] == {}
+    assert state.snapshot()["tool_calls"]["planner"] == 2
 
 
 def test_sync_domain_tool_timeout_returns_error_without_result_writeback():
@@ -98,7 +98,6 @@ def test_sync_domain_tool_timeout_returns_error_without_result_writeback():
     guard = RepeatToolCallMiddleware(
         state=state,
         scope="executor",
-        tool_budget=1,
         tool_timeout=lambda: 0.01,
     )
     started = time.monotonic()
@@ -109,12 +108,13 @@ def test_sync_domain_tool_timeout_returns_error_without_result_writeback():
     assert time.monotonic() - started < 0.08
     assert result.status == "error"
     assert result.artifact["tool_timeout"] is True
-    assert state.snapshot()["call_history"]["get_track:{}"]["status"] == "error"
+    record = next(iter(state.snapshot()["call_history"].values()))
+    assert record["status"] == "error"
 
 
 @pytest.mark.asyncio
 async def test_async_domain_tool_timeout_returns_error():
-    guard = RepeatToolCallMiddleware(scope="executor", tool_budget=1, tool_timeout=lambda: 0.01)
+    guard = RepeatToolCallMiddleware(scope="executor", tool_timeout=lambda: 0.01)
 
     async def slow(_request):
         await asyncio.sleep(0.1)

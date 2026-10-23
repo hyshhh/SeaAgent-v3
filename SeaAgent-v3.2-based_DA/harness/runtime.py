@@ -23,7 +23,7 @@ from .shared_state import (
     StateConflictError,
 )
 from .state_tools import build_state_tools
-from .state_write import MissingStateWrite
+from .state_write import AgentCloseoutComplete, MissingStateWrite
 from .tool_guard import AgentCancelled
 from .tools import build_tools
 from .trace import _Trace
@@ -170,9 +170,12 @@ def _load_subagents(
         task_prompt = str(spec.get("task_prompt") or "").strip()
         if not description or not system_prompt or task_prompt.count("{question}") != 1:
             raise ValueError(f"Agent {name} 必须显式配置 description、system_prompt 和含一个 {{question}} 的 task_prompt")
-        tool_budget = spec.get("tool_budget")
-        if type(tool_budget) is not int or tool_budget < 1:
-            raise ValueError(f"Agent {name} 的 tool_budget 必须是正整数")
+        model_request_budget = spec.get("model_request_budget")
+        closeout_request_budget = spec.get("closeout_request_budget")
+        if type(model_request_budget) is not int or model_request_budget < 1:
+            raise ValueError(f"Agent {name} 的 model_request_budget 必须是正整数")
+        if type(closeout_request_budget) is not int or closeout_request_budget < 1:
+            raise ValueError(f"Agent {name} 的 closeout_request_budget 必须是正整数")
         skills = spec.get("skills")
         if not isinstance(skills, list) or any(not isinstance(group, str) or not group.strip() for group in skills):
             raise ValueError(f"Agent {name} 的 skills 必须是字符串列表")
@@ -197,7 +200,8 @@ def _load_subagents(
             "description": description,
             "system_prompt": system_prompt,
             "task_prompt": task_prompt,
-            "tool_budget": tool_budget,
+            "model_request_budget": model_request_budget,
+            "closeout_request_budget": closeout_request_budget,
             "skill_reminder": {
                 "max_per_run": reminder_count,
                 "message": reminder_text,
@@ -524,7 +528,7 @@ class SeaVideoHarness:
             return
         self.agents[role] = self._build_agent_graph(role, self.shared_state)
 
-    # 3.1.12.1 模型请求只使用模型自身超时；工具预算由调用守卫执行
+    # 3.1.12.1 模型请求只使用模型自身超时
     def _model_timeout_seconds(self) -> float:
         return max(0.001, float(self.config.get("llm", {}).get("timeout_seconds", 60)))
 
@@ -562,7 +566,10 @@ class SeaVideoHarness:
                 agent = self.agents[role]
                 for frame in agent.stream(
                     payload,
-                    config={"configurable": {"thread_id": agent_thread}},
+                    config={
+                        "configurable": {"thread_id": agent_thread},
+                        "max_concurrency": 1,
+                    },
                     stream_mode=harness.get("stream_mode", "updates"),
                     subgraphs=False,  # 每个角色只有一层图，不需要展开子图
                 ):
@@ -596,6 +603,8 @@ class SeaVideoHarness:
                 #一次执行超过这个步数就抛它——防止图在 model ⇄ tools 循环里无限转下去。
                 if isinstance(error, AgentCancelled):
                     return {"state": "cancelled"}
+                if isinstance(error, AgentCloseoutComplete):
+                    return {"state": "completed"}
                 if isinstance(error, MissingStateWrite):
                     return {"state": "stalled", "reason": str(error)}
                 if isinstance(error, GraphRecursionError):

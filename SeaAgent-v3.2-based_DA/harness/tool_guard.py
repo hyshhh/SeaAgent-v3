@@ -1,4 +1,4 @@
-"""执行前从共享状态占用预算，重复领域查询复用结果，写入请求只执行一次。"""
+"""Count tool calls, replay exact repeats, and enter closeout on the fourth call."""
 
 from __future__ import annotations
 
@@ -11,10 +11,13 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from .shared_state import STATE_TOOLS, SharedTaskState
+from .shared_state import ROLE_UPDATE_TOOLS, STATE_TOOLS, SharedTaskState
 
-REPEAT_HINT = "Skipped: this exact call was already made. Reuse its recorded result; do not repeat the same tool and arguments."
-FREE_TOOLS = STATE_TOOLS | {"read_file", "show_evidence"}
+REPEAT_LIMIT = 4
+REPEAT_HINT = (
+    "该工具与参数已调用过。请使用返回结果或调整参数；不要重复相同调用。"
+)
+_REPEAT_CLOSEOUT_MESSAGE = "相同工具和参数已调用 4 次；已进入状态收尾，本次调用未执行。"
 
 
 class AgentCancelled(RuntimeError):
@@ -25,180 +28,162 @@ class _ToolTimeout(TimeoutError):
     pass
 
 
-# ------------------------------------------------------------------ #
-# 一、调用签名
-# ------------------------------------------------------------------ #
-# 1.1 按工具名与参数生成稳定签名
 def _signature(name: str, arguments: Any) -> str:
-    return f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)}"
+    normalized = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
+    return f"{name}:{normalized}"
 
 
-# ------------------------------------------------------------------ #
-# 二、工具调用守卫
-# ------------------------------------------------------------------ #
-# 2.1 统一角色权限、调用预算、查询复用与写入防重
+def _message(
+    request: Any,
+    content: str,
+    *,
+    status: str = "success",
+    artifact: Any = None,
+) -> ToolMessage:
+    call = request.tool_call
+    return ToolMessage(
+        content=content,
+        name=str(call.get("name") or ""),
+        tool_call_id=str(call.get("id") or ""),
+        status=status,
+        artifact=artifact,
+    )
+
+
 class RepeatToolCallMiddleware(AgentMiddleware):
-    # 2.1.1 绑定共享状态、角色、限额与持久化回调
+    """Apply role permissions, exact-call replay, statistics, and per-call timeouts."""
+
     def __init__(
         self,
         state: SharedTaskState | None = None,
         scope: str = "",
-        tool_budget: int = 0,
-        max_attempts: int = 1,
+        repeat_limit: int = REPEAT_LIMIT,
         persist: Callable[[], None] | None = None,
         allowed_tools: set[str] | None = None,
         cancelled: Callable[[], bool] | None = None,
         model_timeout: Callable[[], float] | None = None,
         tool_timeout: Callable[[], float] | None = None,
-    ):
+    ) -> None:
         self.state = state if state is not None else SharedTaskState("")
         self.scope = scope
-        self.tool_budget = max(0, int(tool_budget))
-        self.max_attempts = max(1, int(max_attempts))
+        self.repeat_limit = max(2, int(repeat_limit))
         self.persist = persist
         self.allowed_tools = allowed_tools
         self.cancelled = cancelled
         self.model_timeout = model_timeout
         self.tool_timeout = tool_timeout
 
-    # 2.1.2 请求前检查取消状态、预算可见范围与工具权限
     def _model_request(self, request: Any) -> Any:
         if self.cancelled and self.cancelled():
             raise AgentCancelled("cancelled")
-        overrides = {}
-        tools = list(request.tools or [])
-        if self.allowed_tools is not None:
-            tools = [tool for tool in tools if getattr(tool, "name", None) in self.allowed_tools]
-        if self.state.limit_reason(self.scope, self.tool_budget):
-            tools = [tool for tool in tools if getattr(tool, "name", None) in FREE_TOOLS]
-        if request.tools is not None or self.allowed_tools is not None:
-            overrides["tools"] = tools
+        overrides: dict[str, Any] = {}
+        if self.allowed_tools is not None and request.tools is not None:
+            overrides["tools"] = [
+                tool for tool in request.tools if getattr(tool, "name", None) in self.allowed_tools
+            ]
         if self.model_timeout is not None:
-            # 每次请求和重试使用模型配置的超时。
             overrides["model_settings"] = {
                 **request.model_settings,
                 "timeout": self.model_timeout(),
             }
         return request.override(**overrides) if overrides else request
 
-    # 2.1.3 同步模型请求的工具权限过滤
     def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         return handler(self._model_request(request))
 
-    # 2.1.4 异步模型请求的工具权限过滤
-    async def awrap_model_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
+    async def awrap_model_call(
+        self, request: Any, handler: Callable[[Any], Awaitable[Any]]
+    ) -> Any:
         return await handler(self._model_request(request))
 
-    # 2.1.5 保存共享调用账本
     def _save(self) -> None:
         if self.persist:
             self.persist()
 
-    # 2.1.6 执行前原子占用预算，复用缓存或阻止重复写入
     def _prepare(self, request: Any) -> tuple[str | None, ToolMessage | None]:
         call = request.tool_call
         name = str(call.get("name") or "")
         if (self.cancelled and self.cancelled()) or (
             self.allowed_tools is not None and name not in self.allowed_tools
         ):
-            return None, ToolMessage(
-                content="Call cancelled or outside this agent's tool permissions.",
-                name=name,
-                tool_call_id=str(call.get("id") or ""),
-                status="error",
-            )
-        key = None if name in STATE_TOOLS else _signature(name, call.get("args") or {})
-        if name == "read_file":
-            key = f"{self.scope}:{self.state.snapshot()['iteration']}:{key}"
-        budgeted = name not in FREE_TOOLS
-        record = self.state.claim_call(
+            return None, _message(request, "Call cancelled or outside this agent's tool permissions.", status="error")
+
+        snapshot = self.state.snapshot()
+        iteration = int(snapshot.get("iteration", 0))
+        key = f"{_signature(name, call.get('args') or {})}|agent={self.scope}|iteration={iteration}"
+        closeout_tools = {"read_shared_state"}
+        if self.scope in ROLE_UPDATE_TOOLS:
+            closeout_tools.add(ROLE_UPDATE_TOOLS[self.scope])
+        record = self.state.claim_tool_call(
             self.scope,
             key,
-            self.tool_budget,
+            name,
             write=name == "add_registry_vessel",
-            count=budgeted,
-            max_attempts=self.max_attempts,
+            repeat_limit=self.repeat_limit,
+            closeout_tools=closeout_tools,
         )
         self._save()
+
+        if record.get("blocked") == "closeout_required":
+            return None, _message(
+                request,
+                "重复调用已触发收尾；请读取共享状态并提交本角色负责的状态。",
+                artifact={"closeout_required": True},
+            )
+        if name == "read_shared_state" and record.get("status") == "invalidated":
+            return key, None
+        if record.get("blocked"):
+            if record.get("blocked") == "repeat_limit":
+                return None, _message(
+                    request,
+                    _REPEAT_CLOSEOUT_MESSAGE,
+                    artifact={"closeout_required": True, "repeat_count": record["repeat_count"]},
+                )
+            if self.state.is_closeout_required(self.scope):
+                return None, _message(
+                    request,
+                    "收尾模式只允许读取共享状态和提交本角色状态；本次工具调用未执行。",
+                    artifact={"closeout_required": True},
+                )
+            return None, _message(
+                request,
+                _REPEAT_CLOSEOUT_MESSAGE,
+                artifact={"closeout_required": True, "repeat_count": record["repeat_count"]},
+            )
         if record.get("execute"):
             return key, None
-        artifact = {"replayed": True}
-        if record.get("blocked"):
-            reason = str(record["blocked"])
-            content = (
-                f"领域工具预算已耗尽（{reason}）。请基于已取得的信息更新你负责的共享状态，"
-                "不要声称未验证的步骤已经完成。"
-            )
-            status = "success"
-            artifact = {"budget_exhausted": reason}
-        elif record.get("status") == "error" and not record.get("write"):
+
+        count = int(record.get("repeat_count", 1))
+        artifact = {"replayed": True, "repeat_count": count}
+        if record.get("status") == "completed":
+            result = record.get("result")
+            payload = {"cached_result": result, "message": REPEAT_HINT}
+            if record.get("truncated"):
+                payload["truncated"] = True
             content = json.dumps(
-                {
-                    "error": record.get("result"),
-                    "message": "读取重试次数已用完；请使用已有结果或调整查询。",
-                },
+                payload,
                 ensure_ascii=False,
                 default=str,
             )
-            status = "error"
-        elif record.get("status") == "completed" and name != "read_file":
-            result = record.get("result")
-            if record.get("truncated"):
-                result = {
-                    "cached_result": result,
-                    "truncated": True,
-                    "message": "缓存仅保留摘要，缺失条目不能作为不存在的证据；请缩小参数范围查询。",
-                }
-            content = json.dumps(result, ensure_ascii=False, default=str)
-            status = "success"
-        else:
-            content = REPEAT_HINT
-            status = (
-                "error" if record.get("write") or record.get("status") == "pending" else "success"
+            return None, _message(request, content, artifact=artifact)
+
+        if record.get("status") == "error":
+            content = json.dumps(
+                {"cached_error": record.get("result"), "message": REPEAT_HINT},
+                ensure_ascii=False,
+                default=str,
             )
-            if record.get("write"):
-                content += (
-                    " The write outcome is uncertain; verify it before taking further action."
-                )
-        return key, ToolMessage(
-            content=content,
-            name=name,
-            tool_call_id=str(call.get("id") or ""),
-            status=status,
-            artifact=artifact,
-        )
+            return None, _message(request, content, status="error", artifact=artifact)
+        return None, _message(request, REPEAT_HINT, artifact=artifact)
 
     def _timeout_seconds(self) -> float:
         if self.tool_timeout is None:
-            return 0.0
+            return 120.0
         try:
             return max(0.001, float(self.tool_timeout()))
         except (TypeError, ValueError):
-            return 0.0
+            return 120.0
 
-    def _run_sync(self, handler: Callable[[Any], Any], request: Any) -> Any:
-        timeout = self._timeout_seconds()
-        if timeout <= 0:
-            return handler(request)
-        box: dict[str, Any] = {}
-        done = threading.Event()
-
-        def invoke() -> None:
-            try:
-                box["response"] = handler(request)
-            except Exception as error:  # noqa: BLE001 - relay worker failures to caller
-                box["error"] = error
-            finally:
-                done.set()
-
-        threading.Thread(target=invoke, name="sea-tool-call", daemon=True).start()
-        if not done.wait(timeout):
-            raise _ToolTimeout(f"tool call exceeded {timeout:.2f}s; worker continues in background")
-        if "error" in box:
-            raise box["error"]
-        return box.get("response")
-
-    # 2.1.7 将返回结果登记到共享状态并持久化
     def _complete(self, request: Any, key: str | None, response: Any) -> None:
         call = request.tool_call
         name = str(call.get("name") or "")
@@ -222,75 +207,86 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             )
         self._save()
 
-    # 2.1.8 保留失败记录，避免结果不确定的写入重放
     def _failed(self, request: Any, key: str | None, error: BaseException) -> None:
         call = request.tool_call
         name = str(call.get("name") or "")
         result = {"ok": False, "error": str(error)}
-        self.state.finish_call(key, str(error), failed=True)
+        self.state.finish_call(key, result, failed=True)
         if name not in STATE_TOOLS and name != "read_file":
             self.state.record_tool_result(
-                self.scope,
-                name,
-                str(call.get("id") or ""),
-                result,
-                "error",
+                self.scope, name, str(call.get("id") or ""), result, "error"
             )
         self._save()
 
-    # 2.1.9 同步工具执行与异常登记
+    def _run_sync(self, request: Any, key: str | None, handler: Callable[[Any], Any]) -> Any:
+        timeout = self._timeout_seconds()
+        result: dict[str, Any] = {}
+        completed = threading.Event()
+
+        def invoke() -> None:
+            try:
+                result["response"] = handler(request)
+            except Exception as error:  # noqa: BLE001 - Convert tool failures to model-visible results.
+                result["error"] = error
+            finally:
+                completed.set()
+
+        threading.Thread(target=invoke, name="sea-tool-call", daemon=True).start()
+        if not completed.wait(timeout):
+            raise _ToolTimeout(f"tool call exceeded {timeout:.0f}s; synchronous worker may still be running")
+        if "error" in result:
+            raise result["error"]
+        return result.get("response")
+
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         key, blocked = self._prepare(request)
         if blocked is not None:
             return blocked
-        name = str(request.tool_call.get("name") or "")
         try:
-            response = (
-                self._run_sync(handler, request)
-                if name not in FREE_TOOLS
-                else handler(request)
-            )
+            response = self._run_sync(request, key, handler)
         except _ToolTimeout as error:
             self._failed(request, key, error)
-            return ToolMessage(
-                content=str(error),
-                name=name,
-                tool_call_id=str(request.tool_call.get("id") or ""),
+            return _message(
+                request,
+                str(error),
                 status="error",
                 artifact={"tool_timeout": True},
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
             self._failed(request, key, error)
-            raise
+            return _message(
+                request,
+                json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False),
+                status="error",
+            )
         self._complete(request, key, response)
         return response
 
-    # 2.1.10 异步工具执行与异常登记
-    async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
+    async def awrap_tool_call(
+        self, request: Any, handler: Callable[[Any], Awaitable[Any]]
+    ) -> Any:
         key, blocked = self._prepare(request)
         if blocked is not None:
             return blocked
-        name = str(request.tool_call.get("name") or "")
         try:
-            if name not in FREE_TOOLS and self._timeout_seconds() > 0:
-                response = await asyncio.wait_for(handler(request), self._timeout_seconds())
-            else:
-                response = await handler(request)
+            response = await asyncio.wait_for(handler(request), self._timeout_seconds())
         except asyncio.TimeoutError as error:
-            timeout = self._timeout_seconds()
             self._failed(request, key, error)
-            return ToolMessage(
-                content=f"tool call exceeded {timeout:.2f}s",
-                name=name,
-                tool_call_id=str(request.tool_call.get("id") or ""),
+            return _message(
+                request,
+                f"tool call exceeded {self._timeout_seconds():.0f}s",
                 status="error",
                 artifact={"tool_timeout": True},
             )
         except asyncio.CancelledError as error:
             self._failed(request, key, error)
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
             self._failed(request, key, error)
-            raise
+            return _message(
+                request,
+                json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False),
+                status="error",
+            )
         self._complete(request, key, response)
         return response

@@ -1,8 +1,9 @@
-# Role-specific tools, budgets, prompts and skill guidance.
+# Role-specific model limits, tools, prompts and skill guidance.
 agents:
   - name: planner
     description: 解析问题并写入可验证需求、执行计划和下一步动作。
-    tool_budget: 1
+    model_request_budget: 4
+    closeout_request_budget: 2
     tools: [read_shared_state, update_planner_state]
     skills: [planning]
     task_prompt: |
@@ -20,7 +21,8 @@ agents:
 
   - name: executor
     description: 执行计划中的轨迹、图像、视频与先验库查询，并记录进度和证据。
-    tool_budget: 6
+    model_request_budget: 12
+    closeout_request_budget: 2
     tools:
       - read_shared_state
       - update_execution_state
@@ -54,7 +56,8 @@ agents:
 
   - name: reflector
     description: 审查证据是否满足需求，记录缺口并决定继续、重规划或结束。
-    tool_budget: 2
+    model_request_budget: 6
+    closeout_request_budget: 2
     tools: [read_shared_state, update_reflection_state, show_evidence, get_registry, list_registry]
     skills: [reflection, answer]
     task_prompt: |

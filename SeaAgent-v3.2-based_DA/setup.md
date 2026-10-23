@@ -23,11 +23,11 @@ py -m pip install -e ".[models]"
 关键 Harness 参数：
 
 - `shared_state_file`：SQLite 共享任务状态路径，旧的同名 JSON 存档首次启动时自动导入。
-- `config/subagents.yaml`：分别配置三个 Agent 的任务提示词、技能提醒和领域工具额度；当前额度为 Planner 1、Executor 6、Reflector 2。
-- 单 Agent 阶段和整轮问答不设墙钟时间限制；外部领域工具仍使用独立的 `tool_timeout_seconds=60`。
+- `config/subagents.yaml`：分别配置三个 Agent 的任务提示词、技能提醒、正常模型请求额度和收尾请求额度；正常额度为 Planner 4、Executor 12、Reflector 6，收尾额度均为 2。
+- 单 Agent 阶段和整轮问答不设墙钟时间限制；工具批次串行执行，每次调用使用 `tool_timeout_seconds=120` 超时。
 - `max_iterations`：闭环最大迭代次数。
 - `reconnect_attempts`、`reconnect_backoff_seconds`：Agent 重连次数和退避间隔。
-- 共享状态读写、技能读取和证据展示不占角色领域工具预算；预算耗尽后 Agent 仍可提交自己负责的状态。
+- 不限制工具调用总次数。相同工具和参数第 2、3 次返回缓存结果，第 4 次进入状态收尾。
 - 内部不使用 TodoList；Planner 写计划，Executor 写 `step_status`，前端进度由共享状态生成。
 
 ## 检查
@@ -55,6 +55,6 @@ Reflector
 
 三个 Agent 使用不同的 SQLite `thread_id` 后缀，但共享同一个 `SharedTaskState`。每个角色只能更新自己的字段，状态版本用于防止过期写入。Executor 调用 `add_registry_vessel` 时仍然需要人工确认；恢复接口必须使用同一个 `sessionId`。
 
-预算耗尽只阻止后续领域工具调用，不阻止 Agent 写入状态。状态写入中间件会在阶段结束前补充一次状态提交机会；补写仍未完成时返回 `stalled`。外部工具仍受独立的 `tool_timeout_seconds=60` 限制，阻塞的同步外部服务不能强制终止。
+模型请求额度耗尽或重复调用达到第 4 次后，只允许共享状态读取和本角色状态更新；一次修复机会仍未写入时返回 `stalled`。工具在两分钟后返回超时错误，但 Python 线程无法被强制终止，底层操作可能继续运行。
 
 QA 会话按 `session_id` 落库（`data/memory/qa_sessions.csv`），同一会话的追问复用 SQLite 检查点和共享状态。左侧会话栏可切换历史会话、开启新会话或删除单个会话；`Clear memory` 会清空会话、检查点和共享状态。

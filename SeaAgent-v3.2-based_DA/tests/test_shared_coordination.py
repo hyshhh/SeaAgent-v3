@@ -1,4 +1,4 @@
-"""共享状态的回归测试：权限、持久化、工具幂等、预算和确认恢复。"""
+"""共享状态的回归测试：权限、持久化、工具幂等和确认恢复。"""
 
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -84,7 +84,7 @@ def test_plan_events_and_answer_only_come_from_shared_state():
 def test_state_tools_can_read_again_without_a_model_version_argument():
     state = SharedTaskState("q")
     tools = {tool.name: tool for tool in build_state_tools(state)}
-    guard = RepeatToolCallMiddleware(state=state, scope="planner", tool_budget=10)
+    guard = RepeatToolCallMiddleware(state=state, scope="planner")
 
     def handler(req):
         value = tools[req.tool_call["name"]].invoke(req.tool_call["args"])
@@ -182,7 +182,7 @@ def test_reflection_assessment_text_becomes_a_final_answer_object():
     }
 
 
-def test_domain_results_are_reused_across_roles_and_reload(tmp_path):
+def test_repeat_cache_is_scoped_to_the_agent_and_reload(tmp_path):
     store = SharedStateStore(tmp_path / "state.sqlite")
     state = store.load("t", "q")
     guard = RepeatToolCallMiddleware(
@@ -201,8 +201,8 @@ def test_domain_results_are_reused_across_roles_and_reload(tmp_path):
     other = RepeatToolCallMiddleware(state=restored, scope="reflector")
     result = other.wrap_tool_call(request("get_track", call_id="c2"), handler)
     assert json.loads(result.content) == {"trackId": "t1"}
-    assert len(calls) == 1
-    assert restored.snapshot()["agent_calls"] == {"executor": 1, "reflector": 1}
+    assert len(calls) == 2
+    assert restored.snapshot()["tool_calls"] == {"executor": 1, "reflector": 1}
 
 
 def test_uncertain_write_is_never_repeated(tmp_path):
@@ -217,17 +217,17 @@ def test_uncertain_write_is_never_repeated(tmp_path):
         calls.append(req)
         raise ConnectionError("connection dropped after write")
 
-    with pytest.raises(ConnectionError):
-        guard.wrap_tool_call(request("add_registry_vessel"), handler)
+    first = guard.wrap_tool_call(request("add_registry_vessel"), handler)
+    assert first.status == "error"
     restored = RepeatToolCallMiddleware(state=store.load("t"), scope="executor")
     result = restored.wrap_tool_call(request("add_registry_vessel"), handler)
-    assert result.status == "error" and "uncertain" in result.content
+    assert result.status == "error" and "connection dropped" in result.content
     assert len(calls) == 1
 
 
-def test_role_budget_resets_when_a_new_role_phase_starts():
+def test_tool_statistics_reset_when_a_new_role_phase_starts():
     state = SharedTaskState("q")
-    guard = RepeatToolCallMiddleware(state=state, scope="executor", tool_budget=2)
+    guard = RepeatToolCallMiddleware(state=state, scope="executor")
     calls = []
 
     def handler(req):
@@ -236,12 +236,14 @@ def test_role_budget_resets_when_a_new_role_phase_starts():
 
     for index in range(5):
         guard.wrap_tool_call(request("get_track", {"i": index}), handler)
-    assert len(calls) == 2
+    assert len(calls) == 5
+    assert state.snapshot()["tool_calls"]["executor"] == 5
     state.start_agent("executor")
+    state.runtime_update({"iteration": 1})
     for index in range(5, 10):
         guard.wrap_tool_call(request("get_track", {"i": index}), handler)
-    assert len(calls) == 4
-    assert state.snapshot()["agent_calls"]["executor"] == 2
+    assert len(calls) == 10
+    assert state.snapshot()["tool_calls"]["executor"] == 5
 
 
 def test_multiple_store_instances_preserve_independent_sessions(tmp_path):
@@ -265,7 +267,7 @@ def test_stale_disk_snapshot_is_rejected_even_if_only_counters_changed(tmp_path)
     state = store.load("t", "q")
     store.save("t", state)
     old = store.load("t")
-    state.claim_call("executor", None, 12)
+    state.claim_tool_call("executor", None, "get_track")
     store.save("t", state)
     with pytest.raises(StateConflictError):
         store.save("t", old)
@@ -346,30 +348,29 @@ def test_failed_results_never_become_evidence():
     assert state.snapshot()["evidence_ids"] == []
 
 
-def test_retry_attempts_consume_the_current_agent_budget():
+def test_failed_tool_is_returned_once_and_replayed_without_retry():
     from types import SimpleNamespace
 
-    from langchain.agents.middleware import ToolRetryMiddleware
     from langchain_core.language_models import FakeListChatModel
 
     state = SharedTaskState("q")
     tool = SimpleNamespace(name="get_track")
     spec = {
         "name": "executor",
-        "tool_budget": 2,
+        "model_request_budget": 4,
+        "closeout_request_budget": 2,
         "tools": [tool],
         "skills": [],
         "skill_reminder": {"max_per_run": 0, "message": "read skills"},
     }
     stack = build_middleware(
         {
-            "harness": {"retry_attempts": 5, "retry_delay_seconds": 0},
+            "harness": {"model_retry_attempts": 0, "retry_delay_seconds": 0},
         },
         FakeListChatModel(responses=["ok"]),
         agent_spec=spec,
         shared_state=state,
     )
-    retry = next(item for item in stack if isinstance(item, ToolRetryMiddleware))
     guard = next(item for item in stack if isinstance(item, RepeatToolCallMiddleware))
     calls = []
 
@@ -377,17 +378,18 @@ def test_retry_attempts_consume_the_current_agent_budget():
         calls.append(req)
         raise ConnectionError("offline")
 
-    req = request("get_track")
-    req.tool = None
-    result = retry.wrap_tool_call(req, lambda value: guard.wrap_tool_call(value, handler))
-    assert result.status == "success"
-    assert result.artifact["budget_exhausted"] == "agent_tool_limit"
-    assert len(calls) == state.snapshot()["agent_calls"]["executor"] == 2
+    first = guard.wrap_tool_call(request("get_track"), handler)
+    replay = guard.wrap_tool_call(request("get_track", call_id="c2"), handler)
+    assert first.status == "error"
+    assert replay.status == "error"
+    assert "cached_error" in replay.content
+    assert len(calls) == 1
+    assert state.snapshot()["tool_calls"]["executor"] == 2
 
 
-def test_failed_reads_can_retry_but_successful_reads_are_cached():
+def test_failed_read_replays_its_error_instead_of_retrying():
     state = SharedTaskState("q")
-    guard = RepeatToolCallMiddleware(state=state, max_attempts=2)
+    guard = RepeatToolCallMiddleware(state=state)
     calls = []
 
     def handler(req):
@@ -396,11 +398,10 @@ def test_failed_reads_can_retry_but_successful_reads_are_cached():
             raise ConnectionError("temporary")
         return ToolMessage(content='{"trackId":"t1"}', tool_call_id=req.tool_call["id"])
 
-    with pytest.raises(ConnectionError):
-        guard.wrap_tool_call(request("get_track"), handler)
-    assert guard.wrap_tool_call(request("get_track"), handler).status == "success"
-    assert guard.wrap_tool_call(request("get_track"), handler).status == "success"
-    assert len(calls) == 2
+    first = guard.wrap_tool_call(request("get_track"), handler)
+    replay = guard.wrap_tool_call(request("get_track", call_id="c2"), handler)
+    assert first.status == replay.status == "error"
+    assert len(calls) == 1
 
 
 def test_registry_write_invalidates_old_registry_queries():
@@ -422,7 +423,7 @@ def test_registry_write_invalidates_old_registry_queries():
 def test_truncated_cached_results_are_explicitly_marked():
     guard = RepeatToolCallMiddleware()
     handler = lambda req: ToolMessage(
-        content=json.dumps({"tracks": list(range(200))}), tool_call_id=req.tool_call["id"]
+        content=json.dumps({"tracks": list(range(10_000))}), tool_call_id=req.tool_call["id"]
     )
     guard.wrap_tool_call(request("get_track"), handler)
     cached = json.loads(guard.wrap_tool_call(request("get_track"), handler).content)

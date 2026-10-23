@@ -27,6 +27,7 @@ from harness.runtime import (
 )
 from harness.shared_state import SharedTaskState
 from harness.state_tools import build_state_tools
+from harness.state_write import StateWriteMiddleware
 from harness.tool_guard import RepeatToolCallMiddleware
 from harness.tools import build_tools
 
@@ -121,10 +122,8 @@ def test_reflector_audits_and_lands_the_evidence():
 def test_no_phase_uses_structured_response_format():
     """回归：不许再挂 response_format。
 
-    事故经过：框架把结构化 schema 绑成一个「工具」，而这个 4B 模型在思考模式下一次回复里
-    把它调用了十几次；框架判定「结构化返回只能一次」后，按 ToolStrategy 的默认
-    handle_errors=True 把错误塞回对话重试，模型每次都犯同样的错，直到烧光子智能体的
-    工具预算（12 次）——对外表现就是「委派卡住、什么都出不来」。
+    框架把结构化 schema 绑成工具后，模型可能反复调用它；运行时改用明确的状态工具
+    写入结果，避免把最终输出契约混入领域工具循环。
     """
     subagents = _specs()
     offenders = [spec["name"] for spec in subagents if "response_format" in spec]
@@ -150,7 +149,10 @@ def test_each_phase_carries_its_own_guards_and_read_scope():
             shared_state=SharedTaskState(""),
         )
         guard = next(item for item in stack if isinstance(item, RepeatToolCallMiddleware))
-        assert guard.tool_budget == spec["tool_budget"]
+        state_write = next(item for item in stack if isinstance(item, StateWriteMiddleware))
+        assert state_write.model_request_budget == spec["model_request_budget"]
+        assert state_write.closeout_request_budget == spec["closeout_request_budget"]
+        assert not hasattr(guard, "tool_budget")
     planner = _by_name(subagents)["planner"]
     allow = [rule for rule in planner["permissions"] if str(rule.mode) == "allow"]
     assert set(allow[0].paths) == set(_read_scope_paths(["/skills/planning"]))
@@ -217,7 +219,8 @@ def test_unknown_tool_name_and_structured_format_fail_loudly(tmp_path):
                         "description": "d",
                         "system_prompt": "s",
                         "task_prompt": "{question}",
-                        "tool_budget": 1,
+                        "model_request_budget": 2,
+                        "closeout_request_budget": 1,
                         "skill_reminder": {"max_per_run": 0, "message": "read skills"},
                         "skills": [],
                         "tools": ["no_such_tool"],
@@ -244,7 +247,8 @@ def test_unknown_tool_name_and_structured_format_fail_loudly(tmp_path):
                         "description": "d",
                         "system_prompt": "s",
                         "task_prompt": "{question}",
-                        "tool_budget": 1,
+                        "model_request_budget": 2,
+                        "closeout_request_budget": 1,
                         "skill_reminder": {"max_per_run": 0, "message": "read skills"},
                         "skills": [],
                         "tools": [],
@@ -278,7 +282,6 @@ def test_middleware_is_framework_guards_only():
         )
     ]
     assert names == [
-        "ToolRetryMiddleware",
         "ModelRetryMiddleware",
         "RepeatToolCallMiddleware",
         "StateWriteMiddleware",

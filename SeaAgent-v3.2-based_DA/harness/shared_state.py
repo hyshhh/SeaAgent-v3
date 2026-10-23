@@ -193,7 +193,12 @@ class SharedTaskState:
             "iteration": 0,
             "version": 1,
             "pending_agent": None,
-            "agent_calls": {},
+            "model_requests": {},
+            "closeout_requests": {},
+            "closeout_required": {},
+            "closeout_reminder_sent": {},
+            "closeout_repair_used": {},
+            "tool_calls": {},
             "call_history": {},
             "role_write_counts": {},
             "agent_start_write_counts": {},
@@ -225,6 +230,12 @@ class SharedTaskState:
                 for key, value in self._values.items()
                 if key not in {
                     "call_history",
+                    "model_requests",
+                    "closeout_requests",
+                    "closeout_required",
+                    "closeout_reminder_sent",
+                    "closeout_repair_used",
+                    "tool_calls",
                     "role_write_counts", "agent_start_write_counts",
                 }
             }
@@ -232,6 +243,11 @@ class SharedTaskState:
     # 2.1.4 推进业务版本号
     def _changed(self) -> None:
         self._values["version"] += 1
+
+    def _invalidate_state_reads(self) -> None:
+        for record in self._values["call_history"].values():
+            if record.get("tool") == "read_shared_state":
+                record.update(status="invalidated", result=None, repeat_count=0)
 
     # 2.1.5 校验字段归属并原子合并角色补丁
     def update(self, role: str, patch: dict[str, Any]) -> dict[str, Any]:
@@ -292,6 +308,7 @@ class SharedTaskState:
                     "message": "状态已是最新值，无需重复修改。",
                 }
             self._values.update(patch)
+            self._invalidate_state_reads()
             self._changed()
             return {"ok": True, "version": self._values["version"]}
 
@@ -358,7 +375,7 @@ class SharedTaskState:
 
     # 2.1.8 开始新问答，重置本轮调用数并递增版本
     def start_turn(self, question: str) -> None:
-        """新问答清空任务字段，调用预算从本轮重新计算。"""
+        """新问答清空任务字段和调用统计。"""
         with self._lock:
             self._clear_turn_artifacts()
             version = self._values["version"]
@@ -372,11 +389,16 @@ class SharedTaskState:
         if self._artifact_dir != self._artifact_root:
             shutil.rmtree(self._artifact_dir, ignore_errors=True)
 
-    # 2.1.9 开始一个角色阶段，重置阶段预算与旧反思结论
+    # 2.1.9 开始一个角色阶段，重置模型额度与旧反思结论
     def start_agent(self, role: str) -> None:
         with self._lock:
             self._values["pending_agent"] = role
-            self._values["agent_calls"][role] = 0
+            self._values["model_requests"][role] = 0
+            self._values["closeout_requests"][role] = 0
+            self._values["closeout_required"][role] = False
+            self._values["closeout_reminder_sent"][role] = False
+            self._values["closeout_repair_used"][role] = False
+            self._values["tool_calls"][role] = 0
             self._values["agent_start_write_counts"][role] = self._values["role_write_counts"].get(role, 0)
             if role == "reflector":
                 self._values["decision"] = None
@@ -385,47 +407,92 @@ class SharedTaskState:
                 self._values["conflicts"] = []
             self._changed()
 
-    # 2.1.9.1 查询当前角色是否达到自己的工具预算
-    def limit_reason(self, role: str, tool_budget: int) -> str:
+    # 2.1.9.1 原子计数模型请求；额度耗尽后只允许收尾请求
+    def claim_model_request(
+        self, role: str, model_budget: int, closeout_budget: int
+    ) -> str:
         with self._lock:
-            used = self._values["agent_calls"].get(role, 0)
-            return "agent_tool_limit" if tool_budget > 0 and used >= tool_budget else ""
+            regular = self._values["model_requests"].get(role, 0)
+            closeout = self._values["closeout_requests"].get(role, 0)
+            required = self._values["closeout_required"].get(role, False)
+            if required or regular >= model_budget:
+                self._values["closeout_required"][role] = True
+                if closeout >= closeout_budget:
+                    self._changed()
+                    return "exhausted"
+                self._values["closeout_requests"][role] = closeout + 1
+                mode = "closeout"
+            else:
+                self._values["model_requests"][role] = regular + 1
+                mode = "normal"
+            self._changed()
+            return mode
 
-    # 2.1.10 执行前原子占用工具预算并登记请求
-    def claim_call(
+    def require_closeout(self, role: str) -> None:
+        with self._lock:
+            if not self._values["closeout_required"].get(role):
+                self._values["closeout_required"][role] = True
+                self._changed()
+
+    def is_closeout_required(self, role: str) -> bool:
+        with self._lock:
+            return bool(self._values["closeout_required"].get(role))
+
+    def mark_closeout_reminder(self, role: str) -> bool:
+        with self._lock:
+            if self._values.get("closeout_reminder_sent", {}).get(role):
+                return False
+            self._values.setdefault("closeout_reminder_sent", {})[role] = True
+            self._changed()
+            return True
+
+    def claim_closeout_repair(self, role: str) -> bool:
+        with self._lock:
+            if self._values["closeout_repair_used"].get(role):
+                return False
+            self._values["closeout_repair_used"][role] = True
+            self._changed()
+            return True
+
+    # 2.1.9.2 为本 Agent、本轮工具调用原子计数并读取复用结果
+    def claim_tool_call(
         self,
         role: str,
         key: str | None,
-        tool_budget: int,
+        tool_name: str,
         write: bool = False,
-        count: bool = True,
-        max_attempts: int = 1,
+        repeat_limit: int = 4,
+        closeout_tools: set[str] | None = None,
     ) -> dict[str, Any]:
-        """原子占用当前角色预算并登记请求，重连不能重复写入。"""
+        """统计所有工具请求；重复达到阈值时切换到状态收尾。"""
         with self._lock:
-            if count and tool_budget > 0 and self._values["agent_calls"].get(role, 0) >= tool_budget:
-                return {"blocked": "agent_tool_limit"}
-            if count:
-                self._values["agent_calls"][role] = self._values["agent_calls"].get(role, 0) + 1
+            counts = self._values["tool_calls"]
+            counts[role] = counts.get(role, 0) + 1
             previous = self._values["call_history"].get(key) if key else None
-            if key and previous is None:
+            if self._values["closeout_required"].get(role) and tool_name not in (
+                closeout_tools or set()
+            ):
+                self._changed()
+                return {"blocked": "closeout_required"}
+            if not key:
+                self._changed()
+                return {"execute": True}
+            if previous is None:
                 self._values["call_history"][key] = {
                     "status": "pending",
                     "write": write,
-                    "attempts": 1,
+                    "tool": tool_name,
+                    "repeat_count": 1,
                 }
-            elif (
-                previous
-                and previous["status"] == "error"
-                and not previous.get("write")
-                and previous.get("attempts", 1) < max(1, max_attempts)
-            ):
-                previous.update(status="pending", attempts=previous.get("attempts", 1) + 1)
-                self._changed()
-                return {"execute": True}
-            if key is not None or count:
-                self._changed()
-            return deepcopy(previous) if previous else {"execute": True}
+                previous = None
+            else:
+                previous["repeat_count"] = int(previous.get("repeat_count", 1)) + 1
+                if previous["repeat_count"] >= max(1, repeat_limit):
+                    self._values["closeout_required"][role] = True
+                    self._changed()
+                    return {"blocked": "repeat_limit", **deepcopy(previous)}
+            self._changed()
+            return {"execute": True} if previous is None else deepcopy(previous)
 
     # 2.1.11 保存调用结果，写入后使相关查询缓存失效
     def finish_call(self, key: str | None, result: Any, failed: bool) -> None:
@@ -440,12 +507,11 @@ class SharedTaskState:
             )
             if record.get("write"):
                 # 即使写入结果不确定，旧先验库查询也可能已失效。
+                invalidated_tools = {"get_registry", "list_registry", "match_hull", "match_text"}
                 self._values["call_history"] = {
                     name: value
                     for name, value in self._values["call_history"].items()
-                    if not name.startswith(
-                        ("get_registry:", "list_registry:", "match_hull:", "match_text:")
-                    )
+                    if value.get("tool") not in invalidated_tools
                 }
             self._changed()
 
@@ -479,6 +545,7 @@ class SharedTaskState:
                     self._values["evidence"] = deepcopy(result)
             if agent == "executor":
                 self._values["execution_status"] = "failed" if status == "error" else "running"
+            self._invalidate_state_reads()
             self._changed()
 
     def _externalize_result(self, result: Any) -> Any:

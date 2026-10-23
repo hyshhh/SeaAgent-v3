@@ -4,7 +4,6 @@ from deepagents import FilesystemPermission
 from langchain.agents.middleware import (
     ModelRetryMiddleware,
     SummarizationMiddleware,
-    ToolRetryMiddleware,
 )
 from langchain_core.language_models import FakeListChatModel
 
@@ -50,7 +49,6 @@ def _stack(role="reflector", skills=True):
 def test_role_specific_middleware_stack():
     _, _, stack = _stack()
     assert [type(item) for item in stack] == [
-        ToolRetryMiddleware,
         ModelRetryMiddleware,
         RepeatToolCallMiddleware,
         StateWriteMiddleware,
@@ -68,8 +66,11 @@ def test_model_rounds_are_not_capped():
 def test_role_budget_and_reminder_are_read_from_role_spec():
     _, spec, stack = _stack("executor")
     guard = next(item for item in stack if isinstance(item, RepeatToolCallMiddleware))
+    state_write = next(item for item in stack if isinstance(item, StateWriteMiddleware))
     reminder = next(item for item in stack if isinstance(item, SkillDisclosureMiddleware))
-    assert guard.tool_budget == spec["tool_budget"] == 6
+    assert not hasattr(guard, "tool_budget")
+    assert state_write.model_request_budget == spec["model_request_budget"] == 12
+    assert state_write.closeout_request_budget == spec["closeout_request_budget"] == 2
     assert reminder.max_reminders == spec["skill_reminder"]["max_per_run"] == 2
     assert reminder.reminder == spec["skill_reminder"]["message"]
 
