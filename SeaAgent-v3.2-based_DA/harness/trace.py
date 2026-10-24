@@ -95,6 +95,17 @@ class _Trace:
         self._seen_skills: set[str] = set()  # 已上报过的 skill 名
         self._plan_signature = ""  # 前端计划快照没有变化时不重复广播。
 
+    def agent_status(self, agent: str, state: str, iteration: int, action: str) -> None:
+        self.event(
+            {
+                "type": "agent_status",
+                "agent": agent,
+                "state": state,
+                "iteration": iteration,
+                "message": action,
+            }
+        )
+
     # 2.1.2 裁剪并广播事件
     def event(self, payload: dict[str, Any]) -> None:
         if not self.emit:
@@ -163,6 +174,8 @@ class _Trace:
                 "steps": items,
                 "total": len(items),
                 "completed": done,
+                "iteration": state.get("iteration") or 1,
+                "pendingAgent": state.get("pending_agent"),
             }
         )
 
@@ -177,6 +190,11 @@ class _Trace:
             state for state in states if isinstance(state, dict)
         ]  # 只留真正的 state，值可能是别的类型
         role_name = str(agent_name or "")
+        iteration = (
+            self.shared_state.snapshot().get("iteration") or 1
+            if self.shared_state is not None
+            else 1
+        )
         for state in frames:
             self.consume_skills(state)  # skill 回执可能出现在任一节点的 state 里
             messages = state.get("messages")
@@ -205,6 +223,7 @@ class _Trace:
                         record = {
                             "id": call_id,
                             "round": round_no,
+                            "iteration": iteration,
                             "tool": name,
                             "label": self.tool_labels.get(name, name),
                             "arguments": arguments,
@@ -224,6 +243,8 @@ class _Trace:
                                 "label": record["label"],
                                 "arguments": _bounded(record["arguments"], self.event_limit),
                                 "callId": call_id,
+                                "round": round_no,
+                                "iteration": iteration,
                                 "agent": role_name,
                             }
                         )
@@ -234,6 +255,8 @@ class _Trace:
                             "title": "模型决策",
                             "message": "已选择工具",
                             "tools": round_tools,
+                            "round": round_no,
+                            "iteration": iteration,
                             "agent": role_name,
                         }
                     )
@@ -290,6 +313,8 @@ class _Trace:
                             "label": record.get("label") or effective_name,
                             "result": _bounded(result, self.event_limit),
                             "callId": call_id,
+                            "iteration": record.get("iteration") or iteration,
+                            "round": record.get("round") or len(self.rounds) or 1,
                             "agent": role_name,
                         }
                     )

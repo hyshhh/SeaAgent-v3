@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ import numpy as np
 
 from config import load_config
 from memory import MemoryRepository, normalize_hull_number
+from memory.time_format import MONITOR_TIMEZONE, format_monitor_time
 from services import AgentLLMService, QwenMultimodalEmbedder
 from vector_store import VectorCatalog
 
@@ -25,7 +26,7 @@ from vector_store import VectorCatalog
 class ToolService:
     DEFAULT_TRACK_PAGE_SIZE = 50
     MAX_TRACK_PAGE_SIZE = 100
-    DEFAULT_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
+    DEFAULT_TIMEZONE = MONITOR_TIMEZONE
 
     def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None):
         self.config = config or load_config()
@@ -226,9 +227,28 @@ class ToolService:
         segment_id = f"segment-{hashlib.sha1(cache_key.encode('utf-8')).hexdigest()[:12]}"
         output_path = output_dir / f"{segment_id}.mp4"
         poster_path = output_dir / f"{segment_id}.jpg"
+        time_fields = {
+            "startTime": monitor_scope[0],
+            "endTime": monitor_scope[1],
+            "startTimeText": format_monitor_time(monitor_scope[0]),
+            "endTimeText": format_monitor_time(monitor_scope[1]),
+            "videoStartTime": video_start_time,
+            "videoEndTime": video_end_time,
+            "videoStartTimeText": format_monitor_time(video_start_time),
+            "videoEndTimeText": format_monitor_time(video_end_time),
+        }
         if output_path.is_file() and output_path.stat().st_size > 0:
             self._ensure_clip_poster(output_path, poster_path, poster_quality)
-            return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "posterPath": str(poster_path) if poster_path.is_file() else None, "codec": "cached", "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
+            return {
+                "ok": True,
+                "found": True,
+                "trackId": str(trackId),
+                "shipSegmentId": segment_id,
+                "segmentPath": str(output_path),
+                "posterPath": str(poster_path) if poster_path.is_file() else None,
+                "codec": "cached",
+                **time_fields,
+            }
         source_fps = max(1.0, float(trajectory.get("sourceFps") or 25))
         output_fps = min(source_fps, clip_fps)
         temporary_path = output_dir / f"{segment_id}.raw.mp4"
@@ -277,7 +297,16 @@ class ToolService:
             return {"ok": False, "error": "empty_target_segment", "trackId": str(trackId)}
         codec = self._compress_evidence_clip(temporary_path, output_path, codec, clip_crf)
         self._write_poster(poster_path, poster_frame, poster_quality)
-        return {"ok": True, "found": True, "trackId": str(trackId), "shipSegmentId": segment_id, "segmentPath": str(output_path), "posterPath": str(poster_path) if poster_path.is_file() else None, "codec": codec, "startTime": monitor_scope[0], "endTime": monitor_scope[1], "videoStartTime": video_start_time, "videoEndTime": video_end_time}
+        return {
+            "ok": True,
+            "found": True,
+            "trackId": str(trackId),
+            "shipSegmentId": segment_id,
+            "segmentPath": str(output_path),
+            "posterPath": str(poster_path) if poster_path.is_file() else None,
+            "codec": codec,
+            **time_fields,
+        }
 
     def getImagePreview(self, sourcePath: str | Path, scale: float | None = None) -> Path:
         source_path = Path(sourcePath)

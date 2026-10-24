@@ -69,6 +69,22 @@ def test_get_track_omitted_time_means_all_and_uses_bounded_pages():
     assert "trackIds" not in result
 
 
+def test_track_record_formats_monitor_and_video_times_without_losing_zero():
+    track = MemoryRepository._track_record({
+        "track_id": "t-1",
+        "start_time": "1792634400",
+        "end_time": "1792634460",
+        "video_start_time": "0",
+        "video_end_time": "60",
+    })
+
+    assert track["startTimeText"] == "2026-10-22T10:00:00+08:00"
+    assert track["endTimeText"] == "2026-10-22T10:01:00+08:00"
+    assert track["videoStartTime"] == 0
+    assert track["videoStartTimeText"] == "Video 00:00:00"
+    assert track["videoEndTimeText"] == "Video 00:01:00"
+
+
 def test_zero_limit_uses_default_instead_of_returning_all():
     class Repository:
         def find_tracks_page(self, time_range, hull_number, match_type, after, limit):

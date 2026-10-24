@@ -2,7 +2,7 @@ tools:
   - name: get_track
     label: 轨迹记忆
     method: getTrack
-    description: 查询已存轨迹。省略 time_range=全部监控时间；显式时间用 ISO-8601（无时区按 Asia/Shanghai）。默认每页 50、最多 100；hasMore 时用 nextCursor.afterStartTime 和 afterTrackId 继续，筛选变化须从第一页开始。hull_number 只匹配已识别舷号；为空时去掉筛选再查。完整否定结论须查完相关分页和候选证据。
+    description: 查询已存轨迹。省略 time_range=全部监控时间；显式时间用 ISO-8601（无时区按 Asia/Shanghai）。默认每页 50、最多 100；hasMore 时用 nextCursor.afterStartTime 和 afterTrackId 继续，筛选变化须从第一页开始。hull_number 只匹配已识别舷号；为空时去掉筛选再查。用 startTimeText/endTimeText 报告监控时间；原始数值仅供计算/分页，视频定位时间另有 videoStartTimeText/videoEndTimeText。完整否定结论须查完相关分页和候选证据。
     arguments:
       time_range:
         type: time_range

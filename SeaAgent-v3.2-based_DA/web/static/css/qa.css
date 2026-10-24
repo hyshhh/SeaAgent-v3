@@ -1227,6 +1227,37 @@
 #tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb { background: #c4c4c4; border-color: #fff; }
 #tab-agent-qa .qa-inspector { scrollbar-color: #c4c4c4 #fff; }
 
+/* 实时状态页：把 Agent 当前阶段单独展示，轨迹只保留业务事件。 */
+#tab-agent-qa .qa-state-view { padding: 22px clamp(20px, 5vw, 72px); overflow-y: auto; }
+#tab-agent-qa .qa-state-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--qa-line); }
+#tab-agent-qa .qa-state-head p { margin: 5px 0 0; color: var(--qa-muted); font-size: 12px; }
+#tab-agent-qa .qa-state-round { display: grid; gap: 3px; min-width: 74px; padding: 9px 12px; text-align: center; border: 1px solid var(--qa-line); background: var(--qa-subtle); }
+#tab-agent-qa .qa-state-round span { color: var(--qa-muted); font-size: 10px; }
+#tab-agent-qa .qa-state-round strong { color: var(--qa-ink); font-size: 22px; line-height: 1; }
+#tab-agent-qa .qa-state-summary { display: flex; align-items: baseline; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--qa-line); }
+#tab-agent-qa .qa-state-summary span { color: var(--qa-muted); font-size: 11px; }
+#tab-agent-qa .qa-state-summary strong { color: var(--qa-ink); font-size: 14px; }
+#tab-agent-qa .qa-state-summary time { margin-left: auto; color: var(--qa-muted); font-size: 11px; }
+#tab-agent-qa .qa-agent-status-list { display: grid; gap: 0; margin-top: 16px; border-top: 1px solid var(--qa-line); }
+#tab-agent-qa .qa-agent-status { display: grid; grid-template-columns: 9px 100px 76px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 58px; padding: 0 4px; border-bottom: 1px solid var(--qa-line); }
+#tab-agent-qa .qa-agent-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #b5bec7; }
+#tab-agent-qa .qa-agent-status[data-state="running"] .qa-agent-status-dot { background: #b98221; animation: qaPulse 1.5s infinite; }
+#tab-agent-qa .qa-agent-status[data-state="completed"] .qa-agent-status-dot { background: #397a5d; }
+#tab-agent-qa .qa-agent-status[data-state="failed"] .qa-agent-status-dot { background: #b44f58; }
+#tab-agent-qa .qa-agent-status[data-state="waiting"] .qa-agent-status-dot,
+#tab-agent-qa .qa-agent-status[data-state="reconnecting"] .qa-agent-status-dot { background: #2f6f9f; }
+#tab-agent-qa .qa-agent-status strong { color: var(--qa-ink); font-size: 13px; }
+#tab-agent-qa .qa-agent-status-label { color: var(--qa-muted); font-size: 11px; }
+#tab-agent-qa .qa-agent-status p { min-width: 0; margin: 0; overflow: hidden; color: var(--qa-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+#tab-agent-qa .qa-tool-agent { color: var(--qa-muted); font-size: 10px; }
+#tab-agent-qa .qa-step-round { color: var(--qa-muted); font-size: 10px; }
+#tab-agent-qa .qa-step-args { margin-top: 2px; overflow: hidden; color: var(--qa-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+#tab-agent-qa .qa-evidence-card > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; list-style: none; }
+#tab-agent-qa .qa-evidence-card > summary::-webkit-details-marker { display: none; }
+#tab-agent-qa .qa-evidence-card > summary b { width: 6px; height: 6px; border-right: 1px solid var(--qa-muted); border-bottom: 1px solid var(--qa-muted); transform: rotate(45deg); transition: transform .15s ease; }
+#tab-agent-qa .qa-evidence-card[open] > summary b { transform: rotate(225deg); }
+#tab-agent-qa .qa-evidence-body { padding-top: 10px; }
+
 #tab-agent-qa .qa-endpoint-button {
   min-height: 28px;
   margin-left: 8px;

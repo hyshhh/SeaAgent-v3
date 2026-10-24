@@ -659,20 +659,22 @@ class SeaVideoHarness:
                 if resume_payload is None and not continuing:
                     self.shared_state.start_agent(role)
                 continuing = False  # 恢复待执行角色时保留原计数；之后才开始新阶段。
-                trace.event(
-                    {
-                        "type": "status",
-                        "title": f"{role} 开始工作",
-                        "message": "读取共享状态并维护负责字段",
-                        "agent": role,
-                    }
-                )
+                trace.agent_status(role, "running", iteration, "阶段开始")
                 payload = (
                     resume_payload if role == start_role and resume_payload is not None else None
                 )
                 outcome = yield from self._run_agent_steps(
                     role, question, thread_id, trace, cancel, payload
                 )
+                role_state, action = {
+                    "completed": ("completed", "阶段完成"),
+                    "awaiting_confirmation": ("waiting", "等待人工确认"),
+                    "awaiting_input": ("waiting", "等待用户补充"),
+                    "cancelled": ("cancelled", "已停止"),
+                    "stalled": ("failed", "阶段未完成"),
+                    "error": ("failed", "阶段失败"),
+                }.get(outcome["state"], ("waiting", outcome["state"]))
+                trace.agent_status(role, role_state, iteration, action)
                 resume_payload = None  # 确认只消费一次，下一轮重新规划。
                 if outcome["state"] != "completed":
                     return outcome

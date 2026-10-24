@@ -19,6 +19,7 @@ from memory.schema import (
     REGISTRY_IMAGE_FIELDS,
     TRACK_FIELDS,
 )
+from memory.time_format import format_monitor_time
 
 logger = logging.getLogger(__name__)
 
@@ -401,9 +402,29 @@ class MemoryRepository:
     def _track_record(row: dict[str, str]) -> dict[str, Any]:
         start_time = float(row.get("start_time") or 0)
         end_time = float(row.get("end_time") or start_time)
-        video_start_time = float(row.get("video_start_time") or start_time)
-        video_end_time = float(row.get("video_end_time") or video_start_time)
-        return {"trackId": row["track_id"], "startTime": start_time, "endTime": end_time, "videoStartTime": video_start_time, "videoEndTime": video_end_time, "finalHullNumber": row.get("final_hull_number") or None, "finalDescription": row.get("final_description", ""), "finalMatchType": row.get("final_match_type") or "unknown", "trajectoryPath": row.get("trajectory_path", "")}
+        raw_video_start = row.get("video_start_time")
+        raw_video_end = row.get("video_end_time")
+        video_start_time = float(
+            raw_video_start if raw_video_start not in (None, "") else start_time
+        )
+        video_end_time = float(
+            raw_video_end if raw_video_end not in (None, "") else video_start_time
+        )
+        return {
+            "trackId": row["track_id"],
+            "startTime": start_time,
+            "endTime": end_time,
+            "startTimeText": format_monitor_time(start_time),
+            "endTimeText": format_monitor_time(end_time),
+            "videoStartTime": video_start_time,
+            "videoEndTime": video_end_time,
+            "videoStartTimeText": format_monitor_time(video_start_time),
+            "videoEndTimeText": format_monitor_time(video_end_time),
+            "finalHullNumber": row.get("final_hull_number") or None,
+            "finalDescription": row.get("final_description", ""),
+            "finalMatchType": row.get("final_match_type") or "unknown",
+            "trajectoryPath": row.get("trajectory_path", ""),
+        }
 
     @staticmethod
     def _keyframe_record(row: dict[str, str]) -> dict[str, Any]:

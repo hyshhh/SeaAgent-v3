@@ -133,6 +133,22 @@ def test_trace_marks_each_record_with_the_calling_role():
     assert trace.records[0]["agent"] == "executor"
     tool_event = next(event for event in events if event["type"] == "tool_start")
     assert tool_event["agent"] == "executor"
+    assert tool_event["iteration"] == 1
+
+
+def test_trace_emits_compact_agent_status_with_iteration():
+    events = []
+    trace = _Trace(events.append, event_limit=4000, shared_state=SharedTaskState("问题"))
+
+    trace.agent_status("executor", "running", 3, "阶段开始")
+
+    assert events == [{
+        "type": "agent_status",
+        "agent": "executor",
+        "state": "running",
+        "iteration": 3,
+        "message": "阶段开始",
+    }]
 
 
 def test_builtin_file_tools_get_chinese_labels():

@@ -5191,3 +5191,37 @@ tbody tr:hover td { background: #f2f6f9; }
   #tab-agent-qa .agent-live-activity.running .agent-live-marquee::after,
   #tab-agent-qa .agent-live-cursor { animation: none; }
 }
+
+/* 轨迹记忆：突出业务字段，时间列同时显示可读监控时间与视频定位时间。 */
+#tab-memory .memory-command-bar { grid-template-columns: minmax(210px, .75fr) auto minmax(300px, 1fr) auto; }
+#tab-memory .memory-command-title .eyebrow,
+#tab-memory .memory-table-title .eyebrow { display: none; }
+#tab-memory .memory-command-title h2 { color: #17202b; font-family: inherit; font-size: 19px; }
+#tab-memory .memory-table-title h3 { color: #17202b; font-family: inherit; font-size: 17px !important; }
+#tab-memory .memory-inline-stats .memory-stat-card small { display: none; }
+#tab-memory .memory-inline-stats .memory-stat-card span { color: #17202b; font-size: 12px; }
+#tab-memory .memory-table th { color: #17202b; font-size: 12px; font-weight: 800; }
+#tab-memory .memory-table td { color: #17202b; font-size: 12px; font-weight: 600; }
+#tab-memory .memory-track-id { color: #111; }
+#tab-memory .memory-state { font-size: 12px; }
+#tab-memory .memory-time-range { display: grid; gap: 3px; white-space: normal; }
+#tab-memory .memory-observed-range { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+#tab-memory .memory-observed-range i { color: #7a8793; font-style: normal; }
+#tab-memory .memory-video-range { color: #3f4b56; font-size: 12px; font-weight: 600; }
+#tab-memory .memory-description-text { color: #17202b; font-size: 12px; font-weight: 600; }
+#tab-memory .memory-warning { color: #17202b; font-size: 12px; font-weight: 600; }
+#tab-memory .memory-table-actions > span { color: #17202b; font-size: 12px; }
+#tab-memory .memory-refresh-button,
+#tab-memory .memory-retention-control .btn { font-size: 12px; }
+@media (max-width: 1220px) {
+  #tab-memory .memory-command-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  #tab-memory .memory-inline-stats { grid-column: 1 / -1; grid-row: 2; }
+  #tab-memory .memory-retention-control { grid-column: 1; grid-row: 3; }
+  #tab-memory .memory-refresh-button { grid-column: 2; grid-row: 1; }
+}
+@media (max-width: 620px) {
+  #tab-memory .memory-command-bar { grid-template-columns: minmax(0, 1fr); }
+  #tab-memory .memory-inline-stats,
+  #tab-memory .memory-retention-control,
+  #tab-memory .memory-refresh-button { grid-column: 1; grid-row: auto; }
+}

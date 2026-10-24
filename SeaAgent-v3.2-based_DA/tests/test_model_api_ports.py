@@ -1,17 +1,18 @@
 from copy import deepcopy
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
 
-from config import load_config
-from config import settings
+from config import load_config, settings
 
 
 def test_public_settings_exposes_current_vlm_and_embedding_ports():
-    public = settings.public_settings(load_config())["settings"]
+    config = load_config()
+    public = settings.public_settings(config)["settings"]
 
-    assert public["llm"]["api_port"] == 7890
-    assert public["embedding"]["api_port"] == 7891
+    assert public["llm"]["api_port"] == urlsplit(config["llm"]["base_url"]).port
+    assert public["embedding"]["api_port"] == urlsplit(config["embedding"]["base_url"]).port
 
 
 def test_updating_api_ports_preserves_service_hosts_and_paths(tmp_path, monkeypatch):
@@ -70,4 +71,4 @@ def test_reset_restores_default_service_ports(tmp_path, monkeypatch):
 
     assert not runtime_file.exists()
     assert config["llm"]["base_url"] == defaults["llm"]["base_url"]
-    assert result["settings"]["llm"]["api_port"] == 7890
+    assert result["settings"]["llm"]["api_port"] == urlsplit(defaults["llm"]["base_url"]).port

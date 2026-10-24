@@ -6,8 +6,10 @@ function formatMemoryTime(timestamp) {
   if (!Number.isFinite(value)) return 'Unknown time';
   if (value < 946684800) return `Video ${formatVideoTime(value)}`;
   const date = new Date(value * 1000);
-  const pad = number => String(number).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).format(date).replaceAll('/', '-');
 }
 
 function escapeMemoryText(value) {
@@ -66,12 +68,18 @@ function renderTrackMemory(payload) {
     const matchKey = memoryMatchKey(track.finalMatchType);
     const stateClass = memoryStateKey(track.memoryState);
     const description = escapeMemoryText(track.finalDescription || 'No stable description');
+    const observedStart = escapeMemoryText(track.startTimeText || formatMemoryTime(track.startTime));
+    const observedEnd = escapeMemoryText(track.endTimeText || formatMemoryTime(track.endTime));
+    const hasVideoTime = Number(track.videoStartTime) < 946684800 && Number(track.videoEndTime) < 946684800;
+    const videoRange = hasVideoTime
+      ? `<span class="memory-video-range">${escapeMemoryText(track.videoStartTimeText || formatMemoryTime(track.videoStartTime))}–${escapeMemoryText(track.videoEndTimeText || formatMemoryTime(track.videoEndTime))}</span>`
+      : '';
     return `<tr>
       <td><strong class="memory-track-id">${escapeMemoryText(track.trackId)}</strong></td>
-      <td class="memory-time-range">${formatMemoryTime(track.startTime)}<span>—</span>${formatMemoryTime(track.endTime)}</td>
+      <td class="memory-time-range"><span class="memory-observed-range">${observedStart}<i>—</i>${observedEnd}</span>${videoRange}</td>
       <td class="memory-hull">${escapeMemoryText(hull)}</td>
       <td><span class="memory-state ${matchKey}">${escapeMemoryText(memoryMatchLabel(track.finalMatchType))}</span></td>
-      <td><span class="memory-frame-count">${frames}</span><small>embedded / total</small></td>
+      <td><span class="memory-frame-count" title="Embedded / total">${frames}</span></td>
       <td><span class="memory-state ${stateClass}">${escapeMemoryText(memoryStateLabel(track.memoryState))}</span></td>
       <td class="memory-description" title="${description}"><div class="memory-description-text">${description}</div></td>
     </tr>`;
