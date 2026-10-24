@@ -47,7 +47,21 @@ function showToast(message, type = 'success') {
 }
 
 async function apiFetch(url, options = {}) {
-  const response = await fetch(url, options);
+  // fetch 本身没有超时：服务重启或连接挂住时 promise 永远不 settle，
+  // 调用方的 finally 不执行，按钮就会永久停在「Recognizing…」。
+  // 这里统一加超时，超时后抛错，让界面能复位并提示重试。
+  const { timeoutMs = 180000, ...init } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒），请重试`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   const contentType = response.headers.get('content-type') || '';
   const body = contentType.includes('application/json') ? await response.json() : null;
   if (!response.ok) throw new Error(body?.detail || body?.message || `请求失败：${response.status}`);
