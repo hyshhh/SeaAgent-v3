@@ -2140,12 +2140,16 @@ tbody tr:hover td { background: #f2f6f9; }
 
 #tab-monitoring .candidate-pool-panel .pool-table-head,
 #tab-monitoring .candidate-pool-panel .candidate-pool-row {
-  grid-template-columns: minmax(110px, .55fr) minmax(0, 2.45fr);
+  grid-template-columns: minmax(110px, .55fr) minmax(72px, .32fr) minmax(0, 2.13fr);
 }
 #tab-monitoring .keyframe-pool-panel .pool-table-head,
 #tab-monitoring .keyframe-pool-panel .keyframe-pool-row {
-  grid-template-columns: minmax(110px, .5fr) minmax(125px, .65fr) minmax(0, 1.85fr);
+  grid-template-columns: minmax(92px, .48fr) minmax(86px, .45fr) minmax(150px, 1.45fr) minmax(72px, .36fr) minmax(94px, .46fr);
 }
+#tab-monitoring .keyframe-pool-track strong { color: #111; font-weight: 800; }
+#tab-monitoring .pool-capacity,
+#tab-monitoring .pool-build-status { color: #344457; font-weight: 700; white-space: nowrap; }
+#tab-monitoring .pool-build-status[data-complete='true'] { color: #276749; }
 #tab-monitoring .pool-table-head { font-size: 12px; }
 #tab-monitoring .pool-table-row { min-height: 72px; font-size: 12px; }
 #tab-monitoring .pool-frame-gallery {
@@ -2188,11 +2192,11 @@ tbody tr:hover td { background: #f2f6f9; }
 @media (max-width: 620px) {
   #tab-monitoring .candidate-pool-panel .pool-table-head,
   #tab-monitoring .candidate-pool-panel .candidate-pool-row {
-    grid-template-columns: minmax(78px, .55fr) minmax(0, 1.45fr);
+    grid-template-columns: minmax(70px, .5fr) minmax(60px, .4fr) minmax(0, 1.6fr);
   }
   #tab-monitoring .keyframe-pool-panel .pool-table-head,
   #tab-monitoring .keyframe-pool-panel .keyframe-pool-row {
-    grid-template-columns: minmax(75px, .55fr) minmax(95px, .7fr) minmax(120px, 1.4fr);
+    grid-template-columns: minmax(64px, .45fr) minmax(65px, .45fr) minmax(105px, 1.2fr) minmax(58px, .4fr) minmax(74px, .5fr);
   }
 }
 

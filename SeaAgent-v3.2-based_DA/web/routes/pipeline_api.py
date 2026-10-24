@@ -145,6 +145,19 @@ def _init_pool_rows(task_id: str) -> None:
         _pool_captions[task_id] = []
 
 
+def _append_pool_refresh(task_id: str, pool: str, track_id: str, record_id: str, event_at: float) -> None:
+    captions = _pool_captions.setdefault(task_id, [])
+    captions.insert(0, {
+        "recordId": record_id,
+        "trackId": track_id,
+        "pool": pool,
+        "kind": "caption",
+        "status": "轨迹候选池刷新" if pool == "candidate" else "轨迹关键帧池刷新",
+        "eventAt": event_at,
+    })
+    del captions[_MAX_POOL_ROWS:]
+
+
 # 1.8 记录一次池事件
 def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
     pool = str(event.get("pool") or "")
@@ -183,86 +196,129 @@ def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
         if pool == "keyframe":
             rows = pools[pool]
             row = next((item for item in rows if item["trackId"] == track_id), None)
-            if event.get("action") == "remove":
-                if row and row["recordId"] == record_id:
-                    rows.remove(row)
-            else:
+            action = event.get("action")
+            if action == "track-status":
+                if row is None:
+                    row = {"recordId": record_id, "trackId": track_id, "frames": [], "buildComplete": False}
+                    rows.insert(0, row)
+                row["trackStatus"] = str(event.get("status") or "-")
+                row["capacity"] = max(1, int(event.get("capacity") or row.get("capacity") or 6))
+                if not row["frames"]:
+                    row["hullNumber"] = event.get("hullNumber")
+                    row["description"] = str(event.get("description") or "-")
+                    row["status"] = row["trackStatus"]
+                row.update(time=now, eventAt=event_at)
                 rows[:] = [item for item in rows if item["trackId"] != track_id]
-                rows.insert(0, {
-                    "recordId": record_id,
-                    "trackId": track_id,
-                    "time": now,
-                    "eventAt": event_at,
-                    "hullNumber": event.get("hullNumber"),
-                    "description": str(event.get("description") or "-"),
-                    "status": str(event.get("status") or "-"),
-                })
+                rows.insert(0, row)
                 del rows[_MAX_POOL_ROWS:]
-            captions = _pool_captions.setdefault(task_id, [])
-            captions.insert(0, {
-                "recordId": f"keyframe-{track_id}-{record_id}-{event.get('action')}",
-                "trackId": track_id,
-                "kind": "caption",
-                "status": "轨迹关键帧池刷新",
-                "eventAt": event_at,
-            })
-            del captions[_MAX_POOL_ROWS:]
+                return
+            if action == "build-complete":
+                if row:
+                    row["buildComplete"] = True
+                return
+            if event.get("action") == "remove":
+                frame = next((item for item in row["frames"] if item["recordId"] == record_id), None) if row else None
+                if frame is None:
+                    return
+                row["frames"].remove(frame)
+                if row["frames"]:
+                    latest = row["frames"][0]
+                    row.update(recordId=latest["recordId"], hullNumber=latest["hullNumber"], description=latest["description"], status=latest["status"])
+                else:
+                    rows.remove(row)
+                _append_pool_refresh(task_id, pool, track_id, f"keyframe-{track_id}-{record_id}-remove", event_at)
+            elif action == "upsert":
+                hull_number = event.get("hullNumber")
+                description = str(event.get("description") or "-")
+                status = str(event.get("status") or "-")
+                capacity = max(1, int(event.get("capacity") or (row or {}).get("capacity") or 6))
+                frame = next((item for item in row["frames"] if item["recordId"] == record_id), None) if row else None
+                changed = (
+                    frame is None
+                    or frame["hullNumber"] != hull_number
+                    or frame["description"] != description
+                    or frame["status"] != status
+                    or row.get("capacity") != capacity
+                )
+                if not changed:
+                    return
+                if row is None:
+                    row = {"recordId": record_id, "trackId": track_id, "frames": [], "buildComplete": False}
+                    rows.insert(0, row)
+                frame = {"recordId": record_id, "hullNumber": hull_number, "description": description, "status": status}
+                row["frames"] = [item for item in row["frames"] if item["recordId"] != record_id]
+                row["frames"].insert(0, frame)
+                row["recordId"] = record_id
+                row["hullNumber"] = hull_number
+                row["description"] = description
+                row["status"] = status
+                row["capacity"] = capacity
+                row["buildComplete"] = False
+                del row["frames"][capacity:]
+                rows[:] = [item for item in rows if item["trackId"] != track_id]
+                row["time"] = now
+                row["eventAt"] = event_at
+                rows.insert(0, row)
+                del rows[_MAX_POOL_ROWS:]
+                _append_pool_refresh(task_id, pool, track_id, f"keyframe-{track_id}-{record_id}-upsert", event_at)
             return
 
         rows = pools[pool]
         row = next((item for item in rows if item["trackId"] == track_id), None)
         if event.get("action") == "remove":
-            if row:
-                row["frames"] = [frame for frame in row["frames"] if frame["recordId"] != record_id]
-                if not row["frames"]:
-                    rows.remove(row)
+            frame = next((item for item in row["frames"] if item["recordId"] == record_id), None) if row else None
+            if frame is None:
+                return
+            row["frames"].remove(frame)
+            if not row["frames"]:
+                rows.remove(row)
             images.pop((pool, track_id, record_id), None)
-            captions = _pool_captions.setdefault(task_id, [])
-            captions.insert(0, {
-                "recordId": f"{pool}-{track_id}-{record_id}-removed",
-                "trackId": track_id,
-                "kind": "caption",
-                "status": "轨迹候选池刷新" if pool == "candidate" else "轨迹关键帧池刷新",
-                "eventAt": event_at,
-            })
-            del captions[_MAX_POOL_ROWS:]
+            _append_pool_refresh(task_id, pool, track_id, f"{pool}-{track_id}-{record_id}-removed", event_at)
             return
 
+        hull_number = event.get("hullNumber", (row or {}).get("hullNumber"))
+        description = str(event.get("description") or (row or {}).get("description") or "-")
+        status = str(event.get("status") or (row or {}).get("status") or "-")
+        frame = next((item for item in row["frames"] if item["recordId"] == record_id), None) if row else None
+        frame_description = str(event.get("description") or (frame or {}).get("description") or "")
+        frame_status = str(event.get("status") or (frame or {}).get("status") or "")
+        image = event.get("image")
+        image_bytes = None
+        if isinstance(image, str) and image.startswith("data:image/jpeg;base64,"):
+            try:
+                image_bytes = base64.b64decode(image.partition(",")[2], validate=True)
+            except (ValueError, TypeError):
+                logger.warning("池缩略图解码失败 [%s/%s/%s]", pool, track_id, record_id)
+        capacity = _MAX_CANDIDATE_FRAMES_PER_TRACK
+        image_key = (pool, track_id, record_id)
+        frame_changed = (
+            frame is None
+            or frame.get("hullNumber") != hull_number
+            or frame.get("description") != frame_description
+            or frame.get("status") != frame_status
+            or (image_bytes is not None and images.get(image_key) != image_bytes)
+        )
+        row_changed = (
+            row is None
+            or row.get("hullNumber") != hull_number
+            or row.get("description") != description
+            or row.get("status") != status
+            or row.get("capacity") != capacity
+        )
+        if not frame_changed and not row_changed:
+            return
         if row is None:
             row = {"recordId": track_id, "trackId": track_id, "frames": []}
-            rows.insert(0, row)
-        row["time"] = now
-        row["eventAt"] = event_at
-        row["hullNumber"] = event.get("hullNumber")
-        row["description"] = str(event.get("description") or row.get("description") or "-")
-        row["status"] = str(event.get("status") or row.get("status") or "-")
         frames = row["frames"]
-        frame = next((item for item in frames if item["recordId"] == record_id), None)
-        frame_changed = frame is None or any(
-            frame.get(key) != value
-            for key, value in {
-                "hullNumber": event.get("hullNumber"),
-                "description": str(event.get("description") or ""),
-                "status": str(event.get("status") or ""),
-            }.items()
-        )
         if frame is None:
             frame = {"recordId": record_id}
             frames.insert(0, frame)
-        frame.update(
-            time=now,
-            hullNumber=event.get("hullNumber"),
-            description=str(event.get("description") or ""),
-            status=str(event.get("status") or ""),
-        )
-        image = event.get("image")
-        if isinstance(image, str) and image.startswith("data:image/jpeg;base64,"):
-            try:
-                images[(pool, track_id, record_id)] = base64.b64decode(image.partition(",")[2], validate=True)
-            except (ValueError, TypeError):
-                logger.warning("池缩略图解码失败 [%s/%s/%s]", pool, track_id, record_id)
-        expired_frames = frames[_MAX_CANDIDATE_FRAMES_PER_TRACK:]
-        frames[:] = frames[:_MAX_CANDIDATE_FRAMES_PER_TRACK]
+        frame.update(time=now, hullNumber=hull_number, description=frame_description, status=frame_status)
+        if image_bytes is not None:
+            images[image_key] = image_bytes
+        row.update(time=now, eventAt=event_at, hullNumber=hull_number, description=description, status=status, capacity=capacity)
+        expired_frames = frames[capacity:]
+        frames[:] = frames[:capacity]
         for expired in expired_frames:
             images.pop((pool, track_id, expired["recordId"]), None)
         rows[:] = [item for item in rows if item["trackId"] != track_id]
@@ -271,16 +327,8 @@ def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
             for expired_frame in expired_row["frames"]:
                 images.pop((pool, expired_row["trackId"], expired_frame["recordId"]), None)
         del rows[_MAX_POOL_ROWS:]
-        if frame_changed:
-            captions = _pool_captions.setdefault(task_id, [])
-            captions.insert(0, {
-                "recordId": f"{pool}-{track_id}-{record_id}",
-                "trackId": track_id,
-                "kind": "caption",
-                "status": "轨迹候选池刷新" if pool == "candidate" else "轨迹关键帧池刷新",
-                "eventAt": event_at,
-            })
-            del captions[_MAX_POOL_ROWS:]
+        if frame_changed or row_changed:
+            _append_pool_refresh(task_id, pool, track_id, f"{pool}-{track_id}-{record_id}", event_at)
 
 
 # 1.9 读取 demo 配置段
@@ -1444,6 +1492,7 @@ async def get_pool_status(task_id: str):
             for row in pools[name]:
                 item = {key: value for key, value in row.items() if key != "frames"}
                 if name == "keyframe":
+                    item["frameCount"] = len(row.get("frames", []))
                     grouped[name].append(item)
                     continue
                 item["frames"] = []

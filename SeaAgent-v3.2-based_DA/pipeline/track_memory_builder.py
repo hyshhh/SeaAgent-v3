@@ -134,6 +134,15 @@ class TrackMemoryBuilder:
             status=status,
             memoryInfo=f"临时帧 {len(state.candidate_frames)} · 正式帧 {len(state.keyframe_pool)}/{limit}",
         )
+        self._emit_pool_event(
+            "keyframe", "track-status",
+            recordId=f"keyframe-track-{state.track_id}",
+            trackId=state.track_id,
+            hullNumber=state.final_hull_number or latest.get("vlmHullNumber"),
+            description=state.final_description or latest.get("description") or "等待识别结果",
+            status=status,
+            capacity=limit,
+        )
 
     def reset_persistent_memory(self) -> None:
         self.memory_manager.clear_track_memory()
@@ -290,6 +299,7 @@ class TrackMemoryBuilder:
             hullNumber=committed["vlmHullNumber"],
             description=committed["description"],
             status="正式帧",
+            capacity=limit,
         )
         self._emit_track_status(state, state.last_time, force=True)
 
@@ -444,6 +454,11 @@ class TrackMemoryBuilder:
         payload = {"trackId": state.track_id, "sourceVideoPath": self._source_path, "sourceFps": self._source_fps, "monitorStartTime": state.start_time, "monitorEndTime": state.last_time, "frameSize": self._frame_size, "boxes": sorted(state.bbox_history, key=lambda item: item["timestamp"])}
         path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         self._aggregate_if_changed(state)
+        self._emit_pool_event(
+            "keyframe", "build-complete",
+            recordId=f"keyframe-build-{state.track_id}",
+            trackId=state.track_id,
+        )
         self._write_track(state, str(path))
         self._emit_track_status(state, state.last_time, remove=True)
         self.trace.append({"event": "track_finalized", "trackId": state.track_id, "trajectoryPath": str(path)})

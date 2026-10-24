@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=30">
-<link rel="stylesheet" href="/static/css/academic.css?v=37">
+<link rel="stylesheet" href="/static/css/academic.css?v=38">
 <link rel="stylesheet" href="/static/css/qa.css?v=14">
 </head>
 <body class="academic-theme">
@@ -36,8 +36,8 @@
           </div>
         </div>
         <div class="result-area">
-          <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>选择视频后启动轨迹记忆构建</p></div>
-          <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="实时轨迹字幕流">
+          <div id="resultPlaceholder" class="video-placeholder"><div class="radar-icon">⌁</div><p>Select a video to start trajectory memory construction</p></div>
+          <aside class="active-track-monitor" id="activeTrackMonitor" aria-label="Live trajectory captions">
             <div id="activeTrackMonitorRows" class="active-track-monitor-rows" role="log" aria-live="polite" aria-relevant="additions text"><div class="active-track-monitor-empty"><strong>Awaiting trajectory observations...</strong></div></div>
           </aside>
         </div>
@@ -45,12 +45,12 @@
           <div class="pool-status-grid">
             <section class="pool-status-panel candidate-pool-panel">
               <div class="log-head"><strong>Candidate Pool</strong></div>
-              <div class="pool-table-head"><span>Track ID</span><span>Pool Frames</span></div>
+              <div class="pool-table-head"><span>Track ID</span><span>Capacity</span><span>Pool Frames</span></div>
               <div id="candidatePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for candidate frames</div></div>
             </section>
             <section class="pool-status-panel keyframe-pool-panel">
               <div class="log-head"><strong>Keyframe Pool</strong></div>
-              <div class="pool-table-head keyframe-pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span></div>
+              <div class="pool-table-head keyframe-pool-table-head"><span>Track ID</span><span>Hull Number</span><span>Description</span><span>Capacity</span><span>Build Complete</span></div>
               <div id="keyframePoolRows" class="pool-table-body"><div class="pool-empty">Waiting for confirmed keyframes</div></div>
             </section>
           </div>
@@ -449,7 +449,7 @@
 <div class="modal-overlay" id="uploadModal"><div class="modal wide-modal"><div class="modal-head"><h3>Recognize Images &amp; Add to Registry</h3><button onclick="closeUploadModal()">×</button></div><div class="upload-zone" id="uploadZone" onclick="document.getElementById('uploadFileInput').click()"><strong>Select one to six reference images</strong><span>The first image is used to recognize the hull number and description.</span><em id="uploadFilename"></em><input id="uploadFileInput" type="file" accept="image/*" multiple hidden></div><div id="uploadPreviewList" class="reference-grid"></div><div class="recognize-result" id="recognizeResult"><label>Recognized Hull Number<input id="recHullNumber" type="text"></label><label>Recognized Description<textarea id="recDescription" rows="3"></textarea></label><div id="recExistsWarn" class="warning" style="display:none"></div></div><div class="modal-actions"><button class="btn ghost" onclick="closeUploadModal()">Cancel</button><button class="btn secondary" id="btnRecognize" onclick="doRecognize()">Recognize First Image</button><button class="btn primary" id="btnConfirmAdd" onclick="doConfirmAdd()" style="display:none">Confirm Add</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script src="/static/js/app.js?v=8"></script>
-<script src="/static/js/pipeline.js?v=22"></script>
+<script src="/static/js/pipeline.js?v=23"></script>
   <script src="/static/js/memory.js?v=8"></script>
 <script src="/static/js/agent.js?v=86"></script>
 <script src="/static/js/settings.js?v=12"></script>

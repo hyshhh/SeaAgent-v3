@@ -361,7 +361,7 @@ async function launchVideoPipeline(filename, monitorStartTime = null, sequenceMo
       resultPlaceholder.className = 'stream-preview';
       resultPlaceholder.innerHTML = `
         <video id="streamVideo" class="demo-video" autoplay muted playsinline></video>
-        <div id="streamFps" class="stream-status">正在连接推流...</div>
+        <div id="streamFps" class="stream-status">Connecting stream...</div>
       `;
       resultPlaceholder.style.cssText = '';
     }
@@ -496,9 +496,9 @@ function connectStreamWs(taskId) {
     function _updateStreamStatus() {
       const statusEl = document.getElementById('streamFps');
       if (!statusEl) return;
-      const resolution = videoEl.videoWidth > 0 ? `${videoEl.videoWidth}×${videoEl.videoHeight}` : '读取中';
-      const rate = segmentRate === null ? '' : ` · 更新 ${segmentRate} 次/秒`;
-      statusEl.textContent = `推流分辨率 ${resolution}${rate}`;
+      const resolution = videoEl.videoWidth > 0 ? `${videoEl.videoWidth}×${videoEl.videoHeight}` : 'Loading';
+      const rate = segmentRate === null ? '' : ` · ${segmentRate} segments/s`;
+      statusEl.textContent = `Stream resolution ${resolution}${rate}`;
     }
 
     function _syncToLiveEdge() {
@@ -872,12 +872,17 @@ function renderPoolRows(elementId, rows, emptyText, pool) {
     return;
   }
   box.innerHTML = rows.slice(0, 40).map(row => {
-    const track = `<div class="pool-track"><strong>Track #${escHtml(row.trackId || '-')}</strong></div>`;
+    const trackClass = pool === 'keyframe' ? 'pool-track keyframe-pool-track' : 'pool-track';
+    const track = `<div class="${trackClass}"><strong>Track #${escHtml(row.trackId || '-')}</strong></div>`;
     if (pool === 'keyframe') {
+      const count = Number(row.frameCount || 0);
+      const capacity = Number(row.capacity || 6);
       return `<div class="pool-table-row keyframe-pool-row" data-track-id="${safeAttr(String(row.trackId || '-'))}">
         ${track}
         <div class="pool-hull">${escHtml(row.hullNumber || 'Unreadable')}</div>
         <div class="pool-description" title="${safeAttr(row.description || '-')}">${escHtml(row.description || '-')}</div>
+        <div class="pool-capacity">${count}/${capacity}</div>
+        <div class="pool-build-status" data-complete="${row.buildComplete ? 'true' : 'false'}">${row.buildComplete ? 'Yes' : 'No'}</div>
       </div>`;
     }
     const frames = (row.frames || []).map(frame => {
@@ -886,8 +891,10 @@ function renderPoolRows(elementId, rows, emptyText, pool) {
         : '<div class="pool-frame-placeholder">Frame</div>';
       return `<div class="pool-frame-thumb">${image}</div>`;
     }).join('');
+    const capacity = Number(row.capacity || 12);
     return `<div class="pool-table-row candidate-pool-row" data-track-id="${safeAttr(String(row.trackId || '-'))}">
       ${track}
+      <div class="pool-capacity">${(row.frames || []).length}/${capacity}</div>
       <div class="pool-frame-gallery">${frames || '<span class="pool-no-frames">No frames</span>'}</div>
     </div>`;
   }).join('');
@@ -1022,9 +1029,11 @@ function renderActiveTrackMonitor(rows, captions = []) {
   }
   container.innerHTML = activeRows.slice(0, 40).map((row) => {
     const trackId = row.trackId || '-';
-    const refreshMarkup = (row.refreshes || []).map(item =>
-      `<span class="pool-refresh-label">${escHtml(item.status || '')}</span>`
-    ).join('');
+    const refreshMarkup = (row.refreshes || []).map(item => {
+      const pool = item.pool || (/候选池/.test(item.status || '') ? 'candidate' : 'keyframe');
+      const label = pool === 'candidate' ? 'Candidate Pool Refreshed' : 'Keyframe Pool Refreshed';
+      return `<span class="pool-refresh-label">${label}</span>`;
+    }).join('');
     if (row.kind === 'caption') {
       return `<article class="active-track-live-row pool-refresh-caption" data-track-id="${safeAttr(String(trackId))}">
         <div class="active-track-live-line"><strong>Track #${escHtml(trackId)}</strong></div>
@@ -1829,9 +1838,9 @@ function connectCameraH264(taskId) {
 
   function _updateCameraStreamStatus() {
     if (!fpsEl) return;
-    const resolution = videoEl.videoWidth > 0 ? `${videoEl.videoWidth}×${videoEl.videoHeight}` : '读取中';
-    const rate = cameraSegmentRate === null ? '' : ` · 更新 ${cameraSegmentRate} 次/秒`;
-    fpsEl.textContent = `推流 ${resolution}${rate}`;
+    const resolution = videoEl.videoWidth > 0 ? `${videoEl.videoWidth}×${videoEl.videoHeight}` : 'Loading';
+    const rate = cameraSegmentRate === null ? '' : ` · ${cameraSegmentRate} segments/s`;
+    fpsEl.textContent = `Stream ${resolution}${rate}`;
   }
 
   videoEl.addEventListener('loadedmetadata', _updateCameraStreamStatus);
