@@ -24,7 +24,7 @@ const harnessAgentStates = new Map();
 const harnessToolCards = new Map();
 const harnessSkillNames = new Set();
 let harnessSkillActivityCard = null;
-let qaView = 'chat';           // 主列当前显示的子页：对话、轨迹或实时状态
+let qaView = 'chat';           // 主列当前显示的子页：chat（对话）/ trace（轨迹）
 
 const AGENT_LABELS = { planner: 'Planner', executor: 'Executor', reflector: 'Reflector' };
 const AGENT_STATE_LABELS = {
@@ -410,15 +410,23 @@ function stepsFromEvents(events) {
   const byCallId = new Map();
   const push = (kind, text, extra = {}) => { steps.push({ kind, text, ...extra }); return steps[steps.length - 1]; };
   const rounds = new Set();
+  const seenSkills = new Set();
   for (const event of events) {
     const agent = String(event.agent || '');
     const iteration = Number(event.iteration || event.round || harnessIteration || 1);
     if (event.type === 'plan') renderAgentPlan(event);
+    // 从智能体的步骤带 agent 标记：轨迹里要能看出「这一步是谁做的」
     if (Number.isFinite(iteration) && !rounds.has(iteration) && event.type === 'agent_status' && event.state === 'running') {
       rounds.add(iteration);
       push('system', `第 ${iteration} 轮开始`);
     }
-    if (event.type === 'tool_start' || event.type === 'tool_result') {
+    if (event.type === 'skill') {
+      const skill = String(event.skill || event.title || '').trim();
+      if (skill && !seenSkills.has(skill)) {
+        seenSkills.add(skill);
+        push('skill', `加载技能 ${skill}`, {agent, iteration, status: 'ok'});
+      }
+    } else if (event.type === 'tool_start' || event.type === 'tool_result') {
       const tool = String(event.tool || '');
       if (!tool || tool === 'task') continue;
       const stateChange = tool === 'read_shared_state' || tool.startsWith('update_');
