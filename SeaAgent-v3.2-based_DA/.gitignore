@@ -16,6 +16,9 @@ data/memory/tool_results/
 output/
 data/indexes/*.faiss
 data/indexes/*.pkl
+data/indexes/*.json
+data/memory/keyframes/
+data/memory/trajectories/
 
 # 本机素材与构建产物
 data/videos/

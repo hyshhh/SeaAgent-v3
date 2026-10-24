@@ -1,10 +1,25 @@
 llm:
   base_url: http://localhost:8890/v1
-  # Qwen3 默认带 thinking：推理和答案共用 max_tokens，2048 的预算经常被推理吃光，
-  # planner 还没写出共享状态就被截断（表现为 "planner 未提交负责的共享状态"）。
-  # 这里关掉 thinking，工具调用和结构化输出稳定得多，单次调用也从十几秒降到亚秒级。
   extra_body:
     chat_template_kwargs:
       enable_thinking: false
 embedding:
   base_url: http://localhost:8891/v1
+yolo:
+  confidence: 0.5
+  iou: 0.5
+  detect_every_n_frames: 1
+  tracker_params:
+    track_high_thresh: 0.5
+    track_low_thresh: 0.2
+    new_track_thresh: 0.6
+    match_thresh: 0.8
+    track_buffer: 90
+  device: ''
+  model: yolov8n.pt
+pipeline:
+  target_fps: 0.0
+  pipe_scale: 1.0
+  max_frames: 0
+  max_stale_frames: 120
+  save_output_video: true
