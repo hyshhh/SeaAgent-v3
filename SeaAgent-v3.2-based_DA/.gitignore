@@ -16,3 +16,9 @@ data/memory/tool_results/
 output/
 data/indexes/*.faiss
 data/indexes/*.pkl
+
+# 本机素材与构建产物
+data/videos/
+*.egg-info/
+# 权重默认不入库；必须随仓库分发的那个用 git add -f 单独加
+*.pt
