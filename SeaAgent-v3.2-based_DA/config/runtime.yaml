@@ -1,0 +1,10 @@
+llm:
+  base_url: http://localhost:8890/v1
+  # Qwen3 默认带 thinking：推理和答案共用 max_tokens，2048 的预算经常被推理吃光，
+  # planner 还没写出共享状态就被截断（表现为 "planner 未提交负责的共享状态"）。
+  # 这里关掉 thinking，工具调用和结构化输出稳定得多，单次调用也从十几秒降到亚秒级。
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: false
+embedding:
+  base_url: http://localhost:8891/v1

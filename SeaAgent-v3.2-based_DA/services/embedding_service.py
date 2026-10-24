@@ -10,6 +10,7 @@ import httpx
 import numpy as np
 
 from config import load_config
+from config.net import is_loopback_url
 
 
 class EmbeddingUnavailableError(RuntimeError):
@@ -26,8 +27,10 @@ class QwenMultimodalEmbedder:
         if not inputs:
             return np.empty((0, self.dimension), dtype=np.float32)
         timeout = float(self.settings.get("timeout_seconds", 60))
+        # 本机向量服务同样跳过代理环境，理由见 config/net.py。
+        trust_env = not is_loopback_url(self.settings.get("base_url"))
         try:
-            with httpx.Client(timeout=timeout) as client:
+            with httpx.Client(timeout=timeout, trust_env=trust_env) as client:
                 vectors = [self._request_embedding(client, item) for item in inputs]
         except EmbeddingUnavailableError:
             raise
