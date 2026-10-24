@@ -164,9 +164,12 @@ class ShipDetector:
             logger.warning("视频边界跟踪器重置失败，将继续处理下一段：%s", error)
 
     def cleanup(self) -> None:
-        if self._tracker_tmp_file:
+        # __del__ 在 __init__ 中途失败时也会执行；用 getattr 兜底，避免
+        # AttributeError 把真正的构造异常（例如缺 ultralytics）盖掉。
+        tmp_file = getattr(self, "_tracker_tmp_file", None)
+        if tmp_file:
             try:
-                Path(self._tracker_tmp_file).unlink(missing_ok=True)
+                Path(tmp_file).unlink(missing_ok=True)
             except Exception:
                 pass
             self._tracker_tmp_file = None

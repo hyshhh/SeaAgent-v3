@@ -9,6 +9,7 @@ import cv2
 import httpx
 import numpy as np
 from config import load_config
+from config.net import is_loopback_url
 
 class LLMServiceError(RuntimeError):
     pass
@@ -101,11 +102,16 @@ class AgentLLMService:
         url = f"{self.settings['base_url'].rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self.settings.get('api_key', '')}", "Content-Type": "application/json"}
         last_error: Exception | None = None
+        timeout = float(self.settings.get("timeout_seconds", 60))
+        # 本机 vLLM 不走代理：shell 里的 ALL_PROXY 可能是 httpx 不认的 socks:// scheme，
+        # 构造代理对象时就会抛 Unknown scheme（详见 config/net.py）。
+        trust_env = not is_loopback_url(self.settings.get("base_url"))
         for _ in range(retries + 1):
             try:
-                response = httpx.post(url, headers=headers, json=payload, timeout=float(self.settings.get("timeout_seconds", 60)))
-                response.raise_for_status()
-                message = response.json()["choices"][0]["message"]
+                with httpx.Client(timeout=timeout, trust_env=trust_env) as client:
+                    response = client.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    message = response.json()["choices"][0]["message"]
                 raw = message.get("content") or message.get("reasoning_content") or ""
                 return _extract_json(self._strip_thinking(raw))
             except Exception as error:
