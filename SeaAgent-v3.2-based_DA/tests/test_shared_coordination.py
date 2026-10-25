@@ -219,6 +219,7 @@ def test_uncertain_write_is_never_repeated(tmp_path):
 
     first = guard.wrap_tool_call(request("add_registry_vessel"), handler)
     assert first.status == "error"
+    assert json.loads(first.content)["errorType"] == "ConnectionError"
     restored = RepeatToolCallMiddleware(state=store.load("t"), scope="executor")
     result = restored.wrap_tool_call(request("add_registry_vessel"), handler)
     assert result.status == "error" and "connection dropped" in result.content

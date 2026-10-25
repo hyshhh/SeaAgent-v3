@@ -71,7 +71,35 @@ def test_trace_correlates_tool_result_and_projects_shared_evidence():
         event for event in events if event["type"] == "model" and event.get("agent") == "reflector"
     )
     assert role_output["title"] == "角色输出"
+    tool_result = next(event for event in events if event["type"] == "tool_result")
+    assert tool_result["arguments"] == {"keyframe_ids": ["kf-1"]}
+    assert tool_result["result"]["shownKeyframeIds"] == ["kf-1"]
     assert trace.result("thread-1", load_config())["answer"] == "已完成"
+
+
+def test_trace_exposes_tool_error_type_for_debugging():
+    events = []
+    trace = _Trace(events.append, event_limit=4000, shared_state=SharedTaskState("问题"))
+    trace.consume(
+        {"messages": [AIMessage(content="", tool_calls=[{"name": "recognize_tracks", "args": {"hull_number": "320"}, "id": "call-error"}])]},
+        agent_name="executor",
+    )
+    trace.consume(
+        {
+            "messages": [
+                ToolMessage(
+                    content='{"ok": false, "errorType": "TimeoutError", "error": "tool_timeout"}',
+                    name="recognize_tracks",
+                    tool_call_id="call-error",
+                    status="error",
+                )
+            ]
+        },
+        agent_name="executor",
+    )
+    result = next(event for event in events if event["type"] == "tool_result")
+    assert result["errorType"] == "TimeoutError"
+    assert result["arguments"] == {"hull_number": "320"}
 
 
 def test_planner_clarification_stops_before_executor_and_reflector(tmp_path):

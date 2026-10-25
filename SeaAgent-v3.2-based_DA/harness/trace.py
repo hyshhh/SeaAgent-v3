@@ -52,6 +52,19 @@ def _parse_payload(value: Any) -> Any:
         return content
 
 
+def _tool_error_type(result: Any, failed: bool) -> str | None:
+    if not failed:
+        return None
+    if isinstance(result, dict):
+        return str(
+            result.get("errorType")
+            or result.get("error_type")
+            or result.get("error")
+            or "ToolError"
+        )
+    return "ToolError"
+
+
 # 1.6 逐字段裁剪字符串，保留字典与列表结构
 def _bounded(value: Any, limit: int) -> Any:
     if isinstance(value, str):
@@ -317,6 +330,7 @@ class _Trace:
                     failed = str(getattr(message, "status", "") or "").lower() == "error" or (
                         isinstance(result, dict) and result.get("ok") is False
                     )
+                    error_type = _tool_error_type(result, failed)
                     record.update(
                         {
                             "tool": effective_name,
@@ -327,20 +341,26 @@ class _Trace:
                             "status": "error" if failed else "completed",
                         }
                     )
+                    if error_type:
+                        record["errorType"] = error_type
+                    tool_event = {
+                        "type": "tool_result",
+                        "title": record.get("label") or effective_name or "tool",
+                        "message": "工具调用失败" if failed else "工具调用完成",
+                        "status": "error" if failed else "completed",
+                        "tool": effective_name,
+                        "label": record.get("label") or effective_name,
+                        "arguments": _bounded(record.get("arguments") or {}, self.event_limit),
+                        "result": _bounded(result, self.event_limit),
+                        "callId": call_id,
+                        "iteration": record.get("iteration") or iteration,
+                        "round": record.get("round") or len(self.rounds) or 1,
+                        "agent": role_name,
+                    }
+                    if error_type:
+                        tool_event["errorType"] = error_type
                     self.event(
-                        {
-                            "type": "tool_result",
-                            "title": record.get("label") or effective_name or "tool",
-                            "message": "工具调用失败" if failed else "工具调用完成",
-                            "status": "error" if failed else "completed",
-                            "tool": effective_name,
-                            "label": record.get("label") or effective_name,
-                            "result": _bounded(result, self.event_limit),
-                            "callId": call_id,
-                            "iteration": record.get("iteration") or iteration,
-                            "round": record.get("round") or len(self.rounds) or 1,
-                            "agent": role_name,
-                        }
+                        tool_event
                     )
         self.consume_state()
         self.consume_plan()

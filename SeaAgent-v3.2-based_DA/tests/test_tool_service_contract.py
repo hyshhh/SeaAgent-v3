@@ -190,5 +190,20 @@ def test_tool_timeout_returns_structured_result():
 
     assert result["ok"] is False
     assert result["error"] == "tool_timeout"
+    assert result["errorType"] == "TimeoutError"
     assert result["timeoutSeconds"] == 0.01
     assert finished.wait(0.5)
+
+
+def test_tool_exception_returns_its_type():
+    service = ToolService.__new__(ToolService)
+
+    def fail():
+        raise ValueError("bad input")
+
+    result = service._run_tool("recognize_tracks", fail)
+
+    assert result["ok"] is False
+    assert result["error"] == "tool_failed"
+    assert result["errorType"] == "ValueError"
+    assert result["hint"] == "bad input"

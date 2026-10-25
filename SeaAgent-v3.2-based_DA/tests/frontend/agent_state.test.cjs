@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../../web/static/js/agent.js'), 'utf8');
 const template = fs.readFileSync(path.join(__dirname, '../../web/templates/index.html'), 'utf8');
+const styles = fs.readFileSync(path.join(__dirname, '../../web/static/css/qa.css'), 'utf8');
 
 function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: [] }) })) {
   const elements = new Map();
@@ -120,6 +121,39 @@ test('trajectory omits skill filesystem tools and keeps business tools', () => {
   assert.deepEqual(Array.from(steps, (step) => step.tool), ['get_track']);
 });
 
+test('tool trace keeps compact placeholders and expandable arguments, returns and error type', () => {
+  const ui = page();
+  const steps = ui.run(`stepsFromEvents([
+    { type: 'tool_start', tool: 'recognize_tracks', label: 'Direct recognition', callId: 'x1',
+      arguments: { track_ids: ['t1', 't2'], description: 'yellow vessel' } },
+    { type: 'tool_result', tool: 'recognize_tracks', label: 'Direct recognition', callId: 'x1', status: 'error',
+      arguments: { track_ids: ['t1', 't2'], description: 'yellow vessel' },
+      result: { ok: false, errorType: 'TimeoutError', error: 'tool_timeout' } }
+  ])`);
+  assert.equal(steps[0].status, 'error');
+  assert.equal(steps[0].errorType, 'TimeoutError');
+  assert.equal(JSON.stringify(steps[0].args.track_ids), '["t1","t2"]');
+  assert.equal(steps[0].result.error, 'tool_timeout');
+  ui.elements.set('qaTraceList', { innerHTML: '' });
+  ui.elements.set('qaTraceRibbon', { innerHTML: '' });
+  ui.elements.set('qaTraceSummary', { textContent: '' });
+  ui.run(`currentSessionId = 'trace'; sessionRuns.set('trace', { id: 'trace', events: [
+    { type: 'tool_start', tool: 'recognize_tracks', callId: 'x1', arguments: { track_ids: ['t1', 't2'], description: '${'vessel'.repeat(80)}' } },
+    { type: 'tool_result', tool: 'recognize_tracks', callId: 'x1', status: 'error',
+      result: { ok: false, errorType: 'TimeoutError', error: 'tool_timeout' } }
+  ] }); renderTrajectory();`);
+  const html = ui.elements.get('qaTraceList').innerHTML;
+  const preview = html.match(/<div class="qa-step-args">([\s\S]*?)<\/div>/)?.[1] || '';
+  assert.match(preview, /track_ids: 2 items/);
+  assert.match(preview, /raw:.*…/);
+  assert.ok(html.includes('vessel'.repeat(80)));
+  assert.match(html, /Details/);
+  assert.match(html, /TimeoutError/);
+  assert.match(html, /qa-dot-error/);
+  assert.match(styles, /#tab-agent-qa \.qa-step\.is-error \.qa-step-kind i/);
+  assert.match(styles, /background: #d92d3a/);
+});
+
 test('a split NDJSON confirmation is accepted as a terminal result', async () => {
   const result = { success: false, state: 'awaiting_confirmation', confirmation };
   const line = JSON.stringify({ type: 'confirm', confirmation, result }) + '\n';
@@ -163,8 +197,8 @@ test('confirmation card is mounted in the visible chat or trace view', () => {
 
   assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
   assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
-  assert.match(template, /qa\.css\?v=18/);
-  assert.match(template, /agent\.js\?v=89/);
+  assert.match(template, /qa\.css\?v=19/);
+  assert.match(template, /agent\.js\?v=90/);
   const ui = page();
   ui.run(`currentSessionId = 't'; qaView = 'chat';
     renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);

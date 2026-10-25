@@ -27,6 +27,10 @@ def _signature(name: str, arguments: Any) -> str:
     return f"{name}:{normalized}"
 
 
+def _error_payload(error: BaseException) -> dict[str, Any]:
+    return {"ok": False, "errorType": type(error).__name__, "error": str(error)}
+
+
 def _message(
     request: Any,
     content: str,
@@ -169,7 +173,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
     def _failed(self, request: Any, key: str | None, error: BaseException) -> None:
         call = request.tool_call
         name = str(call.get("name") or "")
-        result = {"ok": False, "error": str(error)}
+        result = _error_payload(error)
         self.state.finish_call(key, result, failed=True)
         if name not in STATE_TOOLS and name != "read_file":
             self.state.record_tool_result(
@@ -187,7 +191,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             self._failed(request, key, error)
             return _message(
                 request,
-                json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False),
+                json.dumps(_error_payload(error), ensure_ascii=False),
                 status="error",
             )
         self._complete(request, key, response)
@@ -205,7 +209,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             self._failed(request, key, error)
             return _message(
                 request,
-                json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False),
+                json.dumps(_error_payload(error), ensure_ascii=False),
                 status="error",
             )
         self._complete(request, key, response)

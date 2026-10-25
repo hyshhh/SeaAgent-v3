@@ -152,6 +152,45 @@ function compact(value, limit = 600) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
+function toolErrorType(result, event = {}) {
+  if (event.errorType || event.error_type) return String(event.errorType || event.error_type);
+  if (!result || typeof result !== 'object') return '';
+  const nested = result.cached_error && typeof result.cached_error === 'object' ? result.cached_error : {};
+  return String(
+    result.errorType || result.error_type || result.code || result.error
+    || nested.errorType || nested.error_type || nested.code || nested.error || ''
+  );
+}
+
+function summarizeToolResult(result, event = {}) {
+  if (result === undefined) return 'return: pending';
+  const failed = event.status === 'error' || (result && typeof result === 'object' && result.ok === false);
+  const errorType = toolErrorType(result, event);
+  if (failed) {
+    const error = result && typeof result === 'object' ? result.error : result;
+    const type = errorType || 'ToolError';
+    const detail = error && String(error) !== type ? ` · error: ${compact(error, 96).replace(/\s+/g, ' ')}` : '';
+    return `return: error type: ${type}${detail}`;
+  }
+  return `return: ${compact(result, 220).replace(/\s+/g, ' ')}`;
+}
+
+function toolDetailsText(step) {
+  const rawArgs = step.args === undefined ? step.arguments : step.args;
+  const args = rawArgs === undefined ? '—' : compact(rawArgs, Infinity);
+  const result = step.result === undefined ? 'pending' : compact(step.result, Infinity);
+  const errorType = toolErrorType(step.result, step);
+  return `Arguments:\n${args}\n\nReturn:\n${result}${errorType ? `\n\nError type:\n${errorType}` : ''}`;
+}
+
+function toolSummaryLine(name, args, result, event = {}) {
+  const summary = args === undefined ? '' : summarizeToolArguments(name, args);
+  const raw = args === undefined ? '' : compact(args, 180).replace(/\s+/g, ' ');
+  const input = args === undefined ? '' : `args: ${summary || raw}${summary ? ` · raw: ${raw}` : ''}`;
+  const output = summarizeToolResult(result, event);
+  return [input, output].filter(Boolean).join(' · ') || output;
+}
+
 function formatEventTime() {
   return new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 }
@@ -551,6 +590,7 @@ function stepsFromEvents(events) {
       if (event.type === 'tool_start') {
         const step = push(kind, label, {
           tool,
+          callId,
           args: event.arguments,
           status: 'running',
           agent,
@@ -560,8 +600,15 @@ function stepsFromEvents(events) {
       } else {
         const step = byCallId.get(callId);
         const failed = event.status === 'error' || event.result?.ok === false;
-        if (step) step.status = failed ? 'error' : 'ok';
-        else push(kind, label, {tool, status: failed ? 'error' : 'ok', agent, iteration});
+        const details = {
+          callId,
+          result: event.result,
+          errorType: event.errorType || event.error_type || toolErrorType(event.result, event),
+          status: failed ? 'error' : 'ok',
+        };
+        if (event.arguments !== undefined) details.args = event.arguments;
+        if (step) Object.assign(step, details);
+        else push(kind, label, {tool, agent, iteration, ...details});
       }
     } else if (event.type === 'confirm') {
       renderAgentConfirmation(event);
@@ -571,7 +618,13 @@ function stepsFromEvents(events) {
       );
       if (pending) pending.status = 'awaiting_confirmation';
     } else if (event.type === 'error') {
-      push('error', displayText(event.message || 'Execution failed'), {agent, iteration});
+      push('error', displayText(event.message || 'Execution failed'), {
+        agent,
+        iteration,
+        result: event.result,
+        errorType: event.errorType || event.error_type || toolErrorType(event.result, event),
+        status: 'error',
+      });
     }
   }
   return steps;
@@ -615,13 +668,18 @@ function renderTrajectory() {
     // 从智能体做的步骤降一级并挂上名字，主从结构在轨迹里一眼可见
     const owner = step.agent ? `<span class="qa-step-agent">${escapeHtml(step.agent)}</span>` : '';
     const delegation = step.delegation ? `<span class="qa-step-delegation">→ ${escapeHtml(step.delegation)}</span>` : '';
-    const args = step.args === undefined ? '' : escapeHtml(summarizeToolArguments(step.tool, step.args));
+    const summaryLine = step.tool
+      ? escapeHtml(toolSummaryLine(step.tool, step.args, step.result, step)) : '';
+    const details = step.tool && (step.args !== undefined || step.result !== undefined)
+      ? `<details class="qa-step-detail"><summary>Details</summary><pre>${escapeHtml(toolDetailsText(step))}</pre></details>` : '';
     const iteration = step.iteration ? `<span class="qa-step-round">Iteration ${step.iteration}</span>` : '';
-    return `<article class="qa-step${step.agent ? ' is-subagent' : ''}">
-      <span class="qa-step-kind"><i class="${kind.dot}"></i>${kind.label}</span>
+    const dot = step.status === 'error' ? 'qa-dot-error' : kind.dot;
+    return `<article class="qa-step${step.agent ? ' is-subagent' : ''}${step.status === 'error' ? ' is-error' : ''}" data-status="${escapeHtml(step.status || '')}">
+      <span class="qa-step-kind"><i class="${dot}"></i>${kind.label}</span>
       <div class="qa-step-body">
         <div class="qa-step-line">${iteration}${owner}<strong>${escapeHtml(step.text || '')}</strong>${delegation}${badge}</div>
-        ${args ? `<div class="qa-step-args">${args}</div>` : ''}
+        ${summaryLine ? `<div class="qa-step-args">${summaryLine}</div>` : ''}
+        ${details}
       </div>
     </article>`;
   }).join('');
@@ -948,9 +1006,9 @@ function createToolEvent(event) {
   const item = document.createElement('article');
   item.className = 'qa-tool-event is-running';
   item.dataset.callId = callId;
-  const args = summarizeToolArguments(event.tool, event.arguments || {});
   const owner = AGENT_LABELS[event.agent] || '';
-  item.innerHTML = `<div class="qa-tool-event-head"><span class="qa-tool-dot" aria-hidden="true"></span><span class="qa-tool-name">${escapeHtml(tool)}</span>${owner ? `<span class="qa-tool-agent">${escapeHtml(owner)}</span>` : ''}<span class="qa-tool-args">${escapeHtml(args)}</span><span class="qa-tool-status">Running</span></div>`;
+  item.__toolEvent = { ...event };
+  item.innerHTML = `<div class="qa-tool-event-head"><span class="qa-tool-dot" aria-hidden="true"></span><span class="qa-tool-name">${escapeHtml(tool)}</span>${owner ? `<span class="qa-tool-agent">${escapeHtml(owner)}</span>` : ''}<span class="qa-tool-args">${escapeHtml(toolSummaryLine(event.tool, event.arguments || {}, undefined, event))}</span><span class="qa-tool-status">Running</span></div><details class="qa-tool-details"><summary>Details</summary><pre>${escapeHtml(toolDetailsText(item.__toolEvent))}</pre></details>`;
   stream.appendChild(item);
   harnessToolCards.set(callId, item);
   return item;
@@ -994,12 +1052,21 @@ function completeToolEvent(event) {
   }
   const target = harnessToolCards.get(callId);
   if (!target) return;
+  target.__toolEvent = {
+    ...(target.__toolEvent || {}),
+    ...event,
+    arguments: event.arguments === undefined ? target.__toolEvent?.arguments : event.arguments,
+  };
   // 失败的工具调用要一眼看得出来：事件带 status，早期事件只有 type
-  const failed = event.type === 'error' || event.status === 'error';
+  const failed = event.type === 'error' || event.status === 'error' || event.result?.ok === false;
   target.classList.remove('is-running');
   target.classList.add(failed ? 'is-error' : 'is-complete');
   const status = target.querySelector('.qa-tool-status');
   if (status) status.textContent = failed ? 'Failed' : 'Done';
+  const summary = target.querySelector('.qa-tool-args');
+  if (summary) summary.textContent = toolSummaryLine(target.__toolEvent.tool, target.__toolEvent.arguments || {}, target.__toolEvent.result, target.__toolEvent);
+  const details = target.querySelector('.qa-tool-details pre');
+  if (details) details.textContent = toolDetailsText(target.__toolEvent);
   target.dataset.status = failed ? 'failed' : 'complete';
 }
 

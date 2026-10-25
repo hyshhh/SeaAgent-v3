@@ -67,13 +67,20 @@ class ToolService:
             return {
                 "ok": False,
                 "error": "tool_timeout",
+                "errorType": "TimeoutError",
                 "tool": tool_name,
                 "timeoutSeconds": float(timeout),
                 "hint": f"{tool_name} 超过 {float(timeout):.0f} 秒，已返回超时结果。",
             }
         if "error" in result:
             error = result["error"]
-            return {"ok": False, "error": "tool_failed", "tool": tool_name, "hint": str(error)}
+            return {
+                "ok": False,
+                "error": "tool_failed",
+                "errorType": type(error).__name__,
+                "tool": tool_name,
+                "hint": str(error),
+            }
         value = result.get("value")
         return value if isinstance(value, dict) else {"ok": True, "value": value}
 
