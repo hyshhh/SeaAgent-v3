@@ -433,16 +433,22 @@ class SeaVideoHarness:
 
     # 3.1.10 从历史检查点补回技能回执
     def _seed_skills_from_checkpoint(self, trace: _Trace, thread_id: str) -> None:
-        try:
-            snapshot = self.agents["executor"].get_state(
-                {"configurable": {"thread_id": f"{thread_id}:executor"}}
-            )
-        except Exception:  # 新会话没有检查点，或 agent 不支持读快照
-            logger.debug("跳过快照技能回执：thread_id=%s", thread_id, exc_info=True)
-            return
-        values = getattr(snapshot, "values", None)
-        if isinstance(values, dict):
-            trace.consume_skills(values)
+        stale_roles = getattr(self, "_stale_checkpoint_roles", set())
+        for role, agent in self.agents.items():
+            if role in stale_roles:
+                continue
+            try:
+                snapshot = agent.get_state(
+                    {"configurable": {"thread_id": f"{thread_id}:{role}"}}
+                )
+            except Exception:  # 新会话没有检查点，或 agent 不支持读快照
+                logger.debug(
+                    "跳过快照技能回执：role=%s thread_id=%s", role, thread_id, exc_info=True
+                )
+                continue
+            values = getattr(snapshot, "values", None)
+            if isinstance(values, dict):
+                trace.consume_skills(values, role)
         trace.consume_plan()
 
     # 3.1.11 生成角色开工消息，要求先读取共享状态
@@ -763,6 +769,7 @@ class SeaVideoHarness:
             trace.event(
                 {"type": "status", "title": "Harness 已启动", "message": "三 Agent 已连接共享状态"}
             )
+            trace.consume_state()
             self._seed_skills_from_checkpoint(trace, thread_id)
             heartbeat = self._start_heartbeat(trace, question)
             try:
@@ -934,6 +941,7 @@ class SeaVideoHarness:
             trace.event(
                 {"type": "status", "title": "Harness 已启动", "message": "三 Agent 已连接共享状态"}
             )
+            trace.consume_state()
             self._seed_skills_from_checkpoint(trace, thread_id)
             heartbeat = self._start_heartbeat(trace, question)
             driver = self._drive_multi_steps(question, thread_id, trace)

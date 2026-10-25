@@ -142,13 +142,29 @@ def test_trace_emits_compact_agent_status_with_iteration():
 
     trace.agent_status("executor", "running", 3, "阶段开始")
 
-    assert events == [{
+    assert events[0] == {
         "type": "agent_status",
         "agent": "executor",
         "state": "running",
         "iteration": 3,
         "message": "阶段开始",
-    }]
+    }
+    assert events[1]["type"] == "state_snapshot"
+    assert events[1]["sharedState"]["pending_agent"] is None
+
+
+def test_trace_emits_changed_shared_state_snapshots_only():
+    events = []
+    state = SharedTaskState("问题")
+    state.update("planner", {"requirements": ["r1"]})
+    trace = _Trace(events.append, event_limit=4000, shared_state=state)
+
+    trace.consume_state()
+    trace.consume_state()
+
+    snapshots = [event for event in events if event["type"] == "state_snapshot"]
+    assert len(snapshots) == 1
+    assert snapshots[0]["sharedState"]["requirements"] == ["r1"]
 
 
 def test_builtin_file_tools_get_chinese_labels():
@@ -502,6 +518,20 @@ def test_resumed_thread_re_emits_skill_events_from_the_checkpoint():
     ]
     # 补发要读执行角色自己的检查点，线程名不是会话 id
     assert seen == {"configurable": {"thread_id": "thread-resume:executor"}}
+
+
+def test_skill_events_keep_same_skill_separate_by_agent():
+    events = []
+    trace = _Trace(events.append, event_limit=4000)
+
+    trace.consume_skills({"skills_metadata": [{"name": "query"}]}, "planner")
+    trace.consume_skills({"skills_metadata": [{"name": "query"}]}, "planner")
+    trace.consume_skills({"skills_metadata": [{"name": "query"}]}, "executor")
+
+    assert [(event["agent"], event["skill"]) for event in events] == [
+        ("planner", "query"),
+        ("executor", "query"),
+    ]
 
 
 def test_skill_seeding_tolerates_an_agent_without_state_snapshot():

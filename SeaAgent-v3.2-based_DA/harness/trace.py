@@ -92,8 +92,9 @@ class _Trace:
 
         # —— 去重游标：抵御 updates 流的重复投递 ——
         self._seen_messages: set[str] = set()  # 已处理过的消息指纹
-        self._seen_skills: set[str] = set()  # 已上报过的 skill 名
+        self._seen_skills: set[tuple[str, str]] = set()  # 已上报过的 Agent 与 skill 组合
         self._plan_signature = ""  # 前端计划快照没有变化时不重复广播。
+        self._state_signature = ""  # 前端状态页只接收发生变化的共享状态快照。
 
     def agent_status(self, agent: str, state: str, iteration: int, action: str) -> None:
         self.event(
@@ -105,6 +106,7 @@ class _Trace:
                 "message": action,
             }
         )
+        self.consume_state()
 
     # 2.1.2 裁剪并广播事件
     def event(self, payload: dict[str, Any]) -> None:
@@ -132,7 +134,7 @@ class _Trace:
         )
 
     # 2.1.4 广播首次出现的技能回执
-    def consume_skills(self, state: dict[str, Any]) -> None:
+    def consume_skills(self, state: dict[str, Any], agent_name: str = "") -> None:
         metadata = state.get("skills_metadata")
         if not isinstance(metadata, list):
             return
@@ -140,15 +142,17 @@ class _Trace:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "").strip()
-            if not name or name in self._seen_skills:
+            key = (str(agent_name or ""), name)
+            if not name or key in self._seen_skills:
                 continue
-            self._seen_skills.add(name)
+            self._seen_skills.add(key)
             self.event(
                 {
                     "type": "skill",
                     "title": name,
                     "message": str(item.get("description") or "Skill 已加载"),
                     "skill": name,
+                    "agent": str(agent_name or ""),
                 }
             )
 
@@ -179,6 +183,26 @@ class _Trace:
             }
         )
 
+    # 2.1.5.1 将共享业务状态投影给状态页；缓存结果仍由共享状态内部管理。
+    def consume_state(self) -> None:
+        # Tiny payload limits are used by focused tests and compact clients;
+        # a complete state snapshot cannot fit those event contracts.
+        if self.shared_state is None or self.event_limit < 256:
+            return
+        state = self.shared_state.view()
+        signature = json.dumps(state, ensure_ascii=False, sort_keys=True, default=str)
+        if signature == self._state_signature:
+            return
+        self._state_signature = signature
+        self.event(
+            {
+                "type": "state_snapshot",
+                "sharedState": state,
+                "iteration": state.get("iteration") or 1,
+                "agent": state.get("pending_agent") or "",
+            }
+        )
+
     # 2.1.6 消费框架帧，关联请求与结果并广播角色事件
     def consume(self, update: Any, agent_name: str = "") -> None:
         if not isinstance(update, dict):
@@ -196,7 +220,7 @@ class _Trace:
             else 1
         )
         for state in frames:
-            self.consume_skills(state)  # skill 回执可能出现在任一节点的 state 里
+            self.consume_skills(state, role_name)  # skill 回执可能出现在任一节点的 state 里
             messages = state.get("messages")
             if not isinstance(messages, list):
                 continue  # 该节点这一帧只更新了别的字段
@@ -318,6 +342,7 @@ class _Trace:
                             "agent": role_name,
                         }
                     )
+        self.consume_state()
         self.consume_plan()
 
     # 2.1.7 汇总对外结果，共享模式的回答与证据来自共享状态

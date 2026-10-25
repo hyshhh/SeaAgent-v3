@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=30">
 <link rel="stylesheet" href="/static/css/academic.css?v=40">
-<link rel="stylesheet" href="/static/css/qa.css?v=16">
+<link rel="stylesheet" href="/static/css/qa.css?v=18">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -152,27 +152,27 @@
     </section>
   </div>
 </section>
-<section class="tab-content" id="tab-agent-qa">
+<section class="tab-content" id="tab-agent-qa" lang="en">
   <div class="qa-shell">
     <div class="qa-subnav" role="tablist" aria-label="Video QA views">
-      <button type="button" class="qa-subtab is-active" id="qaSubtabChat" role="tab" aria-selected="true" onclick="switchQaView('chat')">对话</button>
-      <button type="button" class="qa-subtab" id="qaSubtabTrace" role="tab" aria-selected="false" onclick="switchQaView('trace')">轨迹</button>
-      <button type="button" class="qa-subtab" id="qaSubtabState" role="tab" aria-selected="false" onclick="switchQaView('state')">状态</button>
+      <button type="button" class="qa-subtab is-active" id="qaSubtabChat" role="tab" aria-selected="true" onclick="switchQaView('chat')">Chat</button>
+      <button type="button" class="qa-subtab" id="qaSubtabTrace" role="tab" aria-selected="false" onclick="switchQaView('trace')">Trace</button>
+      <button type="button" class="qa-subtab" id="qaSubtabState" role="tab" aria-selected="false" onclick="switchQaView('state')">State</button>
       <span class="qa-subnav-status"><i id="qaHeaderDot"></i><strong id="qaHeaderStatus">Ready</strong></span>
       <span class="qa-subnav-meta" id="qaViewMeta"></span>
     </div>
     <div class="qa-layout">
       <aside class="qa-sessions" aria-label="Conversation history">
         <div class="qa-sessions-head">
-          <span class="qa-sessions-title">会话</span>
+          <span class="qa-sessions-title">Sessions</span>
           <span class="qa-sessions-count" id="qaSessionCount">0</span>
         </div>
-        <button type="button" class="qa-sessions-new" id="btnNewSession" onclick="startNewSession()"><i aria-hidden="true">＋</i><span>新会话</span></button>
+        <button type="button" class="qa-sessions-new" id="btnNewSession" onclick="startNewSession()"><i aria-hidden="true">＋</i><span>New session</span></button>
         <div class="qa-sessions-section">
-          <span>近期会话</span>
-          <button type="button" class="qa-sessions-refresh" onclick="loadSessions()" title="刷新会话列表" aria-label="刷新会话列表">↻</button>
+          <span>Recent</span>
+          <button type="button" class="qa-sessions-refresh" onclick="loadSessions()" title="Refresh sessions" aria-label="Refresh sessions">↻</button>
         </div>
-        <div id="qaSessionList" class="qa-session-list"><div class="qa-sessions-empty">还没有会话。提一个问题，对话就会出现在这里。</div></div>
+        <div id="qaSessionList" class="qa-session-list"><div class="qa-sessions-empty">No sessions yet. Ask a question to start one.</div></div>
       </aside>
 
       <main class="qa-main" aria-label="Video question answering workspace">
@@ -222,16 +222,16 @@
           <div id="qaChatConfirmationMount" class="qa-confirm-mount">
             <section id="agentConfirmPanel" class="qa-confirm" data-state="idle" hidden aria-label="Write confirmation" aria-live="polite">
               <div class="qa-confirm-head">
-                <span class="qa-confirm-title">待确认 · 写入先验库</span>
+                <span class="qa-confirm-title">Confirmation required · Registry write</span>
                 <span id="agentConfirmHint" class="qa-confirm-hint"></span>
               </div>
               <dl id="agentConfirmBody" class="qa-confirm-body"></dl>
               <div class="qa-confirm-actions">
-                <button type="button" id="btnConfirmApprove" class="qa-confirm-approve">批准写入</button>
-                <button type="button" id="btnConfirmReject" class="qa-confirm-reject">拒绝</button>
+                <button type="button" id="btnConfirmApprove" class="qa-confirm-approve">Approve</button>
+                <button type="button" id="btnConfirmReject" class="qa-confirm-reject">Reject</button>
               </div>
-              <label class="qa-confirm-feedback"><span>拒绝理由（会交回模型，让它换个做法）</span>
-                <textarea id="agentConfirmFeedback" rows="2" placeholder="例如：这条不该入库，先查它在不在库里"></textarea>
+              <label class="qa-confirm-feedback"><span>Rejection note (the model will try another approach)</span>
+                <textarea id="agentConfirmFeedback" rows="2" placeholder="For example: check whether this vessel is already registered."></textarea>
               </label>
             </section>
           </div>
@@ -239,15 +239,15 @@
 
         <div class="qa-composer-wrap">
           <div class="qa-composer">
-            <textarea id="agentQuestion" rows="1" placeholder="问点什么，Ctrl / ⌘ + Enter 运行">数据库中有没有黄色的无人艇？</textarea>
+            <textarea id="agentQuestion" rows="1" placeholder="Ask a question, Ctrl / ⌘ + Enter to run">数据库中有没有黄色的无人艇？</textarea>
             <div class="qa-composer-actions">
               <div class="qa-composer-tools">
-                <select class="agent-preset-select" aria-label="预设问题" title="预设问题" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">预设问题</option><option value="舷号 0857 有没有在视频中出现？">舷号查询</option><option value="数据库中有没有黄色的无人艇？">先验库查询</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">未在库船</option><option value="查找一下15:30到15:40有哪些在库船出现？">在库船</option><option value="从15:30到15:40一共出现多少艘船？">数量统计</option><option value="监控中什么时间出现过一艘黄色无人艇？">外观检索</option></select>
-                <button type="button" class="qa-endpoint-button" onclick="openQaEndpointSettings()" title="配置视觉语言模型和向量模型服务端口">模型端口</button>
-                <button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="刷新记忆概览" aria-label="刷新记忆概览">↻</button>
-                <button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="清除问答记忆" aria-label="清除问答记忆"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></svg></button>
+                <select class="agent-preset-select" aria-label="Preset questions" title="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Presets</option><option value="舷号 0857 有没有在视频中出现？">Hull lookup</option><option value="数据库中有没有黄色的无人艇？">Registry lookup</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Unregistered vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">Registered vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance search</option></select>
+                <button type="button" class="qa-endpoint-button" onclick="openQaEndpointSettings()" title="Configure VLM and embedding service ports">Model ports</button>
+                <button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="Refresh memory summary" aria-label="Refresh memory summary">↻</button>
+                <button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="Clear QA memory" aria-label="Clear QA memory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></svg></button>
               </div>
-              <div class="qa-composer-buttons"><span class="qa-shortcut">Ctrl / ⌘ + Enter</span><button type="button" class="qa-stop-button" id="btnStopAgent" onclick="stopAgentRun()" title="停止本轮" aria-label="停止本轮" hidden>■</button><button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()" title="运行（Ctrl / ⌘ + Enter）" aria-label="运行">↑</button></div>
+              <div class="qa-composer-buttons"><span class="qa-shortcut">Ctrl / ⌘ + Enter</span><button type="button" class="qa-stop-button" id="btnStopAgent" onclick="stopAgentRun()" title="Stop this run" aria-label="Stop this run" hidden>■</button><button type="button" class="qa-send-button" id="btnAskAgent" onclick="askAgent()" title="Run (Ctrl / ⌘ + Enter)" aria-label="Run">↑</button></div>
             </div>
           </div>
         </div>
@@ -255,25 +255,29 @@
 
         <div class="qa-view" id="qaTraceView" hidden>
           <div class="qa-trace-head">
-            <div class="qa-trace-title"><span>执行轨迹</span><em id="qaTraceSummary">这一轮还没有开始</em></div>
-            <div class="qa-trace-legend"><i class="qa-dot-tool"></i>工具<i class="qa-dot-skill"></i>技能<i class="qa-dot-system"></i>状态<i class="qa-dot-error"></i>错误</div>
+            <div class="qa-trace-title"><span>Execution trace</span><em id="qaTraceSummary">This run has not started.</em></div>
+            <div class="qa-trace-legend"><i class="qa-dot-tool"></i>Tools<i class="qa-dot-system"></i>State<i class="qa-dot-error"></i>Errors</div>
           </div>
           <div class="qa-trace-ribbon" id="qaTraceRibbon" aria-hidden="true"></div>
-          <div class="qa-trace-body" id="qaTraceList"><div class="qa-empty-state">这一轮开始时，助手与工具的每一步都会记在这里。</div></div>
+          <div class="qa-trace-body" id="qaTraceList"><div class="qa-empty-state">Assistant and business-tool steps will appear here when the run starts.</div></div>
           <div id="qaTraceConfirmationMount" class="qa-confirm-mount"></div>
         </div>
 
         <section class="qa-view qa-state-view" id="qaStateView" hidden aria-label="Agent runtime status">
           <header class="qa-state-head">
-            <div><span class="qa-section-title">实时状态</span><p>当前问答各 Agent 的阶段与最近动作</p></div>
-            <div class="qa-state-round"><span>当前轮次</span><strong id="qaIterationCount">0</strong></div>
+            <div><span class="qa-section-title">Runtime state</span><p>Current phase and latest action for each agent</p></div>
+            <div class="qa-state-round"><span>Iteration</span><strong id="qaIterationCount">0</strong></div>
           </header>
-          <div class="qa-state-summary"><span>当前阶段</span><strong id="qaStageSummary">等待问答</strong><time id="qaLastStateChange">—</time></div>
+          <div class="qa-state-summary"><span>Current phase</span><strong id="qaStageSummary">Waiting for a question</strong><time id="qaLastStateChange">—</time></div>
           <div class="qa-agent-status-list" id="qaAgentStatusList">
-            <article class="qa-agent-status" data-agent="planner" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Planner</strong><span class="qa-agent-status-label">待执行</span><p>等待任务</p></article>
-            <article class="qa-agent-status" data-agent="executor" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Executor</strong><span class="qa-agent-status-label">待执行</span><p>等待任务</p></article>
-            <article class="qa-agent-status" data-agent="reflector" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Reflector</strong><span class="qa-agent-status-label">待执行</span><p>等待任务</p></article>
+            <article class="qa-agent-status" data-agent="planner" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Planner</strong><span class="qa-agent-status-label">Pending</span><p>Waiting for task</p></article>
+            <article class="qa-agent-status" data-agent="executor" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Executor</strong><span class="qa-agent-status-label">Pending</span><p>Waiting for task</p></article>
+            <article class="qa-agent-status" data-agent="reflector" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Reflector</strong><span class="qa-agent-status-label">Pending</span><p>Waiting for task</p></article>
           </div>
+          <section class="qa-shared-state" aria-label="Shared state">
+            <div class="qa-shared-state-head"><span class="qa-section-title">Shared state</span><span id="qaSharedStateMeta">Waiting for a state snapshot.</span></div>
+            <div id="qaSharedStateGroups" class="qa-shared-state-groups"><div class="qa-inspector-empty">No shared state yet.</div></div>
+          </section>
         </section>
       </main>
 
@@ -282,7 +286,7 @@
           <div class="qa-inspector-heading"><span>Run status</span><i id="agentThinkingDot"></i></div>
           <strong id="qaInspectorState">Ready to inspect</strong>
           <div class="qa-stat-grid"><div><b id="qaSkillCount">0</b><span>skills</span></div><div><b id="qaToolCount">0</b><span>business tools</span></div></div>
-          <div class="qa-status-memory" id="agentRoundLimit">记忆概览读取中…</div>
+          <div class="qa-status-memory" id="agentRoundLimit">Loading memory summary…</div>
         </section>
 
         <details class="qa-inspector-card qa-evidence-card" id="qaEvidenceDisclosure">
@@ -301,12 +305,12 @@
     </div>
   </div>
   <dialog class="qa-endpoint-dialog" id="qaEndpointDialog" aria-labelledby="qaEndpointTitle">
-    <div class="qa-endpoint-head"><div><span class="eyebrow">MODEL SERVICES</span><h2 id="qaEndpointTitle">QA 模型 API 端口</h2></div><button type="button" class="qa-endpoint-close" onclick="closeQaEndpointSettings()" aria-label="关闭">×</button></div>
-    <p class="qa-endpoint-note">修改后保留当前服务地址的协议、主机和路径；新的问答请求将立即使用新端口。</p>
-    <label>VLM API 端口<input id="qaVlmApiPort" type="number" min="1" max="65535" step="1" required><small>用于视觉语言模型的 Chat Completions API。</small></label>
-    <label>Embedding API 端口<input id="qaEmbeddingApiPort" type="number" min="1" max="65535" step="1" required><small>用于文本与图像向量编码的 Embeddings API。</small></label>
+    <div class="qa-endpoint-head"><div><span class="eyebrow">MODEL SERVICES</span><h2 id="qaEndpointTitle">QA model API ports</h2></div><button type="button" class="qa-endpoint-close" onclick="closeQaEndpointSettings()" aria-label="Close">×</button></div>
+    <p class="qa-endpoint-note">The protocol, host and path are preserved. New QA requests use the updated ports immediately.</p>
+    <label>VLM API port<input id="qaVlmApiPort" type="number" min="1" max="65535" step="1" required><small>Chat Completions API for the vision-language model.</small></label>
+    <label>Embedding API port<input id="qaEmbeddingApiPort" type="number" min="1" max="65535" step="1" required><small>Embeddings API for text and image vectors.</small></label>
     <div class="qa-endpoint-status" id="qaEndpointStatus" role="status"></div>
-    <div class="qa-endpoint-actions"><button type="button" class="qa-endpoint-cancel" onclick="closeQaEndpointSettings()">取消</button><button type="button" class="qa-endpoint-save" id="qaEndpointSaveButton" onclick="saveQaEndpointSettings()">保存端口</button></div>
+    <div class="qa-endpoint-actions"><button type="button" class="qa-endpoint-cancel" onclick="closeQaEndpointSettings()">Cancel</button><button type="button" class="qa-endpoint-save" id="qaEndpointSaveButton" onclick="saveQaEndpointSettings()">Save ports</button></div>
   </dialog>
 </section>
 <section class="tab-content" id="tab-database">
@@ -461,7 +465,7 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=23"></script>
   <script src="/static/js/memory.js?v=9"></script>
-<script src="/static/js/agent.js?v=87"></script>
+<script src="/static/js/agent.js?v=89"></script>
 <script src="/static/js/settings.js?v=12"></script>
 </body>
 </html>

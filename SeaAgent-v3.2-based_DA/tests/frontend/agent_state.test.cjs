@@ -9,6 +9,12 @@ const template = fs.readFileSync(path.join(__dirname, '../../web/templates/index
 
 function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: [] }) })) {
   const elements = new Map();
+  const activityRows = [];
+  const activityStream = {
+    innerHTML: '',
+    querySelector: () => null,
+    appendChild(row) { row.parentElement = this; row.isConnected = true; activityRows.push(row); },
+  };
   for (const id of [
     'agentPlanPanel', 'agentPlanList', 'agentPlanProgress', 'agentPlanMeterFill',
     'agentConfirmPanel', 'agentConfirmBody', 'agentConfirmHint', 'agentConfirmFeedback',
@@ -16,6 +22,7 @@ function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: []
     'btnConfirmApprove', 'btnConfirmReject',
     'agentFinalView', 'agentAnswer', 'btnAskAgent', 'btnStopAgent',
     'agentThinkingState',
+    'qaSharedStateGroups', 'qaSharedStateMeta',
   ]) {
     elements.set(id, {
       hidden: true, innerHTML: '', textContent: '', value: '', disabled: false,
@@ -23,12 +30,23 @@ function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: []
     });
   }
   const context = vm.createContext({
-    document: { getElementById: (id) => elements.get(id) || null, addEventListener() {} },
+    document: {
+      getElementById: (id) => id === 'agentActivityStream' ? activityStream : elements.get(id) || null,
+      createElement: () => {
+        const message = { textContent: '' };
+        return {
+          dataset: {}, isConnected: false, innerHTML: '',
+          querySelector: (selector) => selector === '.qa-event-message' ? message : null,
+          message,
+        };
+      },
+      addEventListener() {},
+    },
     window: {}, requestAnimationFrame: (fn) => fn(), fetch, TextDecoder, Uint8Array,
     AbortController, console,
   });
   vm.runInContext(source, context);
-  return { elements, run: (code) => vm.runInContext(code, context) };
+  return { elements, activityRows, run: (code) => vm.runInContext(code, context) };
 }
 
 const confirmation = { actions: [{ tool: 'add_registry_vessel', arguments: { hull_number: '003' } }] };
@@ -46,6 +64,46 @@ test('shared plans render progress, escape content and clear when switching sess
   assert.equal(ui.elements.get('agentPlanPanel').hidden, true);
   assert.equal(ui.elements.get('agentPlanList').innerHTML, '');
   assert.equal(ui.elements.get('agentConfirmPanel').hidden, true);
+});
+
+test('shared state renders escaped fields and its snapshot version', () => {
+  const ui = page();
+  ui.run(`renderSharedState({ version: 4, requirements: ['<script>'], decision: 'continue' });`);
+  assert.match(ui.elements.get('qaSharedStateGroups').innerHTML, /&lt;script&gt;/);
+  assert.match(ui.elements.get('qaSharedStateGroups').innerHTML, /Requirements/);
+  assert.equal(ui.elements.get('qaSharedStateMeta').textContent, 'Version 4');
+});
+
+test('skill loading and reading events collapse into one summary row per agent and phase', () => {
+  const ui = page();
+  ui.run(`
+    updateSkillActivitySummary('executor', 'load', 'query', 'complete');
+    updateSkillActivitySummary('executor', 'load', 'finalize', 'complete');
+    updateSkillActivitySummary('executor', 'read', 'skills/query/SKILL.md');
+    updateSkillActivitySummary('executor', 'read', '', 'complete');
+  `);
+  assert.equal(ui.activityRows.length, 2);
+  assert.match(ui.activityRows[0].innerHTML, /Executor · Skill loading/);
+  assert.match(ui.activityRows[0].message.textContent, /2 skills · query, finalize/);
+  assert.match(ui.activityRows[1].innerHTML, /Executor · Skill reading/);
+  assert.match(ui.activityRows[1].message.textContent, /Read 1 skill file/);
+});
+
+test('trajectory omits skill filesystem tools and keeps business tools', () => {
+  const ui = page();
+  const steps = ui.run(`stepsFromEvents([
+    { type: 'tool_start', tool: 'read_file', callId: 'r1', arguments: { file_path: '/skills/a/SKILL.md' } },
+    { type: 'tool_result', tool: 'read_file', callId: 'r1' },
+    { type: 'tool_start', tool: 'ls', callId: 'l1', arguments: { path: '/skills' } },
+    { type: 'tool_result', tool: 'ls', callId: 'l1' },
+    { type: 'tool_start', tool: 'glob', callId: 'g1', arguments: { pattern: '**/SKILL.md' } },
+    { type: 'tool_result', tool: 'glob', callId: 'g1' },
+    { type: 'tool_start', tool: 'grep', callId: 'p1', arguments: { pattern: 'query' } },
+    { type: 'tool_result', tool: 'grep', callId: 'p1' },
+    { type: 'tool_start', tool: 'get_track', callId: 'b1', arguments: { track_id: 7 } },
+    { type: 'tool_result', tool: 'get_track', callId: 'b1' }
+  ])`);
+  assert.deepEqual(Array.from(steps, (step) => step.tool), ['get_track']);
 });
 
 test('a split NDJSON confirmation is accepted as a terminal result', async () => {
@@ -91,8 +149,8 @@ test('confirmation card is mounted in the visible chat or trace view', () => {
 
   assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
   assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
-  assert.match(template, /qa\.css\?v=14/);
-  assert.match(template, /agent\.js\?v=86/);
+  assert.match(template, /qa\.css\?v=18/);
+  assert.match(template, /agent\.js\?v=89/);
   const ui = page();
   ui.run(`currentSessionId = 't'; qaView = 'chat';
     renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);
@@ -188,21 +246,21 @@ test('a converged answer is labeled partial and preserves unfinished steps', () 
     answerText: '已取得 kf1，尚未验证目标',
     sharedState: { plan: [{ id: 'verify', content: 'verify target' }],
       step_status: { verify: 'pending' } } });`);
-  assert.equal(ui.elements.get('agentThinkingState').textContent, '已按现有证据收尾');
+  assert.equal(ui.elements.get('agentThinkingState').textContent, 'Closed with available evidence');
   assert.equal(ui.elements.get('agentPlanMeterFill').style.width, '0%');
   assert.match(ui.elements.get('agentAnswer').innerHTML, /kf1/);
   ui.run(`renderRestoredTurn({ state: 'completed', partial: true,
     answer: '已取得 kf1，尚未验证目标' });`);
-  assert.equal(ui.elements.get('agentThinkingState').textContent, '已按现有证据收尾');
+  assert.equal(ui.elements.get('agentThinkingState').textContent, 'Closed with available evidence');
 });
 
 test('a stalled run is labeled incomplete instead of completed', () => {
   const ui = page();
   ui.run(`renderAgentAnswer({ state: 'stalled', answerText: 'Planner 未提交状态' });`);
   assert.match(ui.elements.get('agentAnswer').innerHTML, /Planner 未提交状态/);
-  assert.equal(ui.elements.get('agentThinkingState').textContent, '未完成');
+  assert.equal(ui.elements.get('agentThinkingState').textContent, 'Incomplete');
   ui.run(`renderRestoredTurn({ state: 'stalled', answer: 'Planner 未提交状态' });`);
-  assert.equal(ui.elements.get('agentThinkingState').textContent, '未完成');
+  assert.equal(ui.elements.get('agentThinkingState').textContent, 'Incomplete');
 });
 
 test('planner clarification is shown as a completed pause for user input', () => {
@@ -210,7 +268,7 @@ test('planner clarification is shown as a completed pause for user input', () =>
   ui.run(`renderAgentAnswer({ state: 'awaiting_input', success: true,
     answerText: '请补充时间范围。' });`);
   assert.match(ui.elements.get('agentAnswer').innerHTML, /请补充时间范围/);
-  assert.equal(ui.elements.get('agentThinkingState').textContent, '需要补充信息');
+  assert.equal(ui.elements.get('agentThinkingState').textContent, 'More information required');
   assert.equal(ui.elements.get('btnAskAgent').disabled, false);
 });
 

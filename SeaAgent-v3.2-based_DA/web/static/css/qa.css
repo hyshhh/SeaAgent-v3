@@ -383,6 +383,8 @@
 #tab-agent-qa .qa-event-title { display: flex; align-items: center; gap: 7px; color: #43586a; font-size: 11px; font-weight: 650; }
 #tab-agent-qa .qa-event-label { color: #9ba5af; font: 700 8px/1 "Segoe UI Variable", "Segoe UI", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
 #tab-agent-qa .qa-event-message { margin-top: 3px; color: #8a97a4; font-size: 10px; line-height: 1.45; }
+#tab-agent-qa .qa-event-row.qa-skill .qa-event-main { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; }
+#tab-agent-qa .qa-event-row.qa-skill .qa-event-message { min-width: 0; margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tab-agent-qa .qa-event-meta { color: #adb6bf; font-size: 9px; white-space: nowrap; }
 #tab-agent-qa .qa-event-row.qa-status .qa-event-icon { color: var(--qa-blue); border-color: #d8e6f0; background: var(--qa-blue-soft); }
 #tab-agent-qa .qa-event-row.qa-skill .qa-event-icon { color: #7967a8; border-color: #e7e0f4; background: #f7f4fc; }
@@ -1300,6 +1302,73 @@
 #tab-agent-qa .qa-endpoint-cancel { color: #566372; border: 1px solid var(--qa-line-strong); background: #fff; }
 #tab-agent-qa .qa-endpoint-save { color: #fff; border: 1px solid #2f6f9f; background: #2f6f9f; }
 #tab-agent-qa .qa-endpoint-save:disabled { opacity: .6; cursor: wait; }
+
+/* QA state snapshots: grouped by owner so the full shared dictionary stays readable. */
+#tab-agent-qa .qa-shared-state {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--qa-line);
+}
+#tab-agent-qa .qa-shared-state-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+#tab-agent-qa .qa-shared-state-head > span:last-child {
+  color: var(--qa-muted);
+  font-size: 11px;
+}
+#tab-agent-qa .qa-shared-state-groups {
+  display: grid;
+  gap: 10px;
+}
+#tab-agent-qa .qa-state-group {
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--qa-line);
+}
+#tab-agent-qa .qa-state-group:last-child { border-bottom: 0; }
+#tab-agent-qa .qa-state-group h3 {
+  margin: 0 0 7px;
+  color: var(--qa-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+#tab-agent-qa .qa-state-group dl { display: grid; gap: 6px; margin: 0; }
+#tab-agent-qa .qa-state-field {
+  display: grid;
+  grid-template-columns: minmax(108px, 0.28fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+#tab-agent-qa .qa-state-field dt {
+  color: var(--qa-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+#tab-agent-qa .qa-state-field dd {
+  min-width: 0;
+  margin: 0;
+  overflow: auto;
+  color: var(--qa-body);
+  font: 11px/1.45 Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Keep the conversation as one workspace; individual turns are separators, not cards. */
+#tab-agent-qa .qa-user-bubble,
+#tab-agent-qa .qa-history-item {
+  max-width: 100%;
+  padding-inline: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#tab-agent-qa .qa-user-turn { justify-content: flex-start; }
 
 
 /* 答案面板的 Markdown 元素：字号仍然统一 13px（层级靠字重与左边线），

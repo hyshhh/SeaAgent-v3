@@ -18,30 +18,128 @@ let harnessResult = null;
 let harnessEvidence = null;
 let harnessToolCount = 0;
 let harnessIteration = 0;
-let harnessStageSummary = '等待问答';
+let harnessStageSummary = 'Waiting for a question';
 let harnessLastStateChange = '—';
 const harnessAgentStates = new Map();
 const harnessToolCards = new Map();
 const harnessSkillNames = new Set();
-let harnessSkillActivityCard = null;
+const harnessSkillActivityCards = new Map();
+const harnessSkillActivityItems = new Map();
 let qaView = 'chat';           // 主列当前显示的子页：chat（对话）/ trace（轨迹）
 
 const AGENT_LABELS = { planner: 'Planner', executor: 'Executor', reflector: 'Reflector' };
 const AGENT_STATE_LABELS = {
-  pending: '待执行', running: '执行中', waiting: '等待中', completed: '已完成',
-  failed: '失败', cancelled: '已停止', reconnecting: '重连中', unknown: '未记录',
+  pending: 'Pending', running: 'Running', waiting: 'Waiting', completed: 'Completed',
+  failed: 'Failed', cancelled: 'Stopped', reconnecting: 'Reconnecting', unknown: 'Unknown',
 };
 const NON_BUSINESS_TOOLS = new Set([
   'read_shared_state', 'update_planner_state', 'update_execution_state',
-  'update_reflection_state', 'read_file',
+  'update_reflection_state', 'read_file', 'ls', 'glob', 'grep',
 ]);
 
 const STEP_KINDS = {
-  tool: { label: '工具', dot: 'qa-dot-tool' },
-  skill: { label: '技能', dot: 'qa-dot-skill' },
-  system: { label: '状态', dot: 'qa-dot-system' },
-  error: { label: '错误', dot: 'qa-dot-error' },
+  tool: { label: 'Tool', dot: 'qa-dot-tool' },
+  skill: { label: 'Skill', dot: 'qa-dot-skill' },
+  system: { label: 'State', dot: 'qa-dot-system' },
+  error: { label: 'Error', dot: 'qa-dot-error' },
 };
+
+const TOOL_LABELS = {
+  get_track: 'Track memory', get_frames: 'Keyframes', get_clip: 'Video clip',
+  get_registry: 'Registry', list_registry: 'Registry index', match_hull: 'Hull number match',
+  match_text: 'Text search', match_image: 'Image search', verify_target: 'Visual verification',
+  show_evidence: 'Evidence summary', dedup_tracks: 'Track deduplication',
+  add_registry_vessel: 'Registry write',
+  '轨迹记忆': 'Track memory',
+  '关键帧': 'Keyframes',
+  '视频片段': 'Video clip',
+  '先验库': 'Registry',
+  '先验库目录': 'Registry index',
+  '舷号匹配': 'Hull number match',
+  '文本检索': 'Text search',
+  '图像检索': 'Image search',
+  '视觉核验': 'Visual verification',
+  '证据汇总': 'Evidence summary',
+  '轨迹去重': 'Track deduplication',
+  '先验库写入': 'Registry write',
+  '读取技能正文': 'Read skill file',
+  '技能目录': 'Skill directory',
+  '技能检索': 'Skill search',
+  '技能内容检索': 'Skill content search',
+  '读取共享状态': 'Read shared state',
+  '更新任务计划': 'Update plan',
+  '更新执行进度': 'Update execution state',
+  '更新证据审查': 'Update reflection',
+};
+
+const STATE_GROUPS = [
+  { id: 'planner', title: 'Planner', keys: ['requirements', 'plan', 'next_action', 'clarification'] },
+  { id: 'executor', title: 'Executor', keys: ['evidence_ids', 'step_status', 'execution_status'] },
+  { id: 'reflector', title: 'Reflector', keys: ['assessment', 'evidence_gaps', 'conflicts', 'decision'] },
+  { id: 'runtime', title: 'Runtime', keys: ['question', 'task_status', 'iteration', 'pending_agent', 'version'] },
+  { id: 'evidence', title: 'Evidence and tool results', keys: ['evidence', 'tool_results'] },
+];
+
+const STATE_KEY_LABELS = {
+  requirements: 'Requirements', plan: 'Plan', next_action: 'Next action', clarification: 'Clarification',
+  evidence_ids: 'Evidence IDs', step_status: 'Step status', execution_status: 'Execution status',
+  assessment: 'Assessment', evidence_gaps: 'Evidence gaps', conflicts: 'Conflicts', decision: 'Decision',
+  question: 'Question', task_status: 'Task status', iteration: 'Iteration', pending_agent: 'Pending agent',
+  version: 'Version', evidence: 'Evidence', tool_results: 'Tool results',
+};
+
+function displayToolLabel(value) {
+  const text = String(value || '').trim();
+  return TOOL_LABELS[text] || text;
+}
+
+function displayText(value) {
+  const text = String(value ?? '');
+  const heartbeat = text.match(/^已等待\s+(\d+)\s*秒（模型或工具仍在工作）$/);
+  if (heartbeat) return `Waiting ${heartbeat[1]}s (model or tools still running)`;
+  const reconnect = text.match(/^(planner|executor|reflector)\s+第\s+(\d+)\s+次重连$/i);
+  if (reconnect) return `${AGENT_LABELS[reconnect[1].toLowerCase()]} reconnect attempt ${reconnect[2]}`;
+  const maxIterations = text.match(/^已达到最大迭代次数\s+(\d+)，反思结果仍要求继续或重规划。$/);
+  if (maxIterations) return `Maximum iterations (${maxIterations[1]}) reached; review requested another pass.`;
+  return {
+    'Harness 已启动': 'Harness started',
+    'Harness 完成': 'Harness complete',
+    'Harness 已停止': 'Harness stopped',
+    'Harness 未完成': 'Harness incomplete',
+    'Harness 执行失败': 'Harness failed',
+    '本轮未能完成': 'Run incomplete',
+    '需要补充信息': 'More information required',
+    '有一项写入操作需要你确认': 'A write operation needs your confirmation',
+    '反思阶段判定任务无法继续': 'The review phase determined that the task cannot continue',
+    'Reflector 尚未提交最终回答': 'Reflector did not submit a final answer',
+    '本轮未能继续推进。': 'This run could not make further progress.',
+    '未能生成有效结果': 'No valid result was generated',
+    '仍在执行': 'Still running',
+    'Agent 正在重连': 'Agent reconnecting',
+    '开始工作': 'Work started',
+    '已启动': 'Started',
+    '阶段开始': 'Phase started',
+    '阶段完成': 'Phase complete',
+    '三 Agent 已连接共享状态': 'Three agents connected to shared state',
+    '工具调用已提交': 'Tool call submitted',
+    '工具调用完成': 'Tool call complete',
+    '工具调用失败': 'Tool call failed',
+    '回答与证据已生成': 'Answer and evidence generated',
+    '最终回答与视觉证据已生成': 'Answer and visual evidence generated',
+    '本轮已按请求停止': 'Run stopped as requested',
+    '未能生成完整回答': 'Could not generate a complete answer',
+    '等待人工确认': 'Awaiting human confirmation',
+    '等待用户补充': 'Waiting for user input',
+    '已停止': 'Stopped',
+    '阶段未完成': 'Phase incomplete',
+    '阶段失败': 'Phase failed',
+    '技能已加载': 'Skill loaded',
+  }[text] || text;
+}
+
+function stateKeyLabel(key) {
+  return STATE_KEY_LABELS[key] || String(key).replace(/_/g, ' ');
+}
 
 function useQuestion(text) {
   const input = document.getElementById('agentQuestion');
@@ -72,26 +170,53 @@ function renderAgentStatus() {
   const stage = document.getElementById('qaStageSummary');
   const changed = document.getElementById('qaLastStateChange');
   if (iteration) iteration.textContent = String(harnessIteration);
-  if (stage) stage.textContent = harnessStageSummary;
+  if (stage) stage.textContent = displayText(harnessStageSummary);
   if (changed) changed.textContent = harnessLastStateChange;
+  if (typeof document.querySelector !== 'function') return;
   for (const [agent, value] of harnessAgentStates) {
     const card = document.querySelector(`.qa-agent-status[data-agent="${agent}"]`);
     if (!card) continue;
     card.dataset.state = value.state;
     card.querySelector('.qa-agent-status-label').textContent = AGENT_STATE_LABELS[value.state] || value.state;
-    card.querySelector('p').textContent = value.action;
+    card.querySelector('p').textContent = displayText(value.action);
   }
 }
 
 function setAgentStatus(agent, state, action, iteration) {
   const role = String(agent || '');
   const nextState = String(state || 'running');
-  const message = String(action || '正在处理');
+  const message = String(action || 'Processing');
   if (Number.isFinite(Number(iteration))) harnessIteration = Math.max(harnessIteration, Number(iteration));
   if (harnessAgentStates.has(role)) harnessAgentStates.set(role, {state: nextState, action: message});
-  harnessStageSummary = `${AGENT_LABELS[role] || role || 'Harness'} · ${message}`;
+  harnessStageSummary = `${AGENT_LABELS[role] || role || 'Harness'} · ${displayText(message)}`;
   harnessLastStateChange = formatEventTime();
   renderAgentStatus();
+}
+
+function formatSharedStateValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value, null, 2); }
+  catch (_error) { return String(value); }
+}
+
+function renderSharedState(state) {
+  if (!state || typeof state !== 'object') return;
+  const groups = document.getElementById('qaSharedStateGroups');
+  const meta = document.getElementById('qaSharedStateMeta');
+  if (!groups) return;
+  const rendered = STATE_GROUPS.map((group) => {
+    const rows = group.keys.filter((key) => Object.prototype.hasOwnProperty.call(state, key)).map((key) => {
+      const value = formatSharedStateValue(state[key]);
+      return `<div class="qa-state-field"><dt>${escapeHtml(stateKeyLabel(key))}</dt><dd>${escapeHtml(value)}</dd></div>`;
+    }).join('');
+    return rows ? `<section class="qa-state-group" data-group="${group.id}"><h3>${escapeHtml(group.title)}</h3><dl>${rows}</dl></section>` : '';
+  }).filter(Boolean).join('');
+  groups.innerHTML = rendered || '<div class="qa-inspector-empty">No shared state yet.</div>';
+  if (meta) {
+    const stamp = state.version === undefined ? '' : `Version ${state.version}`;
+    meta.textContent = stamp || 'Latest snapshot';
+  }
 }
 
 /* 会话时间戳由后端给 ISO-8601（带时区）；旧格式会话没有时间戳，返回空串让调用方省掉这一段。 */
@@ -106,7 +231,7 @@ function formatSessionTime(value) {
 function sessionMeta(session) {
   const stamp = formatSessionTime(session?.updatedAt);
   const turns = Number(session?.turnCount || 0);
-  return [stamp, turns > 0 ? `${turns} 轮` : ''].filter(Boolean).join(' · ');
+  return [stamp, turns > 0 ? `${turns} turn${turns === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
 }
 
 /* 会话号由前端生成，运行一开始就有 key，不必等后端回传才开始记账。 */
@@ -118,6 +243,7 @@ function newSessionId() {
 }
 
 function setHarnessState(label, state = '') {
+  label = displayText(label);
   const labelNode = document.getElementById('agentThinkingState');
   const intentNode = document.getElementById('agentIntentState');
   const inspectorNode = document.getElementById('qaInspectorState');
@@ -171,17 +297,22 @@ function resetActivityDom() {
   const count = document.getElementById('evidenceResultCount');
   if (count) count.textContent = 'Waiting';
   harnessIteration = 0;
-  harnessStageSummary = '等待问答';
+  harnessStageSummary = 'Waiting for a question';
   harnessLastStateChange = '—';
   harnessAgentStates.clear();
   for (const agent of Object.keys(AGENT_LABELS)) {
-    harnessAgentStates.set(agent, { state: 'pending', action: '等待任务' });
+    harnessAgentStates.set(agent, { state: 'pending', action: 'Waiting for task' });
   }
   harnessToolCount = 0;
   agentLines.clear();  // 新一轮开始：子智能体行重新来
   harnessToolCards.clear();
   harnessSkillNames.clear();
-  harnessSkillActivityCard = null;
+  harnessSkillActivityCards.clear();
+  harnessSkillActivityItems.clear();
+  const stateGroups = document.getElementById('qaSharedStateGroups');
+  if (stateGroups) stateGroups.innerHTML = '<div class="qa-inspector-empty">No shared state yet.</div>';
+  const stateMeta = document.getElementById('qaSharedStateMeta');
+  if (stateMeta) stateMeta.textContent = 'Waiting for a state snapshot.';
   harnessResult = null;
   harnessEvidence = null;
   updateHarnessStats();
@@ -204,7 +335,7 @@ function syncComposer(run) {
   const awaiting = run?.status === 'awaiting_confirmation';
   if (button) {
     button.disabled = running || awaiting;
-    button.title = running ? '本轮进行中…' : awaiting ? '请先批准或拒绝当前操作' : '运行（Ctrl / ⌘ + Enter）';
+    button.title = running ? 'This run is in progress…' : awaiting ? 'Approve or reject the pending action first' : 'Run (Ctrl / ⌘ + Enter)';
   }
   if (stop) {
     stop.hidden = !running;
@@ -256,10 +387,10 @@ function trajectorySteps() {
  * 共享计划与执行进度由运行时以 plan 事件广播，按完整快照重画。
  * ------------------------------------------------------------------------- */
 const PLAN_STATUS_LABEL = {
-  pending: '待办',
-  in_progress: '进行中',
-  completed: '已完成',
-  failed: '失败',
+  pending: 'Pending',
+  in_progress: 'In progress',
+  completed: 'Completed',
+  failed: 'Failed',
 };
 
 function renderAgentPlan(event) {
@@ -278,7 +409,7 @@ function renderAgentPlan(event) {
   }).join('');
   const total = Number(event.total ?? steps.length);
   const done = Number(event.completed ?? steps.filter((item) => item.status === 'completed').length);
-  if (progress) progress.textContent = `${done}/${total} 步已完成`;
+  if (progress) progress.textContent = `${done}/${total} steps completed`;
   if (fill) fill.style.width = total ? `${Math.round((done / total) * 100)}%` : '0%';
   panel.dataset.state = done === total ? 'done' : 'running';
 }
@@ -300,11 +431,11 @@ function mountConfirmationPanel() {
 }
 
 const CONFIRM_FIELD_LABEL = {
-  hull_number: '舷号',
-  description: '描述',
-  image_paths: '参考图',
-  aliases: '别名',
-  user_intent: '用户要求',
+  hull_number: 'Hull number',
+  description: 'Description',
+  image_paths: 'Reference images',
+  aliases: 'Aliases',
+  user_intent: 'User intent',
 };
 
 function renderAgentConfirmation(event) {
@@ -324,7 +455,7 @@ function renderAgentConfirmation(event) {
     return `<div class="qa-confirm-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(text)}</dd></div>`;
   }).join('');
   body.innerHTML = rows;
-  if (hint) hint.textContent = action.description || `工具：${action.tool}`;
+  if (hint) hint.textContent = action.description || `Tool: ${displayToolLabel(action.tool)}`;
   const feedback = document.getElementById('agentConfirmFeedback');
   if (feedback) { feedback.value = ''; feedback.disabled = false; }
   for (const id of ['btnConfirmApprove', 'btnConfirmReject']) {
@@ -373,7 +504,7 @@ async function submitConfirmation(decision) {
         feedback: decision === 'reject' ? String((feedback && feedback.value) || '').trim() : '',
       }),
     });
-    if (!response.ok) throw new Error(`恢复失败：${response.status}`);
+    if (!response.ok) throw new Error(`Resume failed: ${response.status}`);
     const result = await response.json();
     run.result = result;
     run.status = result.state === 'awaiting_confirmation' ? 'awaiting_confirmation' : result.state === 'cancelled' ? 'stopped' : result.success === false ? 'error' : 'done';
@@ -393,7 +524,7 @@ async function submitConfirmation(decision) {
         if (button) button.disabled = false;
       }
       syncComposer(run);
-      appendStandardEvent({ title: '恢复失败' }, 'error', '!', 'CONFIRM', String(error && error.message ? error.message : error));
+      appendStandardEvent({ title: 'Resume failed' }, 'error', '!', 'CONFIRM', String(error && error.message ? error.message : error));
     }
   }
 }
@@ -410,7 +541,6 @@ function stepsFromEvents(events) {
   const byCallId = new Map();
   const push = (kind, text, extra = {}) => { steps.push({ kind, text, ...extra }); return steps[steps.length - 1]; };
   const rounds = new Set();
-  const seenSkills = new Set();
   for (const event of events) {
     const agent = String(event.agent || '');
     const iteration = Number(event.iteration || event.round || harnessIteration || 1);
@@ -418,21 +548,14 @@ function stepsFromEvents(events) {
     // 从智能体的步骤带 agent 标记：轨迹里要能看出「这一步是谁做的」
     if (Number.isFinite(iteration) && !rounds.has(iteration) && event.type === 'agent_status' && event.state === 'running') {
       rounds.add(iteration);
-      push('system', `第 ${iteration} 轮开始`);
-    }
-    if (event.type === 'skill') {
-      const skill = String(event.skill || event.title || '').trim();
-      if (skill && !seenSkills.has(skill)) {
-        seenSkills.add(skill);
-        push('skill', `加载技能 ${skill}`, {agent, iteration, status: 'ok'});
-      }
+      push('system', `Iteration ${iteration} started`);
     } else if (event.type === 'tool_start' || event.type === 'tool_result') {
       const tool = String(event.tool || '');
       if (!tool || tool === 'task') continue;
       const stateChange = tool === 'read_shared_state' || tool.startsWith('update_');
-      const skillRead = tool === 'read_file';
-      const kind = stateChange ? 'system' : skillRead ? 'skill' : 'tool';
-      const label = stateChange ? stateToolLabel(tool) : skillRead ? 'Read skill' : event.label || tool;
+      if (tool === 'read_file' || ['ls', 'glob', 'grep'].includes(tool)) continue;
+      const kind = stateChange ? 'system' : 'tool';
+      const label = stateChange ? stateToolLabel(tool) : displayToolLabel(event.label || tool);
       const callId = String(event.callId || '');
       if (event.type === 'tool_start') {
         const step = push(kind, label, {
@@ -457,7 +580,7 @@ function stepsFromEvents(events) {
       );
       if (pending) pending.status = 'awaiting_confirmation';
     } else if (event.type === 'error') {
-      push('error', event.message || '执行失败', {agent, iteration});
+      push('error', displayText(event.message || 'Execution failed'), {agent, iteration});
     }
   }
   return steps;
@@ -470,7 +593,7 @@ function stateToolLabel(tool) {
 
 /* 会话存档只留了工具名序列：参数与结果属于当轮事件流，这里如实说明，不假装有细节。 */
 function stepsFromTurn(turn) {
-  return turn ? [{kind: 'system', text: '历史记录仅保存问答内容，不保留运行事件。'}] : [];
+  return turn ? [{kind: 'system', text: 'History stores the question and answer only.'}] : [];
 }
 
 function renderTrajectory() {
@@ -483,26 +606,26 @@ function renderTrajectory() {
   const failed = steps.filter((step) => step.status === 'error').length;
   const round = harnessIteration || (archived ? currentSession?.turns?.length || 0 : 0);
   if (summary) {
-    summary.textContent = `第 ${round} 轮 · ${toolCount} 次业务工具${failed ? ` · ${failed} 次失败` : ''}${archived ? ' · 历史记录' : ''}`;
+    summary.textContent = `Iteration ${round} · ${toolCount} business tool${toolCount === 1 ? '' : 's'}${failed ? ` · ${failed} failed` : ''}${archived ? ' · History' : ''}`;
   }
   if (ribbon) {
     ribbon.innerHTML = steps.map((step) => `<i class="${STEP_KINDS[step.kind]?.dot || 'qa-dot-system'}" title="${escapeHtml(STEP_KINDS[step.kind]?.label || '')}"></i>`).join('');
   }
   if (!steps.length) {
-    list.innerHTML = '<div class="qa-empty-state">这一轮开始时，助手与工具的每一步都会记在这里。</div>';
+    list.innerHTML = '<div class="qa-empty-state">Assistant and business-tool steps will appear here when the run starts.</div>';
     return;
   }
   list.innerHTML = steps.map((step, index) => {
     const kind = STEP_KINDS[step.kind] || STEP_KINDS.system;
-    const badge = step.status === 'awaiting_confirmation' ? '<span class="qa-step-badge is-confirmation">等待人工确认</span>'
-      : step.status === 'running' ? '<span class="qa-step-badge is-running">执行中</span>'
-      : step.status === 'error' ? '<span class="qa-step-badge is-error">失败</span>'
-      : step.status === 'ok' ? '<span class="qa-step-badge is-ok">完成</span>' : '';
+    const badge = step.status === 'awaiting_confirmation' ? '<span class="qa-step-badge is-confirmation">Awaiting confirmation</span>'
+      : step.status === 'running' ? '<span class="qa-step-badge is-running">Running</span>'
+      : step.status === 'error' ? '<span class="qa-step-badge is-error">Failed</span>'
+      : step.status === 'ok' ? '<span class="qa-step-badge is-ok">Done</span>' : '';
     // 从智能体做的步骤降一级并挂上名字，主从结构在轨迹里一眼可见
     const owner = step.agent ? `<span class="qa-step-agent">${escapeHtml(step.agent)}</span>` : '';
     const delegation = step.delegation ? `<span class="qa-step-delegation">→ ${escapeHtml(step.delegation)}</span>` : '';
     const args = step.args === undefined ? '' : escapeHtml(summarizeToolArguments(step.tool, step.args));
-    const iteration = step.iteration ? `<span class="qa-step-round">第 ${step.iteration} 轮</span>` : '';
+    const iteration = step.iteration ? `<span class="qa-step-round">Iteration ${step.iteration}</span>` : '';
     return `<article class="qa-step${step.agent ? ' is-subagent' : ''}">
       <span class="qa-step-kind"><i class="${kind.dot}"></i>${kind.label}</span>
       <div class="qa-step-body">
@@ -521,7 +644,7 @@ function renderViewMeta() {
   const run = currentSessionId ? sessionRuns.get(currentSessionId) : null;
   const title = session?.title || run?.question || '';
   const round = turns + (run && run.status === 'running' ? 1 : 0);
-  node.textContent = title ? `${title}${round ? ` · 第 ${round} 轮` : ''}` : '新会话';
+  node.textContent = title ? `${title}${round ? ` · Iteration ${round}` : ''}` : 'New session';
 }
 
 /* ── 会话栏 ───────────────────────────────────────────────────────────────── */
@@ -532,20 +655,20 @@ function renderSessionList() {
   if (count) count.textContent = String(sessionSummaries.length);
   if (!list) return;
   if (!sessionSummaries.length) {
-    list.innerHTML = '<div class="qa-sessions-empty">还没有会话。提一个问题，对话就会出现在这里。</div>';
+    list.innerHTML = '<div class="qa-sessions-empty">No sessions yet. Ask a question to start one.</div>';
     return;
   }
   list.innerHTML = sessionSummaries.map((session) => {
     const active = session.sessionId === currentSessionId ? ' is-active' : '';
-    const title = session.title || '未命名会话';
-    const live = session.running ? '<span class="qa-session-live">● 回答中</span>' : '';
+    const title = session.title || 'Untitled session';
+    const live = session.running ? '<span class="qa-session-live">● Running</span>' : '';
     return `<div class="qa-session-item${active}" role="button" tabindex="0" data-session-id="${escapeHtml(session.sessionId)}" onclick="openSession(this.dataset.sessionId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSession(this.dataset.sessionId);}">
       <span class="qa-session-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.3-.6L3 21l1.7-4.6A8.3 8.3 0 0 1 3.6 11.5 8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z"/></svg></span>
       <div class="qa-session-body">
         <strong class="qa-session-name">${escapeHtml(title)}</strong>
         <small class="qa-session-note">${live}${live ? ' · ' : ''}${escapeHtml(sessionMeta(session))}</small>
       </div>
-      <button type="button" class="qa-session-delete" title="删除该会话" aria-label="删除该会话" onclick="event.stopPropagation();deleteSession(this.closest('.qa-session-item').dataset.sessionId)">×</button>
+      <button type="button" class="qa-session-delete" title="Delete session" aria-label="Delete session" onclick="event.stopPropagation();deleteSession(this.closest('.qa-session-item').dataset.sessionId)">×</button>
     </div>`;
   }).join('');
 }
@@ -597,7 +720,7 @@ function renderSessionHistory(turns) {
   }
   const shown = past.slice(-6);
   const folded = past.length - shown.length;
-  const head = folded > 0 ? `<div class="qa-history-more">已折叠较早的 ${folded} 轮对话</div>` : '';
+  const head = folded > 0 ? `<div class="qa-history-more">${folded} earlier turn${folded === 1 ? '' : 's'} hidden</div>` : '';
   node.innerHTML = head + shown.map((turn) => `<article class="qa-history-item">
       <span>You</span>
       <p>${escapeHtml(turn.question || '')}</p>
@@ -609,35 +732,35 @@ function renderSessionHistory(turns) {
 
 function turnAnswer(turn) {
   if (turn?.answer) return turn.answer;
-  if (turn?.state === 'cancelled') return '（这一轮已停止）';
-  if (turn?.state === 'stalled') return '（这一轮未完成，未生成有效结论）';
-  return turn?.state || '（该轮未留下回答）';
+  if (turn?.state === 'cancelled') return '(This run was stopped.)';
+  if (turn?.state === 'stalled') return '(This run did not reach a conclusion.)';
+  return turn?.state || '(No answer was saved for this run.)';
 }
 
 /* 把某一轮问答还原到主面板；会话记录只恢复问题和回答。 */
 function renderRestoredTurn(turn) {
   renderAgentPlan({ steps: [] });
   harnessIteration = currentSession?.turns?.length || 0;
-  harnessStageSummary = '历史记录 · 运行状态未保存';
+  harnessStageSummary = 'History · runtime state not saved';
   for (const agent of Object.keys(AGENT_LABELS)) {
-    harnessAgentStates.set(agent, {state: 'unknown', action: '历史记录不保留运行状态'});
+    harnessAgentStates.set(agent, {state: 'unknown', action: 'History does not include runtime events'});
   }
   if (turn?.state === 'awaiting_confirmation') {
-    harnessAgentStates.set('executor', {state: 'waiting', action: '等待人工确认'});
-    harnessStageSummary = '等待人工确认';
+    harnessAgentStates.set('executor', {state: 'waiting', action: 'Awaiting human confirmation'});
+    harnessStageSummary = 'Awaiting human confirmation';
     renderAgentStatus();
     renderAgentConfirmation({ confirmation: turn.confirmation });
     syncComposer({ status: 'awaiting_confirmation' });
-    setHarnessState('等待确认', 'awaiting_confirmation');
+    setHarnessState('Awaiting confirmation', 'awaiting_confirmation');
     return;
   }
   const view = document.getElementById('agentFinalView');
   const answer = document.getElementById('agentAnswer');
   if (view) view.hidden = false;
-  if (answer) answer.textContent = turnAnswer(turn) || '（该轮未留下回答）';
+  if (answer) answer.textContent = turnAnswer(turn) || '(No answer was saved for this run.)';
   const failed = turn?.state === 'error' || turn?.state === 'stalled';
   const awaitingInput = turn?.state === 'awaiting_input';
-  const state = awaitingInput ? '需要补充信息' : turn?.state === 'stalled' ? '未完成' : failed ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : turn?.partial ? '已按现有证据收尾' : 'Restored';
+  const state = awaitingInput ? 'More information required' : turn?.state === 'stalled' ? 'Incomplete' : failed ? 'Failed' : turn?.state === 'cancelled' ? 'Stopped' : turn?.partial ? 'Closed with available evidence' : 'Restored';
   renderAgentStatus();
   setHarnessState(state, failed ? 'failed' : turn?.state === 'cancelled' ? '' : 'complete');
 }
@@ -652,7 +775,7 @@ function renderRunOutcome(run) {
   renderAgentAnswer({
     success: false,
     state: stopped ? 'cancelled' : 'error',
-    answerText: stopped ? '本轮已停止。' : (run.error || '本轮未能完成。'),
+    answerText: stopped ? 'This run was stopped.' : (run.error || 'This run did not complete.'),
     evidence: {},
     toolRecords: [],
     toolChain: [],
@@ -747,7 +870,7 @@ async function deleteSession(sessionId) {
       renderView();
     }
     await loadSessions();
-    if (typeof showToast === 'function') showToast('会话已删除');
+    if (typeof showToast === 'function') showToast('Session deleted');
   } catch (error) {
     if (typeof showToast === 'function') showToast(error.message, 'error');
   }
@@ -774,22 +897,54 @@ function appendStandardEvent(event, kind, icon, label, message) {
   stream.querySelector('.qa-empty-state')?.remove();
   const row = document.createElement('article');
   row.className = `qa-event-row qa-${kind}`;
-  row.innerHTML = `<span class="qa-event-icon" aria-hidden="true">${icon}</span><div class="qa-event-main"><div class="qa-event-title"><span>${escapeHtml(event.title || label)}</span><em class="qa-event-label">${escapeHtml(label)}</em></div><div class="qa-event-message">${escapeHtml(message || '')}</div></div><time class="qa-event-meta">${formatEventTime()}</time>`;
+  row.innerHTML = `<span class="qa-event-icon" aria-hidden="true">${icon}</span><div class="qa-event-main"><div class="qa-event-title"><span>${escapeHtml(displayText(event.title || label))}</span><em class="qa-event-label">${escapeHtml(displayText(label))}</em></div><div class="qa-event-message">${escapeHtml(displayText(message || ''))}</div></div><time class="qa-event-meta">${formatEventTime()}</time>`;
   stream.appendChild(row);
   return row;
 }
 
-function updateSkillActivitySummary() {
-  const names = [...harnessSkillNames];
-  const message = names.length
-    ? `已挂载 ${names.length} 个 Skills · ${names.join('、')}`
-    : 'Skills 已挂载';
-  if (!harnessSkillActivityCard) {
-    harnessSkillActivityCard = appendStandardEvent({title: 'Skills 已注入'}, 'skill', '✦', 'SKILLS', message);
-    return;
+function updateSkillActivitySummary(agent, kind, item = '', status = 'running') {
+  const role = AGENT_LABELS[agent] || agent || 'Harness';
+  const activityKind = kind === 'read' ? 'read' : 'load';
+  const key = `${agent || 'harness'}:${activityKind}`;
+  const items = harnessSkillActivityItems.get(key) || [];
+  if (item && !items.includes(item)) items.push(item);
+  harnessSkillActivityItems.set(key, items);
+  const noun = activityKind === 'read' ? 'skill file' : 'skill';
+  const count = items.length;
+  const details = items.length ? ` · ${items.slice(-3).join(', ')}` : '';
+  const message = status === 'failed'
+    ? `${activityKind === 'read' ? 'Skill reading' : 'Skill loading'} failed${details}`
+    : activityKind === 'read'
+      ? `${status === 'complete' ? 'Read' : 'Reading'} ${count} ${noun}${count === 1 ? '' : 's'}${details}`
+      : `Loaded ${count} ${noun}${count === 1 ? '' : 's'}${details}`;
+  let card = harnessSkillActivityCards.get(key);
+  if (!card || !card.isConnected) {
+    card = appendStandardEvent(
+      {title: `${role} · ${activityKind === 'read' ? 'Skill reading' : 'Skill loading'}`},
+      'skill',
+      '✦',
+      activityKind === 'read' ? 'SKILL READ' : 'SKILL LOAD',
+      message,
+    );
+    if (card) {
+      card.dataset.state = status;
+      harnessSkillActivityCards.set(key, card);
+    }
+    return card;
   }
-  const messageNode = harnessSkillActivityCard.querySelector('.qa-event-message');
-  if (messageNode) messageNode.textContent = message;
+  const messageNode = card.querySelector('.qa-event-message');
+  if (messageNode) messageNode.textContent = displayText(message);
+  card.dataset.state = status;
+  return card;
+}
+
+function summarizeSkillAccess(name, value) {
+  const args = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  if (name === 'read_file') return String(args.file_path || args.path || 'skill file');
+  if (name === 'ls') return String(args.path || args.directory || 'skill directory');
+  if (name === 'glob') return String(args.pattern || args.path || 'skill files');
+  if (name === 'grep') return String(args.pattern || args.query || 'skill search');
+  return displayToolLabel(name || 'skill access');
 }
 
 function createToolEvent(event) {
@@ -798,7 +953,7 @@ function createToolEvent(event) {
   stream.querySelector('.qa-empty-state')?.remove();
   const callId = String(event.callId || `${Date.now()}-${harnessToolCount}`);
   if (harnessToolCards.has(callId)) return harnessToolCards.get(callId);
-  const tool = String(event.label || event.tool || 'Tool');
+  const tool = displayToolLabel(event.label || event.tool || 'Tool');
   const item = document.createElement('article');
   item.className = 'qa-tool-event is-running';
   item.dataset.callId = callId;
@@ -869,7 +1024,7 @@ const agentLines = new Map();
 function agentLine(agent) {
   const stream = document.getElementById('agentActivityStream');
   if (!stream) return null;
-  const key = String(agent || '子智能体');
+  const key = String(agent || 'Agent');
   const existing = agentLines.get(key);
   if (existing && existing.isConnected) return existing;
   stream.querySelector('.qa-empty-state')?.remove();
@@ -877,7 +1032,7 @@ function agentLine(agent) {
   row.className = 'qa-agent-line';
   row.dataset.agent = key;
   row.dataset.state = 'running';
-  row.innerHTML = `<span class="qa-agent-line-icon" aria-hidden="true">◈</span><span class="qa-agent-line-name">${escapeHtml(key)}</span><span class="qa-agent-line-label">思考 ·</span><span class="qa-agent-line-text"></span>`;
+  row.innerHTML = `<span class="qa-agent-line-icon" aria-hidden="true">◈</span><span class="qa-agent-line-name">${escapeHtml(key)}</span><span class="qa-agent-line-label">Thinking ·</span><span class="qa-agent-line-text"></span>`;
   stream.appendChild(row);
   agentLines.set(key, row);
   return row;
@@ -900,7 +1055,7 @@ function agentLineSet(agent, text, options) {
 }
 
 function agentLineNote(agent, note) {
-  agentLineSet(agent, note ? `${note}\n` : '', { label: '工具' });
+  agentLineSet(agent, note ? `${note}\n` : '', { label: 'Tool' });
 }
 
 function finishAgentLines() {
@@ -920,69 +1075,82 @@ function appendHarnessEvent(event) {
   if (Number.isFinite(iteration)) harnessIteration = Math.max(harnessIteration, iteration);
   if (event.type === 'skill') {
     appendSkillToInspector(event);
-    updateSkillActivitySummary();
-    if (event.agent) setAgentStatus(event.agent, 'running', '技能目录已就绪', iteration);
+    updateHarnessStats();
+    const name = String(event.skill || event.title || '').trim();
+    updateSkillActivitySummary(event.agent, 'load', name, 'complete');
+    if (event.agent) setAgentStatus(event.agent, 'running', 'Skills loaded', iteration);
     setHarnessState(`Skills · ${harnessSkillNames.size} loaded`, 'running');
   } else if (event.type === 'tool_start') {
     const tool = String(event.tool || '');
     const internal = NON_BUSINESS_TOOLS.has(tool);
-    const visible = tool !== 'task' && (!internal || tool === 'read_file');
+    const skillTool = ['read_file', 'ls', 'glob', 'grep'].includes(tool);
+    const visible = tool !== 'task' && !internal;
     if (!internal && tool !== 'task') {
       harnessToolCount += 1;
       updateHarnessStats();
     }
-    if (event.agent) setAgentStatus(event.agent, 'running', tool === 'read_file' ? '读取技能正文' : internal ? '更新共享状态' : `调用 ${event.label || tool}`, iteration);
-    if (visible) createToolEvent(event);
-    if (visible) setHarnessState(`${tool === 'read_file' ? 'Skill' : 'Tool'} · ${event.label || tool || 'running'}`, 'running');
+    if (event.agent) setAgentStatus(event.agent, 'running', skillTool ? 'Reading skills' : internal ? 'Updating shared state' : `Calling ${displayToolLabel(event.label || tool)}`, iteration);
+    if (skillTool) {
+      updateSkillActivitySummary(event.agent, 'read', summarizeSkillAccess(tool, event.arguments || {}));
+    } else if (visible) {
+      createToolEvent(event);
+      setHarnessState(`Tool · ${displayToolLabel(event.label || tool || 'running')}`, 'running');
+    }
   } else if (event.type === 'tool_result') {
     const tool = String(event.tool || '');
     const internal = NON_BUSINESS_TOOLS.has(tool);
-    const visible = tool !== 'task' && (!internal || tool === 'read_file');
+    const skillTool = ['read_file', 'ls', 'glob', 'grep'].includes(tool);
+    const visible = tool !== 'task' && !internal;
     const failed = event.status === 'error' || event.result?.ok === false;
     if (event.agent) {
-      const action = tool === 'read_file'
-        ? `技能正文${failed ? '读取失败' : '已读取'}`
-        : internal ? '共享状态已更新' : `${event.label || tool} ${failed ? '失败' : '完成'}`;
+      const action = skillTool
+        ? `Skills ${failed ? 'read failed' : 'read'}`
+        : internal ? 'Shared state updated' : `${displayToolLabel(event.label || tool)} ${failed ? 'failed' : 'completed'}`;
       setAgentStatus(event.agent, failed ? 'failed' : 'running', action, iteration);
     }
-    if (visible) {
+    if (skillTool) {
+      updateSkillActivitySummary(event.agent, 'read', '', failed ? 'failed' : 'complete');
+    } else if (visible) {
       completeToolEvent(event);
       if (isEvidencePayload(event.result)) renderEvidence(event.result);
     }
-    if (visible) setHarnessState(failed ? 'Tool failed' : 'Tool complete', 'running');
+    if (!skillTool && visible) setHarnessState(failed ? 'Tool failed' : 'Tool complete', 'running');
   } else if (event.type === 'model') {
     if (event.agent) {
-      setAgentStatus(event.agent, 'running', '模型处理中', iteration);
+      setAgentStatus(event.agent, 'running', 'Model processing', iteration);
     }
     setHarnessState('Running', 'running');
   } else if (event.type === 'agent_status') {
     setAgentStatus(event.agent, event.state, event.message, iteration);
-    if (event.state === 'running') setHarnessState(`${AGENT_LABELS[event.agent] || event.agent} · ${event.message || 'Running'}`, 'running');
+    if (event.state === 'running') setHarnessState(`${AGENT_LABELS[event.agent] || event.agent} · ${displayText(event.message || 'Running')}`, 'running');
   } else if (event.type === 'status') {
     if (event.title === 'Agent 正在重连' && event.agent) {
-      setAgentStatus(event.agent, 'reconnecting', event.message || '重连中', iteration);
+      setAgentStatus(event.agent, 'reconnecting', event.message || 'Reconnecting', iteration);
     } else if (event.title !== '仍在执行' && !/已启动|开始工作/.test(String(event.title || ''))) {
-      setHarnessState(event.message || event.title || 'Running', 'running');
+      setHarnessState(displayText(event.message || event.title || 'Running'), 'running');
     }
+  } else if (event.type === 'state_snapshot') {
+    renderSharedState(event.sharedState || event.shared_state);
   } else if (event.type === 'complete') {
     finishAgentLines();
     for (const [agent, value] of harnessAgentStates) {
-      if (value.state === 'running') setAgentStatus(agent, 'completed', '阶段完成', iteration);
+      if (value.state === 'running') setAgentStatus(agent, 'completed', 'Phase complete', iteration);
     }
-    harnessStageSummary = event.result?.state === 'cancelled' ? '问答已停止' : '问答完成';
+    harnessStageSummary = event.result?.state === 'cancelled' ? 'Run stopped' : 'Run complete';
+    renderSharedState(event.result?.sharedState || event.result?.shared_state);
     renderAgentStatus();
     setHarnessState(event.result?.state === 'cancelled' ? 'Stopped' : 'Complete', event.result?.state === 'cancelled' ? '' : 'complete');
   } else if (event.type === 'confirm') {
     renderAgentConfirmation(event);
     const agent = event.confirmation?.agent || 'executor';
-    setAgentStatus(agent, 'waiting', '等待人工确认', iteration);
-    setHarnessState('等待确认', 'awaiting_confirmation');
+    setAgentStatus(agent, 'waiting', 'Awaiting human confirmation', iteration);
+    setHarnessState('Awaiting confirmation', 'awaiting_confirmation');
   } else if (event.type === 'error') {
     const detail = harnessErrorDetail(event);
-    if (event.agent) setAgentStatus(event.agent, 'failed', detail || '阶段失败', iteration);
+    if (event.agent) setAgentStatus(event.agent, 'failed', detail || 'Phase failed', iteration);
     else {
       for (const [agent, value] of harnessAgentStates) {
-        if (value.state === 'running') setAgentStatus(agent, 'failed', detail || '阶段失败', iteration);
+        if (value.state === 'running') setAgentStatus(agent, 'failed', detail || 'Phase failed', iteration);
       }
     }
     appendStandardEvent(event, 'error', '!', 'ERROR', detail || 'Harness failed');
@@ -1064,10 +1232,13 @@ function renderAgentAnswer(result) {
   const payload = result && typeof result === 'object' ? result : {};
   const malformed = result !== undefined && result !== null && typeof result !== 'object';
   const shared = payload.sharedState || payload.shared_state;
-  if (shared) renderAgentPlan({ steps: (shared.plan || []).map((step) => ({ ...step, status: (shared.step_status || {})[step.id] || 'pending' })) });
+  if (shared) {
+    renderSharedState(shared);
+    renderAgentPlan({ steps: (shared.plan || []).map((step) => ({ ...step, status: (shared.step_status || {})[step.id] || 'pending' })) });
+  }
   if (payload.state === 'awaiting_confirmation') {
     renderAgentConfirmation({ confirmation: payload.confirmation });
-    setHarnessState('等待确认', 'awaiting_confirmation');
+    setHarnessState('Awaiting confirmation', 'awaiting_confirmation');
     return;
   }
   const cancelled = payload.state === 'cancelled';
@@ -1079,16 +1250,16 @@ function renderAgentAnswer(result) {
     // 答案按 Markdown 渲染：模型输出的是 ## 结论 / **粗体** 这类结构，纯文本显示很难看。
     // renderMarkdown 内部先转义再解析，所以不会因为模型输出尖括号而注入标签。
     if (text) answer.innerHTML = renderMarkdown(text);
-    else if (cancelled) answer.textContent = '本轮已停止。';
-    else if (stalled) answer.textContent = '本轮未完成，未生成有效结论。';
-    else if (malformed) answer.textContent = '本轮结果载荷异常，未能显示回答；请在「轨迹」页查看执行过程。';
-    else answer.textContent = '未生成回答。';
+    else if (cancelled) answer.textContent = 'This run was stopped.';
+    else if (stalled) answer.textContent = 'This run did not complete and produced no conclusion.';
+    else if (malformed) answer.textContent = 'The result payload was invalid. Check the Trace view for details.';
+    else answer.textContent = 'No answer was generated.';
   }
   renderEvidence(payload.evidence || null);
   if (cancelled) setHarnessState('Stopped', '');
-  else if (stalled) setHarnessState('未完成', 'failed');
-  else if (awaitingInput) setHarnessState('需要补充信息', '');
-  else if (payload.partial && payload.success !== false) setHarnessState('已按现有证据收尾', 'complete');
+  else if (stalled) setHarnessState('Incomplete', 'failed');
+  else if (awaitingInput) setHarnessState('More information required', '');
+  else if (payload.partial && payload.success !== false) setHarnessState('Closed with available evidence', 'complete');
   else setHarnessState(payload.success === false ? 'Failed' : 'Complete', payload.success === false ? 'failed' : 'complete');
   scrollActivity(true);
   scrollConversation(true);
@@ -1158,7 +1329,7 @@ async function loadAgentMemorySummary(showNotice = false) {
 async function clearAgentMemory() {
   try {
     if ([...sessionRuns.values()].some((run) => run.status === 'running')) {
-      throw new Error('请先停止进行中的问答，再清除记忆');
+      throw new Error('Stop active runs before clearing memory.');
     }
     const response = await fetch('/api/agent/memory', {method: 'DELETE'});
     const data = await response.json().catch(() => ({}));
@@ -1228,11 +1399,11 @@ async function streamAgentQuery(question, sessionId, run) {
 
 async function askAgent() {
   const question = document.getElementById('agentQuestion')?.value.trim();
-  if (!question) { if (typeof showToast === 'function') showToast('请输入问题', 'error'); return; }
+  if (!question) { if (typeof showToast === 'function') showToast('Enter a question first.', 'error'); return; }
   const sessionId = currentSessionId || newSessionId();
   const status = sessionRuns.get(sessionId)?.status || currentSession?.turns?.at(-1)?.state;
   if (status === 'running' || status === 'awaiting_confirmation') {
-    if (typeof showToast === 'function') showToast('请先完成当前问答或确认操作，也可以切换会话', 'error');
+    if (typeof showToast === 'function') showToast('Finish or confirm the current run first, or switch sessions.', 'error');
     return;
   }
   currentSessionId = sessionId;
@@ -1254,13 +1425,13 @@ async function askAgent() {
     // 用户按过停止：无论流是抛 AbortError 还是直接断掉，都算「已停止」而不是失败
     if (error.name === 'AbortError' || run.stopping) {
       run.status = 'stopped';
-      run.error = '已停止';
+      run.error = 'Stopped';
     } else {
       run.status = 'error';
       run.result = error.result || run.result;
       run.error = error.message;
       if (!error.harnessEventRendered && currentSessionId === sessionId) {
-        appendHarnessEvent({type: 'error', title: 'Harness 执行失败', message: error.message});
+        appendHarnessEvent({type: 'error', title: 'Harness failed', message: error.message});
       }
       if (typeof showToast === 'function') showToast(error.message, 'error');
     }
