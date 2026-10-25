@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -22,10 +20,6 @@ _REPEAT_CLOSEOUT_MESSAGE = "相同工具和参数已调用 4 次；已进入状�
 
 class AgentCancelled(RuntimeError):
     """Stop an in-flight agent before it starts another model request."""
-
-
-class _ToolTimeout(TimeoutError):
-    pass
 
 
 def _signature(name: str, arguments: Any) -> str:
@@ -62,7 +56,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         allowed_tools: set[str] | None = None,
         cancelled: Callable[[], bool] | None = None,
         model_timeout: Callable[[], float] | None = None,
-        tool_timeout: Callable[[], float] | None = None,
     ) -> None:
         self.state = state if state is not None else SharedTaskState("")
         self.scope = scope
@@ -71,7 +64,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         self.allowed_tools = allowed_tools
         self.cancelled = cancelled
         self.model_timeout = model_timeout
-        self.tool_timeout = tool_timeout
 
     def _model_request(self, request: Any) -> Any:
         if self.cancelled and self.cancelled():
@@ -115,13 +107,10 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             self.scope,
             key,
             name,
-            write=name == "add_registry_vessel",
             repeat_limit=self.repeat_limit,
         )
         self._save()
 
-        if name == "read_shared_state" and record.get("status") == "invalidated":
-            return key, None
         if record.get("blocked") == "repeat_limit":
             return None, _message(
                 request,
@@ -153,14 +142,6 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             )
             return None, _message(request, content, status="error", artifact=artifact)
         return None, _message(request, REPEAT_HINT, artifact=artifact)
-
-    def _timeout_seconds(self) -> float:
-        if self.tool_timeout is None:
-            return 120.0
-        try:
-            return max(0.001, float(self.tool_timeout()))
-        except (TypeError, ValueError):
-            return 120.0
 
     def _complete(self, request: Any, key: str | None, response: Any) -> None:
         call = request.tool_call
@@ -196,40 +177,12 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             )
         self._save()
 
-    def _run_sync(self, request: Any, key: str | None, handler: Callable[[Any], Any]) -> Any:
-        timeout = self._timeout_seconds()
-        result: dict[str, Any] = {}
-        completed = threading.Event()
-
-        def invoke() -> None:
-            try:
-                result["response"] = handler(request)
-            except Exception as error:  # noqa: BLE001 - Convert tool failures to model-visible results.
-                result["error"] = error
-            finally:
-                completed.set()
-
-        threading.Thread(target=invoke, name="sea-tool-call", daemon=True).start()
-        if not completed.wait(timeout):
-            raise _ToolTimeout(f"tool call exceeded {timeout:.0f}s; synchronous worker may still be running")
-        if "error" in result:
-            raise result["error"]
-        return result.get("response")
-
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         key, blocked = self._prepare(request)
         if blocked is not None:
             return blocked
         try:
-            response = self._run_sync(request, key, handler)
-        except _ToolTimeout as error:
-            self._failed(request, key, error)
-            return _message(
-                request,
-                str(error),
-                status="error",
-                artifact={"tool_timeout": True},
-            )
+            response = handler(request)
         except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
             self._failed(request, key, error)
             return _message(
@@ -247,18 +200,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         if blocked is not None:
             return blocked
         try:
-            response = await asyncio.wait_for(handler(request), self._timeout_seconds())
-        except asyncio.TimeoutError as error:
-            self._failed(request, key, error)
-            return _message(
-                request,
-                f"tool call exceeded {self._timeout_seconds():.0f}s",
-                status="error",
-                artifact={"tool_timeout": True},
-            )
-        except asyncio.CancelledError as error:
-            self._failed(request, key, error)
-            raise
+            response = await handler(request)
         except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
             self._failed(request, key, error)
             return _message(

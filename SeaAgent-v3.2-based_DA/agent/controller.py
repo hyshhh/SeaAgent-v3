@@ -28,7 +28,13 @@ class AgentController:
         self.event_handler = event_handler
 
     # 1.1.2 跑一轮问答并写入会话记忆
-    def answer(self, question: str, session_id: str | None = None, cancel: Any = None) -> dict[str, Any]:
+    def answer(
+        self,
+        question: str,
+        session_id: str | None = None,
+        cancel: Any = None,
+        image_path: str | None = None,
+    ) -> dict[str, Any]:
         session_id = str(session_id or "").strip() or f"session-{uuid.uuid4().hex[:12]}"
         session = self.repository.get_session(session_id)
         if session is None:
@@ -48,16 +54,22 @@ class AgentController:
                 question = f"{original_question}\n\n用户补充信息：{clarification_response}"
         if not clarification:
             clarification_response = ""
+        runtime_question = question
+        stored_question = question
+        if image_path:
+            runtime_question += f"\n\n用户附带了一张图片，识别时可将此路径传给 recognize_tracks.image_path：{image_path}"
+            stored_question += "\n\n[附带图片]"
+        display_question = original_question + ("\n\n[附带图片]" if image_path else "")
         runtime_id = f"qa-{uuid.uuid4().hex}"
         runtime: SeaVideoHarness | None = None
         result: dict[str, Any] = {}
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
-            state = runtime.run(question, thread_id=runtime_id, cancel=cancel)
-            result = self._project(session_id, state, original_question)
+            state = runtime.run(runtime_question, thread_id=runtime_id, cancel=cancel)
+            result = self._project(session_id, state, display_question)
         except Exception as error:
             logger.exception("Agent controller failed: session_id=%s", session_id)
-            result = self._error_result(session_id, question, error, "暂时无法完成视频检索。")
+            result = self._error_result(session_id, display_question, error, "暂时无法完成视频检索。")
         finally:
             if runtime is not None:
                 runtime.close()
@@ -67,15 +79,15 @@ class AgentController:
             result["clarificationQuestion"] = str(result.get("clarification") or clarification)
             result["clarificationResponse"] = clarification_response
         # 成功与失败都留档：失败轮次同样属于会话历史，前端据此还原完整对话
-        result["question"] = original_question
+        result["question"] = display_question
         result["sessionId"] = session_id
         if clarification:
             result["turnIndex"] = self.repository.replace_last_turn(
-                session_id, original_question, result, runtime_id=runtime_id
+                session_id, stored_question, result, runtime_id=runtime_id
             )
         else:
             result["turnIndex"] = self.repository.append_turn(
-                session_id, question, result, runtime_id=runtime_id
+                session_id, stored_question, result, runtime_id=runtime_id
             )
         return result
 

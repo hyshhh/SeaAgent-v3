@@ -5,8 +5,8 @@ description: "Use to identify the target, operation and data scope before planni
 
 # Identify Intent
 
-- Classify the task: existence, count, list, time, explanation, registry lookup or comparison.
+- Classify the task: recognition, total count, registered count, unregistered count, time or explanation.
 - Separate each target. Preserve hull-number prefixes; use the tool's normalized form only for lookup.
 - Resolve follow-ups from QA history, carrying forward the referenced time range and IDs.
-- Keep registry scope words out of appearance descriptions. A hull asked about in video is a video query; registry-only wording is a database query; use both only when both are requested.
+- Preserve whether the user asks for video presence, identity or registry membership; a catalogue entry alone never proves video presence.
 - Write into supported `requirements` and evidence-backed `plan` steps, not `restated_question`.

@@ -8,17 +8,21 @@
 import re
 from pathlib import Path
 
-EXPECTED_GROUPS = {"coordination", "planning", "execution", "reflection", "track", "registry", "visual", "answer"}
+EXPECTED_GROUPS = {"coordination", "planning", "reflection", "recognition", "statistics", "answer"}
 
 
 def _skill_files():
-    return sorted(Path("skills").glob("*/*/SKILL.md"))
+    root = Path("skills")
+    return sorted({*root.glob("*/SKILL.md"), *root.glob("*/*/SKILL.md")})
 
 
 def test_skill_directories_exist():
     found = _skill_files()
-    assert found, "没有找到任何 skills/<组>/<技能>/SKILL.md，布局与 glob 不一致"
-    groups = {path.parent.parent.name for path in found}
+    assert found, "没有找到任何 skills/<组>/SKILL.md 或 skills/<组>/<技能>/SKILL.md"
+    groups = {
+        path.parent.name if path.parent.parent == Path("skills") else path.parent.parent.name
+        for path in found
+    }
     assert groups == EXPECTED_GROUPS, f"技能组与预期不符：{sorted(groups)}"
 
 

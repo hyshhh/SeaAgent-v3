@@ -44,7 +44,6 @@ def build_middleware(
     if agent_spec["skills"]:
         selected_tools.add("read_file")
     reminder = agent_spec["skill_reminder"]
-    tool_timeout_seconds = float(settings.get("tool_timeout_seconds", 120) or 0)
     prompt_file = project_root() / str(
         settings.get("summary_prompt_file", "harness/summary_prompt.md")
     )  # 摘要提示词来自文件，要求逐字保留时间范围与各类 ID
@@ -70,7 +69,6 @@ def build_middleware(
             allowed_tools=selected_tools,
             cancelled=cancelled,
             model_timeout=model_timeout,
-            tool_timeout=lambda: tool_timeout_seconds,
         ),
     ]
     stack.append(

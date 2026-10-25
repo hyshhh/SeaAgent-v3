@@ -23,6 +23,7 @@ function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: []
     'agentFinalView', 'agentAnswer', 'btnAskAgent', 'btnStopAgent',
     'agentThinkingState',
     'qaSharedStateGroups', 'qaSharedStateMeta',
+    'evidenceGallery',
   ]) {
     elements.set(id, {
       hidden: true, innerHTML: '', textContent: '', value: '', disabled: false,
@@ -72,6 +73,19 @@ test('shared state renders escaped fields and its snapshot version', () => {
   assert.match(ui.elements.get('qaSharedStateGroups').innerHTML, /&lt;script&gt;/);
   assert.match(ui.elements.get('qaSharedStateGroups').innerHTML, /Requirements/);
   assert.equal(ui.elements.get('qaSharedStateMeta').textContent, 'Version 4');
+});
+
+test('evidence statistics render even when the query returns no visual items', () => {
+  const ui = page();
+  ui.run(`renderEvidence({ statistics: {
+    queryByTool: [{ tool: 'count_total_entities', statistics: { count: 0, entityCount: 0, countConfidence: 'confirmed' } }],
+    display: { trackCount: 0, keyframeCount: 0, clipCount: 0, registryReferenceCount: 0 }
+  } });`);
+  const html = ui.elements.get('evidenceGallery').innerHTML;
+  assert.match(html, /No evidence available/);
+  assert.match(html, /Count: 0/);
+  assert.match(html, /Entities: 0/);
+  assert.match(html, /Evidence display/);
 });
 
 test('skill loading and reading events collapse into one summary row per agent and phase', () => {

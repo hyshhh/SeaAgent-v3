@@ -447,6 +447,7 @@
 #tab-agent-qa .qa-stop-button:hover { background: #9c3f48; }
 #tab-agent-qa .qa-stop-button:disabled { cursor: progress; opacity: .6; }
 #tab-agent-qa .qa-composer-tools { display: flex; align-items: center; gap: 2px; min-width: 0; }
+#tab-agent-qa .qa-attachment-name { max-width: 140px; overflow: hidden; color: var(--qa-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 #tab-agent-qa .qa-tool-button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; color: #7c8995; border: 0; border-radius: 50%; background: transparent; cursor: pointer; font-size: 13px; line-height: 1; }
 #tab-agent-qa .qa-tool-button:hover { color: #416a89; background: #f2f6f9; }
 #tab-agent-qa .qa-tool-button-danger:hover { color: var(--qa-red); background: #fff4f4; }

@@ -45,23 +45,14 @@ const STEP_KINDS = {
 };
 
 const TOOL_LABELS = {
-  get_track: 'Track memory', get_frames: 'Keyframes', get_clip: 'Video clip',
-  get_registry: 'Registry', list_registry: 'Registry index', match_hull: 'Hull number match',
-  match_text: 'Text search', match_image: 'Image search', verify_target: 'Visual verification',
-  show_evidence: 'Evidence summary', dedup_tracks: 'Track deduplication',
-  add_registry_vessel: 'Registry write',
-  '轨迹记忆': 'Track memory',
-  '关键帧': 'Keyframes',
-  '视频片段': 'Video clip',
-  '先验库': 'Registry',
-  '先验库目录': 'Registry index',
-  '舷号匹配': 'Hull number match',
-  '文本检索': 'Text search',
-  '图像检索': 'Image search',
-  '视觉核验': 'Visual verification',
-  '证据汇总': 'Evidence summary',
-  '轨迹去重': 'Track deduplication',
-  '先验库写入': 'Registry write',
+  recognize_tracks: 'Direct recognition', match_registry_tracks: 'Registry-assisted recognition',
+  verify_vessel_images: 'VLM image check', count_total_entities: 'Total entity count',
+  count_registry_entities: 'Registered entity count', count_unregistered_entities: 'Unregistered entity count',
+  show_evidence: 'Evidence and statistics',
+  '直接识别': 'Direct recognition', '先验库辅助识别': 'Registry-assisted recognition',
+  'VLM 图像核验': 'VLM image check', '实体总数统计': 'Total entity count',
+  '在库实体统计': 'Registered entity count', '不在库实体统计': 'Unregistered entity count',
+  '证据与统计': 'Evidence and statistics',
   '读取技能正文': 'Read skill file',
   '技能目录': 'Skill directory',
   '技能检索': 'Skill search',
@@ -1014,7 +1005,10 @@ function completeToolEvent(event) {
 
 /* 证据工具一返回就刷新证据面板，不必等整轮结束——中间件保证收尾前一定会调用它。 */
 function isEvidencePayload(result) {
-  return !!result && typeof result === 'object' && ['shownKeyframeIds', 'shownShipSegmentIds', 'shownRegistryReferenceIds'].some((key) => Array.isArray(result[key]));
+  return !!result && typeof result === 'object' && [
+    'trackIds', 'keyframeIds', 'shownKeyframeIds', 'shownShipSegmentIds',
+    'shownRegistryReferenceIds', 'statistics',
+  ].some((key) => Array.isArray(result[key]) || (result[key] && typeof result[key] === 'object'));
 }
 
 /* 子智能体行：一个 agent 只占一行，内容在该行内更新，结束后压成一行摘要。
@@ -1255,7 +1249,21 @@ function renderAgentAnswer(result) {
     else if (malformed) answer.textContent = 'The result payload was invalid. Check the Trace view for details.';
     else answer.textContent = 'No answer was generated.';
   }
-  renderEvidence(payload.evidence || null);
+  const enrichedEvidence = payload.enrichedEvidence || {};
+  const displayEvidence = payload.evidence || {};
+  const enrichedStatistics = enrichedEvidence.statistics || {};
+  const displayStatistics = displayEvidence.statistics || {};
+  renderEvidence({
+    ...enrichedEvidence,
+    ...displayEvidence,
+    statistics: {
+      ...enrichedStatistics,
+      ...displayStatistics,
+      query: enrichedStatistics.query ?? displayStatistics.query ?? [],
+      queryByTool: enrichedStatistics.queryByTool ?? displayStatistics.queryByTool ?? [],
+      display: enrichedStatistics.display ?? displayStatistics.display ?? displayStatistics,
+    },
+  });
   if (cancelled) setHarnessState('Stopped', '');
   else if (stalled) setHarnessState('Incomplete', 'failed');
   else if (awaitingInput) setHarnessState('More information required', '');
@@ -1270,6 +1278,7 @@ function renderEvidence(evidence) {
   const node = document.getElementById('evidenceGallery');
   if (!node) return;
   const groups = [
+    ['shownTrackIds', 'Tracks', (id) => `<span class="evidence-track-id">${escapeHtml(id)}</span>`],
     ['shownKeyframeIds', 'Keyframes', (id) => `<a class="evidence-card" href="/api/evidence/keyframes/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/keyframes/${encodeURIComponent(id)}" alt="Keyframe ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
     ['shownShipSegmentIds', 'Video clips', (id) => `<a class="evidence-card" href="/api/evidence/clips/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/clips/${encodeURIComponent(id)}/poster" alt="Video clip ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
     ['shownRegistryReferenceIds', 'Registry references', (id) => `<a class="evidence-card" href="/api/evidence/registry/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/registry/${encodeURIComponent(id)}" alt="Registry reference ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
@@ -1277,12 +1286,16 @@ function renderEvidence(evidence) {
   const maxItems = Math.max(0, Number(document.getElementById('evidenceMaxItems')?.value || 0));
   let shown = 0;
   const sections = groups.flatMap(([key, label, render]) => {
-    const source = Array.isArray(evidence?.[key]) ? evidence[key] : [];
+    const sourceKey = key === 'shownTrackIds' && !Array.isArray(evidence?.[key]) ? 'trackIds' : key;
+    const source = Array.isArray(evidence?.[sourceKey]) ? evidence[sourceKey] : [];
     const ids = maxItems ? source.slice(0, Math.max(0, maxItems - shown)) : source;
     shown += ids.length;
     return ids.length ? [`<section class="evidence-group"><strong>${label}</strong><div class="evidence-group-grid">${ids.map((id) => render(String(id))).join('')}</div></section>`] : [];
   });
-  const total = groups.reduce((sum, [key]) => sum + (Array.isArray(evidence?.[key]) ? evidence[key].length : 0), 0);
+  const total = groups.reduce((sum, [key]) => {
+    const sourceKey = key === 'shownTrackIds' && !Array.isArray(evidence?.[key]) ? 'trackIds' : key;
+    return sum + (Array.isArray(evidence?.[sourceKey]) ? evidence[sourceKey].length : 0);
+  }, 0);
   const count = document.getElementById('evidenceResultCount');
   if (count) count.textContent = total ? `${shown}/${total} item${total === 1 ? '' : 's'}` : 'No items';
   // 一行上下文：截图进论文时，这张图要能自己说清"这是哪一问的证据"。
@@ -1304,11 +1317,39 @@ function renderEvidence(evidence) {
     ['Display', String(evidence?.displayId || '—')],
     ['Retrieved by', tools.length ? tools.join(', ') : '—'],
   ];
+  const statistics = evidence?.statistics || {};
+  const queryStatistics = statistics.query || statistics;
+  const queryByTool = Array.isArray(statistics.queryByTool) ? statistics.queryByTool : [];
+  const statLabels = {
+    count: 'Count', countType: 'Count type', searchedTrackCount: 'Tracks searched', entityCount: 'Entities',
+    minimumEntityCount: 'Minimum entities', maximumEntityCount: 'Maximum entities',
+    inRegistryCount: 'In registry', unregisteredCount: 'Not in registry',
+    uncertainCount: 'Uncertain', confirmedCount: 'Confirmed',
+    unconfirmedCount: 'Unconfirmed', unsearchableTrackCount: 'Unsearchable tracks',
+    pendingMergeCount: 'Possible duplicate groups', countStability: 'Count stability',
+    countConfidence: 'Count confidence', countUncertain: 'Count uncertainty',
+    countIsUpperBound: 'Upper bound',
+  };
+  const statsToShow = queryByTool.length
+    ? queryByTool.map((item) => ({ tool: item.tool, values: item.statistics || {} }))
+    : [{ tool: '', values: Array.isArray(queryStatistics) ? {} : queryStatistics }];
+  for (const item of statsToShow) {
+    const values = Object.entries(item.values)
+      .filter(([key, value]) => statLabels[key] && value !== undefined && value !== null)
+      .map(([key, value]) => `${statLabels[key]}: ${key === 'countIsUpperBound' ? (value ? 'Yes' : 'No') : String(value)}`);
+    if (values.length) {
+      facts.push([item.tool ? displayToolLabel(item.tool) : 'Query statistics', values.join(' · ')]);
+    }
+  }
+  const shownStatistics = statistics.display || {};
+  if (Object.keys(shownStatistics).length) {
+    facts.push(['Evidence display', `${shownStatistics.trackCount ?? 0} tracks · ${shownStatistics.keyframeCount ?? 0} keyframes · ${shownStatistics.clipCount ?? 0} clips · ${shownStatistics.registryReferenceCount ?? 0} registry references`]);
+  }
   const meta = `<dl class="evidence-meta">${facts.map(([term, value]) =>
     `<div><dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
-  node.innerHTML = sections.length
-    ? sections.join('') + meta
-    : '<div class="qa-inspector-empty">No evidence available.</div>';
+  node.innerHTML = (sections.length
+    ? sections.join('')
+    : '<div class="qa-inspector-empty">No evidence available.</div>') + meta;
 }
 
 async function loadAgentMemorySummary(showNotice = false) {
@@ -1360,11 +1401,11 @@ function dispatchRunEvent(run, event) {
   if (qaView === 'trace') renderTrajectory();
 }
 
-async function streamAgentQuery(question, sessionId, run) {
+async function streamAgentQuery(question, sessionId, run, image = null) {
   const response = await fetch('/api/agent/query/stream', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({question, sessionId}),
+    body: JSON.stringify({question, sessionId, ...(image ? {image} : {})}),
     signal: run.controller?.signal,
   });
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `Request failed: ${response.status}`);
@@ -1397,6 +1438,15 @@ async function streamAgentQuery(question, sessionId, run) {
   return result;
 }
 
+function readImageDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read the attached image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function askAgent() {
   const question = document.getElementById('agentQuestion')?.value.trim();
   if (!question) { if (typeof showToast === 'function') showToast('Enter a question first.', 'error'); return; }
@@ -1409,6 +1459,12 @@ async function askAgent() {
   currentSessionId = sessionId;
   if (!currentSession || currentSession.sessionId !== sessionId) currentSession = {sessionId, title: question, turns: []};
   const run = {id: sessionId, question, events: [], result: null, error: null, status: 'running', stopping: false, controller: new AbortController()};
+  const imageInput = document.getElementById('agentImageInput');
+  const imageFile = imageInput?.files?.[0] || null;
+  if (imageFile && imageFile.size > 4 * 1024 * 1024) {
+    if (typeof showToast === 'function') showToast('Attached image must be smaller than 4 MB.', 'error');
+    return;
+  }
   sessionRuns.set(sessionId, run);
   // 发出去就清空输入框并收回到一行，保持输入区紧凑
   const input = document.getElementById('agentQuestion');
@@ -1418,7 +1474,8 @@ async function askAgent() {
   await loadSessions();
 
   try {
-    const result = await streamAgentQuery(question, sessionId, run);
+    const image = imageFile ? await readImageDataUrl(imageFile) : null;
+    const result = await streamAgentQuery(question, sessionId, run, image);
     run.result = result || null;
     run.status = result?.state === 'awaiting_confirmation' ? 'awaiting_confirmation' : result?.state === 'cancelled' ? 'stopped' : result?.success === false ? 'error' : 'done';
   } catch (error) {
@@ -1437,6 +1494,9 @@ async function askAgent() {
     }
   } finally {
     run.controller = null;
+    if (imageInput) imageInput.value = '';
+    const imageName = document.getElementById('agentImageName');
+    if (imageName) { imageName.textContent = ''; imageName.hidden = true; }
     if (currentSessionId === sessionId) renderView();
     await loadSessions();
     try {
@@ -1473,6 +1533,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); askAgent(); }
   });
   input?.addEventListener('input', autoGrowComposer);
+  document.getElementById('agentImageInput')?.addEventListener('change', (event) => {
+    const file = event.target.files?.[0];
+    const name = document.getElementById('agentImageName');
+    if (!name) return;
+    name.textContent = file ? file.name : '';
+    name.hidden = !file;
+  });
   autoGrowComposer();
   for (const id of ['evidenceImageScale', 'evidenceVideoScale', 'evidenceMaxItems']) {
     const control = document.getElementById(id);

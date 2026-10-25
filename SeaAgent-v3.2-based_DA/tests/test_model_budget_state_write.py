@@ -1,5 +1,4 @@
 import json
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -49,7 +48,12 @@ def _result(request):
 
 def test_config_has_no_total_tool_budget_and_a_two_minute_timeout():
     config = load_config()
-    assert config["harness"]["tool_timeout_seconds"] == 120
+    from tools.service import ToolService
+
+    assert ToolService.STATISTICS_TIMEOUT_SECONDS == 120
+    assert ToolService.IDENTIFICATION_TIMEOUT_SECONDS == 60
+    assert ToolService.TOOL_TIMEOUTS["show_evidence"] == 120
+    assert ToolService.TOOL_TIMEOUTS["verify_vessel_images"] == 60
     assert "tool_calls_per_run" not in config["harness"]
     assert "subagent_tool_calls" not in config["harness"]
 
@@ -299,18 +303,9 @@ def test_counters_survive_restore_and_reset_for_a_new_phase(tmp_path):
     assert restored.snapshot()["tool_calls"]["executor"] == 0
 
 
-def test_sync_tool_timeout_returns_an_error_result():
-    state = SharedTaskState("q")
-    guard = RepeatToolCallMiddleware(
-        state=state, scope="executor", tool_timeout=lambda: 0.01
-    )
-    result = guard.wrap_tool_call(
-        _call("get_track", call_id="timeout"),
-        lambda _request: (time.sleep(0.1), ToolMessage(content="late"))[1],
-    )
-    assert result.status == "error"
-    assert result.artifact["tool_timeout"] is True
-    assert next(iter(state.snapshot()["call_history"].values()))["status"] == "error"
+def test_tool_guard_does_not_apply_a_global_tool_timeout():
+    guard = RepeatToolCallMiddleware(scope="executor")
+    assert not hasattr(guard, "tool_timeout")
 
 
 def test_cancel_and_model_timeout_are_independent_of_tool_statistics():

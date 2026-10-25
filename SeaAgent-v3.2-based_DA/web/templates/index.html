@@ -222,7 +222,7 @@
           <div id="qaChatConfirmationMount" class="qa-confirm-mount">
             <section id="agentConfirmPanel" class="qa-confirm" data-state="idle" hidden aria-label="Write confirmation" aria-live="polite">
               <div class="qa-confirm-head">
-                <span class="qa-confirm-title">Confirmation required · Registry write</span>
+                <span class="qa-confirm-title">Confirmation required</span>
                 <span id="agentConfirmHint" class="qa-confirm-hint"></span>
               </div>
               <dl id="agentConfirmBody" class="qa-confirm-body"></dl>
@@ -243,6 +243,9 @@
             <div class="qa-composer-actions">
               <div class="qa-composer-tools">
                 <select class="agent-preset-select" aria-label="Preset questions" title="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Presets</option><option value="舷号 0857 有没有在视频中出现？">Hull lookup</option><option value="数据库中有没有黄色的无人艇？">Registry lookup</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Unregistered vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">Registered vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance search</option></select>
+                <button type="button" class="qa-tool-button" onclick="document.getElementById('agentImageInput').click()" title="Attach one image for recognition" aria-label="Attach image">＋</button>
+                <input id="agentImageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+                <span id="agentImageName" class="qa-attachment-name" hidden></span>
                 <button type="button" class="qa-endpoint-button" onclick="openQaEndpointSettings()" title="Configure VLM and embedding service ports">Model ports</button>
                 <button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="Refresh memory summary" aria-label="Refresh memory summary">↻</button>
                 <button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="Clear QA memory" aria-label="Clear QA memory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></svg></button>
@@ -439,13 +442,9 @@
             <textarea data-setting="prompts.single_frame_recognition" rows="7" spellcheck="false"></textarea>
             <small>单帧舷号可读性判断与外观描述提取。</small>
           </label>
-          <label class="settings-prompt-item">描述核验提示词
-            <textarea data-setting="prompts.verify_description" rows="7" spellcheck="false"></textarea>
-            <small>灰区时核验轨迹图像是否符合文字描述。</small>
-          </label>
-          <label class="settings-prompt-item">库项核验提示词
-            <textarea data-setting="prompts.verify_registry" rows="7" spellcheck="false"></textarea>
-            <small>灰区时比较先验库参考图与轨迹图像，判断是否为同一艘船。</small>
+          <label class="settings-prompt-item">两图同船核验提示词
+            <textarea data-setting="prompts.verify_images" rows="7" spellcheck="false"></textarea>
+            <small>比较已知船舶图片与候选图片，只判断是否为同一艘船。</small>
           </label>
           <label class="settings-prompt-item">文本检索指令
             <textarea data-setting="prompts.text_retrieval_instruction" rows="3" spellcheck="false"></textarea>

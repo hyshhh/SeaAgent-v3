@@ -105,15 +105,13 @@ def test_planner_plans_without_touching_data():
 
 
 def test_reflector_audits_and_lands_the_evidence():
-    """反思阶段要能落证据（show_evidence）并查库核对，返回验收判定契约。"""
+    """反思阶段只汇总证据并提交验收判定。"""
     subagents = _specs()
     reflector = _by_name(subagents)["reflector"]
     assert [str(tool.name) for tool in reflector["tools"]] == [
         "read_shared_state",
         "update_reflection_state",
         "show_evidence",
-        "get_registry",
-        "list_registry",
     ]
     assert reflector["skills"] == ["/skills/reflection", "/skills/answer"]
     assert "assessment.final_answer" in reflector["system_prompt"]
@@ -166,20 +164,16 @@ def test_the_reflector_keeps_its_narrow_tool_set():
         "read_shared_state",
         "update_reflection_state",
         "show_evidence",
-        "get_registry",
-        "list_registry",
     ]
 
 
 def test_three_agent_assembly_has_no_master_executor(tmp_path):
-    """三个角色独立存在，写库中断配置挂在 executor 上。"""
+    """三个角色独立存在，业务工具不包含先验库写入。"""
     runtime = _runtime(tmp_path)
     try:
         assert set(runtime.agents) == {"planner", "executor", "reflector"}
         executor = _by_name(runtime.subagents)["executor"]
-        assert executor["interrupt_on"] == {
-            "add_registry_vessel": {"allowed_decisions": ["approve", "reject"]}
-        }
+        assert "interrupt_on" not in executor
         assert [spec["name"] for spec in runtime.subagents] == ["planner", "executor", "reflector"]
     finally:
         runtime.close()
@@ -313,11 +307,11 @@ def test_plan_and_evidence_tools_have_display_labels():
     labels = _tool_labels(load_config())
     assert labels["update_planner_state"] == "更新任务计划"
     assert "write_todos" not in labels
-    assert labels["show_evidence"] == "证据汇总"
+    assert labels["show_evidence"] == "证据与统计"
 
 
 def test_skill_sources_expand_group_names_to_paths():
-    assert _skill_sources({"skills_dir": "skills"}, ["planning", "execution"]) == [
+    assert _skill_sources({"skills_dir": "skills"}, ["planning", "recognition"]) == [
         "/skills/planning",
-        "/skills/execution",
+        "/skills/recognition",
     ]

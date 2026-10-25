@@ -1,15 +1,20 @@
 """Qwen3-VL-4B 的统一识别、核验和智能体请求服务。"""
 from __future__ import annotations
+
 import base64
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
 import cv2
 import httpx
 import numpy as np
+
 from config import load_config
 from config.net import is_loopback_url
+
 
 class LLMServiceError(RuntimeError):
     pass
@@ -114,7 +119,7 @@ class AgentLLMService:
                     message = response.json()["choices"][0]["message"]
                 raw = message.get("content") or message.get("reasoning_content") or ""
                 return _extract_json(self._strip_thinking(raw))
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - retry all transport and JSON failures.
                 last_error = error
         raise LLMServiceError(f"生成模型调用失败：{last_error}")
 
@@ -125,14 +130,15 @@ class AgentLLMService:
         confidence = min(1.0, max(0.0, float(result.get("readability_confidence") or 0)))
         return {"has_readable_hull_number": readable, "vlm_hull_number": hull if readable == "yes" else None, "readability_confidence": confidence, "description": str(result.get("description") or "").strip()}
 
-    def verify(self, description: str | None, reference_images: list[str], evidence_images: list[str]) -> dict[str, Any]:
-        if description:
-            prompt = self.prompts["verify_description"].replace("{description}", description)
-            images = evidence_images
-        else:
-            prompt = self.prompts["verify_registry"]
-            images = reference_images[:3] + evidence_images[:3]
-        result = self.complete_json(prompt, images)
+    def verify(
+        self,
+        reference_images: list[str],
+        candidate_images: list[str],
+    ) -> dict[str, Any]:
+        images = list(reference_images[:1]) + list(candidate_images[:1])
+        if len(images) != 2:
+            return {"decision": "uncertain", "facts": ["需要两张图片"]}
+        result = self.complete_json(self.prompts["verify_images"], images)
         decision = str(result.get("decision", "uncertain")).lower()
         if decision not in {"match", "mismatch", "uncertain"}:
             decision = "uncertain"

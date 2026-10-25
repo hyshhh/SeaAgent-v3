@@ -17,10 +17,8 @@ from harness.runtime import SeaVideoHarness
 
 
 class _ScriptedModel(ChatOpenAI):
-    write: bool = False
     batch_tools: bool = False
     replan: bool = False
-    rejected: bool = False
     skip_planner_state_write: bool = False
     calls: int = 0
     batch_sent: bool = False
@@ -48,8 +46,8 @@ class _ScriptedModel(ChatOpenAI):
             self.batch_sent = True
             calls = [
                 {
-                    "name": "get_track",
-                    "args": {"start_time": index, "end_time": index + 1},
+                    "name": "recognize_tracks",
+                    "args": {"description": f"target-{index}"},
                     "id": uuid.uuid4().hex,
                 }
                 for index in range(9)
@@ -57,8 +55,6 @@ class _ScriptedModel(ChatOpenAI):
             return ChatResult(
                 generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls))]
             )
-        if isinstance(last, ToolMessage) and "User rejected" in str(last.content):
-            self.rejected = True
         name, args = "read_shared_state", {}
         if isinstance(last, ToolMessage):
             if last.name.startswith("update_"):
@@ -73,31 +69,15 @@ class _ScriptedModel(ChatOpenAI):
                         "next_action": f"iteration {state['iteration']}",
                     }
                 elif role == "executor":
-                    if not state["tool_results"] and not self.rejected:
-                        name = "add_registry_vessel" if self.write else "get_track"
-                        args = (
-                            {"hull_number": "003", "user_intent": "add 003"}
-                            if self.write
-                            else {"start_time": 0, "end_time": 60}
-                        )
+                    if not state["tool_results"]:
+                        name = "recognize_tracks"
+                        args = {"description": "target vessel"}
                     else:
                         name = "update_execution_state"
                         args["patch"] = {
-                            "execution_status": (
-                                "failed"
-                                if self.rejected
-                                else "running"
-                                if state["iteration"] % 2 == 0
-                                else "success"
-                            ),
+                            "execution_status": "success",
                             "step_status": {
-                                "step-1": (
-                                    "failed"
-                                    if self.rejected
-                                    else "in_progress"
-                                    if state["iteration"] % 2 == 0
-                                    else "completed"
-                                )
+                                "step-1": "completed"
                             },
                         }
                 elif not state["evidence"]:
@@ -116,7 +96,6 @@ class _ScriptedModel(ChatOpenAI):
 
 class _Service:
     def __init__(self):
-        self.writes = 0
         self.queries = 0
         self.active_queries = 0
         self.max_active_queries = 0
@@ -124,9 +103,7 @@ class _Service:
 
     def __getattr__(self, name):
         def invoke(**kwargs):
-            if name == "addRegistryVessel":
-                self.writes += 1
-            if name == "getTrack":
+            if name == "recognizeTracks":
                 with self._lock:
                     self.queries += 1
                     self.active_queries += 1
@@ -145,7 +122,7 @@ class _Service:
         return invoke
 
 
-def _runtime(tmp_path, service, write=False, executor_model_budget=12, **model_settings):
+def _runtime(tmp_path, service, executor_model_budget=12, **model_settings):
     config = load_config()
     config["llm"]["model"] = "shared-state-offline-test"
     role_config = yaml.safe_load(
@@ -171,7 +148,6 @@ def _runtime(tmp_path, service, write=False, executor_model_budget=12, **model_s
         model="shared-state-offline-test",
         api_key="test",
         streaming=False,
-        write=write,
         **model_settings,
     )
     return SeaVideoHarness(config, service, model=model)
@@ -201,7 +177,7 @@ def test_real_graph_runs_tool_batches_without_a_total_tool_limit(tmp_path):
     assert runtime.shared_state.snapshot()["tool_calls"]["executor"] >= 11
     assert (
         len(
-            [item for item in result["shared_state"]["tool_results"] if item["tool"] == "get_track"]
+            [item for item in result["shared_state"]["tool_results"] if item["tool"] == "recognize_tracks"]
         )
         == 9
     )
@@ -228,20 +204,6 @@ def test_agent_without_state_write_gets_one_forced_repair_turn(tmp_path):
     assert runtime.model.calls >= 3
 
 
-@pytest.mark.parametrize("decision,writes", [("approve", 1), ("reject", 0)])
-def test_four_call_limit_preserves_confirmation_and_prevents_replay(tmp_path, decision, writes):
-    service = _Service()
-    paused = _runtime(tmp_path, service, write=True).run("add 003", "t")
-    assert paused["state"] == "awaiting_confirmation" and service.writes == 0
-    continued = _runtime(tmp_path, service, write=True).resume(decision, "t")
-    assert continued["state"] == "completed"
-    assert service.writes == writes
-    assert continued["shared_state"]["execution_status"] == ("success" if writes else "failed")
-    with pytest.raises(ValueError, match="没有待确认"):
-        _runtime(tmp_path, service, write=True).resume(decision, "t")
-    assert service.writes == writes
-
-
 def test_real_graphs_complete_using_only_shared_task_state(tmp_path):
     runtime = _runtime(tmp_path, _Service())
     result = runtime.run("scan", "t")
@@ -255,35 +217,6 @@ def test_real_graphs_complete_using_only_shared_task_state(tmp_path):
             "TodoListMiddleware" in name or "ToolCallLimitMiddleware" in name
             for name in graph.nodes
         )
-
-
-def test_confirmation_survives_a_new_runtime_and_cannot_be_replayed(tmp_path):
-    service = _Service()
-    paused = _runtime(tmp_path, service, write=True).run("add 003", "t")
-    assert paused["state"] == "awaiting_confirmation"
-    assert service.writes == 0
-    continued = _runtime(tmp_path, service, write=True).resume("approve", "t")
-    assert continued["state"] == "completed"
-    assert service.writes == 1
-    with pytest.raises(ValueError, match="没有待确认"):
-        _runtime(tmp_path, service, write=True).resume("approve", "t")
-    assert service.writes == 1
-
-
-def test_real_graph_emits_frontend_confirmation_with_pending_write_details(tmp_path):
-    events = []
-    runtime = _runtime(tmp_path, _Service(), write=True)
-    runtime.event_handler = events.append
-
-    paused = runtime.run("add 003", "t")
-
-    confirmation_events = [event for event in events if event.get("type") == "confirm"]
-    assert paused["state"] == "awaiting_confirmation"
-    assert len(confirmation_events) == 1
-    action = confirmation_events[0]["confirmation"]["actions"][0]
-    assert action["tool"] == "add_registry_vessel"
-    assert action["arguments"]["hull_number"] == "003"
-    assert confirmation_events[0]["result"]["state"] == "awaiting_confirmation"
 
 
 def test_same_question_after_completion_starts_fresh_task_state(tmp_path):

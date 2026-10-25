@@ -404,7 +404,7 @@ def test_failed_read_replays_its_error_instead_of_retrying():
     assert len(calls) == 1
 
 
-def test_registry_write_invalidates_old_registry_queries():
+def test_tool_results_do_not_depend_on_removed_registry_write_invalidation():
     guard = RepeatToolCallMiddleware()
     calls = []
 
@@ -412,12 +412,9 @@ def test_registry_write_invalidates_old_registry_queries():
         calls.append(req.tool_call["name"])
         return ToolMessage(content='{"ok":true}', tool_call_id=req.tool_call["id"])
 
-    guard.wrap_tool_call(request("list_registry"), handler)
-    guard.wrap_tool_call(request("list_registry"), handler)
-    guard.wrap_tool_call(request("add_registry_vessel"), handler)
-    guard.wrap_tool_call(request("list_registry"), handler)
-    guard.wrap_tool_call(request("add_registry_vessel"), handler)
-    assert calls == ["list_registry", "add_registry_vessel", "list_registry"]
+    guard.wrap_tool_call(request("recognize_tracks"), handler)
+    guard.wrap_tool_call(request("recognize_tracks"), handler)
+    assert calls == ["recognize_tracks"]
 
 
 def test_truncated_cached_results_are_explicitly_marked():

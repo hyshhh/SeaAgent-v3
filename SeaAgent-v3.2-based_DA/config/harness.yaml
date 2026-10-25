@@ -18,8 +18,6 @@ harness:
   retry_delay_seconds: 1.0
   checkpointer: data/memory/checkpoints.sqlite
   stream_mode: updates
-  # 所有工具统一超时；Python 同步线程超时后无法被强制终止。
-  tool_timeout_seconds: 120
   # 心跳：每隔这么多秒发一条「仍在执行」状态，避免看起来像卡死；0 表示关闭。
   heartbeat_seconds: 15
   output:

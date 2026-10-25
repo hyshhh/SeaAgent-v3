@@ -24,8 +24,7 @@ DETECTION_MODEL_OPTIONS: tuple[str, ...] = (
 
 PROMPT_SETTING_KEYS: tuple[str, ...] = (
     "single_frame_recognition",
-    "verify_description",
-    "verify_registry",
+    "verify_images",
     "text_retrieval_instruction",
 )
 
@@ -37,14 +36,12 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
         "max_chars": 8000,
         "label": {
             "single_frame_recognition": "单帧识别提示词",
-            "verify_description": "描述核验提示词",
-            "verify_registry": "库项核验提示词",
+            "verify_images": "图像核验提示词",
             "text_retrieval_instruction": "文本检索指令",
         }.get(key, key),
         "help": {
             "single_frame_recognition": "单帧舷号可读性与外观描述识别。",
-            "verify_description": "灰区时核验轨迹图像是否符合文字描述。",
-            "verify_registry": "灰区时比较库参考图与轨迹图像，判断是否为同一艘船。",
+            "verify_images": "比较两张图片是否为同一艘船。",
             "text_retrieval_instruction": "文本向量检索时使用的英文指令。",
         }.get(key, ""),
     }

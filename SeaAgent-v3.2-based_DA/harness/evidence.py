@@ -12,6 +12,7 @@ KEYFRAME_ID_KEYS = (  # 工具结果里这些键下的值都是「可直接展�
     "discardedKeyframeIds",
 )
 SEGMENT_ID_KEYS = ("shipSegmentIds", "shownShipSegmentIds", "segmentIds")
+TRACK_ID_KEYS = ("trackIds", "shownTrackIds")
 REFERENCE_ID_KEYS = (
     "registryReferenceIds",
     "shownRegistryReferenceIds",
@@ -175,12 +176,36 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
     keyframes = _dedup([item for payload in payloads for item in _collect_ids(payload, KEYFRAME_ID_KEYS)], limit)
     segments = _dedup([item for payload in payloads for item in _collect_ids(payload, SEGMENT_ID_KEYS)], limit)
     references = _dedup([item for payload in payloads for item in _collect_ids(payload, REFERENCE_ID_KEYS)], limit)
+    tracks = _dedup([item for payload in payloads for item in _collect_ids(payload, TRACK_ID_KEYS)], limit)
+    query_statistics: dict[str, Any] = {}
+    query_statistics_by_tool: list[dict[str, Any]] = []
+    display_statistics: dict[str, Any] = {}
+    for record in successful:
+        result = record["result"]
+        if not isinstance(result, dict):
+            continue
+        statistics = result.get("statistics")
+        if isinstance(statistics, dict):
+            if str(record.get("tool") or "") == "show_evidence":
+                display_statistics = statistics
+            else:
+                query_statistics.update(statistics)
+                query_statistics_by_tool.append({
+                    "tool": str(record.get("tool") or ""),
+                    "statistics": statistics,
+                })
 
     evidence = {
         "keyframeIds": keyframes,
         "shipSegmentIds": segments,
         "registryReferenceIds": references,
+        "trackIds": tracks,
         "displayGroups": _display_groups(successful, limit),
+        "statistics": {
+            "query": query_statistics,
+            "queryByTool": query_statistics_by_tool,
+            "display": display_statistics,
+        },
         "tools": [str(record.get("tool") or "") for record in successful],
     }
     evidence["isEmpty"] = not (keyframes or segments or references)

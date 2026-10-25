@@ -173,7 +173,7 @@ def test_builtin_file_tools_get_chinese_labels():
 
     labels = _tool_labels(load_config())
     assert labels["read_file"] == "读取技能正文"
-    assert labels["get_track"] == "轨迹记忆"
+    assert labels["recognize_tracks"] == "直接识别"
 
 
 # ---------------------------------------------------------------- 单个角色的执行

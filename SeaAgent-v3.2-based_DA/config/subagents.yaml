@@ -11,67 +11,64 @@ agents:
     skill_reminder:
       max_per_run: 1
       message: |
-        读取 /skills/planning/intent/SKILL.md 与 /skills/planning/acceptance/SKILL.md；仅在相关时读取 /skills/planning/time-range/SKILL.md 或 /skills/planning/registry-scope/SKILL.md。
+        读取 /skills/planning/intent/SKILL.md 与 /skills/planning/acceptance/SKILL.md；有明确时间段时再读 /skills/planning/time-range/SKILL.md。
     system_prompt: |
-      你是 Planner Agent：只规划，不调用领域工具；负责 requirements、plan、next_action、clarification。
+      你是 Planner Agent：只规划，不调用业务工具；负责 requirements、plan、next_action、clarification。
       先读共享状态。每步包含唯一 id、content、required_evidence（字符串数组）；重规划保留未变步骤的 id。
-      无时间条件时省略时间范围，按全部已存轨迹规划；有条件时解析为带时区的 ISO-8601。外观检索须规划正确图库来源：视频用“轨迹→关键帧→文本检索”，先验库先列库；不得空传图库。
-      仅在缺少信息会阻止正确执行时请求澄清；澄清时只写 clarification 并留空 plan。
-      调用 update_planner_state 写入负责字段；不复制整份状态。更新失败则重读状态并按错误修正。完成后用一句话报告，不输出 JSON。
+      无时间条件时省略 time_range，按全部已存轨迹规划；有时间条件时保留用户范围。识别任务优先使用 recognize_tracks；
+      用户给出舷号或目标名称/别名且直接识别不确定时再使用 match_registry_tracks；图片识别或先验库候选不确定时可用 verify_vessel_images 核验两张图。
+      统计任务只规划一个对应的 count_* 工具；证据展示统一使用 show_evidence。
+      仅在缺少信息会阻止正确执行时请求澄清；调用 update_planner_state 写入负责字段，不复制整份状态。
 
   - name: executor
-    description: 执行计划中的轨迹、图像、视频与先验库查询，并记录进度和证据。
+    description: 执行封装后的识别与统计业务工具，并记录进度和证据。
     model_request_budget: 12
     closeout_request_budget: 2
     tools:
       - read_shared_state
       - update_execution_state
-      - get_track
-      - get_frames
-      - get_clip
-      - get_registry
-      - list_registry
-      - match_hull
-      - match_text
-      - match_image
-      - verify_target
-      - dedup_tracks
-      - add_registry_vessel
-    skills: [execution, track, registry, visual, answer]
+      - recognize_tracks
+      - match_registry_tracks
+      - verify_vessel_images
+      - count_total_entities
+      - count_registry_entities
+      - count_unregistered_entities
+    skills: [recognition, statistics, answer]
     task_prompt: |
       用户问题：{question}
     skill_reminder:
       max_per_run: 2
       message: |
-        先读 /skills/execution/query-rules/SKILL.md 与 /skills/execution/tool-chains/SKILL.md；按任务再读 /skills/track/query/SKILL.md、/skills/registry/registry/SKILL.md 或 /skills/visual/evidence/SKILL.md。
-    interrupt_on:
-      add_registry_vessel:
-        allowed_decisions: [approve, reject]
+        先读 /skills/recognition/SKILL.md 或 /skills/statistics/SKILL.md；需要统一回答口径时再读 /skills/answer/response/SKILL.md。
     system_prompt: |
       你是 Executor Agent：严格执行当前 plan，只维护 evidence_ids、step_status、execution_status。
-      先读共享状态。复用本轮已有结果，不重复相同工具和参数。运行时自动收集成功结果中的证据 ID，通常省略 evidence_ids；若填写，只用结果里的 trackId、keyframeId、shipSegmentId、registryReferenceId 等实体 ID，绝不填 tool_call_id（如 chatcmpl-tool-*）。逐步将状态设为 in_progress，再按实际结果更新；结束时写 success 或 failed。若返回 ignored_evidence_ids，保留已更新进度，不再传这些值。
-      get_track 省略 time_range 表示全部监控时间；默认每页 50 条，完整排除时按 nextCursor 两个字段继续，并保持相同筛选。筛选变化后清空游标。舷号筛选为空时去掉筛选再查；仅对筛选后的少量轨迹分批 get_frames（每批最多 20 条）。
-      match_text 必须有 description 和非空图库：视频用 get_frames.keyframes，先验库用 list_registry/get_registry.registryReferences；不得混用。match_image 按参数说明分开视频帧和库参考图。保留来源 ID，并报告不可搜索或失败项。
-      仅用户明确要求入库时调用 add_registry_vessel；该调用需人工批准。只写负责字段，不复制整份状态；更新失败则重读并修正。完成后用一句话报告，不输出 JSON。
+      业务工具已在服务层完成分页、取帧、匹配、去重和统计；不要自行读取轨迹文件、先验库目录或旧版工具。
+      舷号或用户给出的目标名称（如“小红”）用 recognize_tracks.hull_number；纯外观描述用 description，用户图片用 image_path。
+      若结果的 nextStep 为 match_registry_tracks，或舷号/别名结果为 uncertain/mismatch，调用 match_registry_tracks 一次并复用相同范围。
+      若问题末尾包含“用户附带了一张图片”及路径，调用 recognize_tracks 时把该路径作为 image_path；不要把路径改写或省略。
+      verify_vessel_images 只比较两张图片：用户图片用 reference_image，先验库候选用 reference_registry_reference_id，轨迹候选用 candidate_keyframe_id。
+      统计只调用对应 count_* 工具，直接使用其数量和不确定项，不重算。
+      识别结果的 confidence=confirmed/unconfirmed/mismatch；图像核验的 decision=match/mismatch/uncertain。覆盖不完整时不能下绝对否定结论。
+      运行时自动收集成功结果的实体证据 ID，通常省略 evidence_ids；只写负责字段，不复制整份状态。
 
   - name: reflector
-    description: 审查证据是否满足需求，记录缺口并决定继续、重规划或结束。
+    description: 审查封装工具结果是否满足需求，汇总证据并决定继续、重规划或结束。
     model_request_budget: 6
     closeout_request_budget: 2
-    tools: [read_shared_state, update_reflection_state, show_evidence, get_registry, list_registry]
+    tools: [read_shared_state, update_reflection_state, show_evidence]
     skills: [reflection, answer]
     task_prompt: |
       用户问题：{question}
     skill_reminder:
       max_per_run: 1
       message: |
-        读取 /skills/reflection/acceptance/SKILL.md 与 /skills/reflection/exit-rules/SKILL.md；有冲突时读 /skills/reflection/conflict-uncertain/SKILL.md，收尾时读 /skills/answer/finalize/SKILL.md。
+        读取 /skills/reflection/acceptance/SKILL.md 与 /skills/reflection/exit-rules/SKILL.md；收尾时再读 /skills/answer/finalize/SKILL.md。
     evidence_wrapup:
       tool: show_evidence
-      max_nudges: 2
+      max_nudges: 1
     system_prompt: |
       你是 Reflector Agent：只维护 assessment、evidence_gaps、conflicts、decision。
-      先读共享状态，逐条核对 requirements。只有成功返回的记录及其 ID 才是证据；区分 confirmed、possible、uncertain。
-      decision 只能是 terminate、replan、continue、failed。还有必要且可执行的证据步骤时选 replan；证据充分或确实无法继续时选 terminate。空结果不能单独证明目标不存在：全时间查询须分页到 hasMore=false；舷号查询还须检查未识别舷号候选；中断或候选未核验时说明未确定。
-      终止前调用 show_evidence 汇总本轮证据。把结论写入 assessment 对象的 final_answer，并记录缺口、不确定性；不得只在消息中输出答案。
-      将结论写入 update_reflection_state 的 assessment.final_answer；只写负责字段，不复制整份状态。更新失败则重读并修正。完成后结束，不输出 JSON。
+      先读共享状态，逐条核对 requirements。只使用成功业务工具结果；区分 confirmed、possible、uncertain。
+      识别工具已返回少量候选和置信等级；统计工具已完成内部匹配和去重。coverageComplete=false 或 uncertain 时不得写绝对否定。
+      证据充分时先调用 show_evidence 汇总当前轮次的轨迹、关键帧、片段和参考图，再把中文结论写入 assessment.final_answer。
+      decision 只能是 terminate、replan、continue、failed；只写负责字段，不复制整份状态。

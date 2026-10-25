@@ -8,7 +8,7 @@ import pathlib
 import yaml
 
 root = pathlib.Path(__file__).resolve().parents[1] / "skills"
-SKILLS = sorted(root.glob("*/*/SKILL.md"))
+SKILLS = sorted({*root.glob("*/SKILL.md"), *root.glob("*/*/SKILL.md")})
 
 
 def _frontmatter(path):

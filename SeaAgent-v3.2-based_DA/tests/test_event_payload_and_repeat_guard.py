@@ -4,12 +4,9 @@
    界面显示「未生成回答、0 tool records」——结构必须永远保住。
 2. 4B 模型会反复调用同一工具：首次执行，第二、三次复用结果并提醒，第四次进入状态收尾。
 """
-import asyncio
 import json
-import time
 from types import SimpleNamespace
 
-import pytest
 from langchain_core.language_models import FakeListChatModel
 from langchain_core.messages import ToolMessage
 
@@ -93,33 +90,6 @@ def test_state_and_skill_reads_are_counted_like_all_other_tools():
     assert state.snapshot()["tool_calls"]["planner"] == 2
 
 
-def test_sync_domain_tool_timeout_returns_error_without_result_writeback():
-    state = SharedTaskState("q")
-    guard = RepeatToolCallMiddleware(
-        state=state,
-        scope="executor",
-        tool_timeout=lambda: 0.01,
-    )
-    started = time.monotonic()
-    result = guard.wrap_tool_call(
-        _Request("get_track", {}, "timeout-1"),
-        lambda _request: (time.sleep(0.1), ToolMessage(content="late"))[1],
-    )
-    assert time.monotonic() - started < 0.08
-    assert result.status == "error"
-    assert result.artifact["tool_timeout"] is True
-    record = next(iter(state.snapshot()["call_history"].values()))
-    assert record["status"] == "error"
-
-
-@pytest.mark.asyncio
-async def test_async_domain_tool_timeout_returns_error():
-    guard = RepeatToolCallMiddleware(scope="executor", tool_timeout=lambda: 0.01)
-
-    async def slow(_request):
-        await asyncio.sleep(0.1)
-        return ToolMessage(content="late")
-
-    result = await guard.awrap_tool_call(_Request("get_track", {}, "timeout-2"), slow)
-    assert result.status == "error"
-    assert result.artifact["tool_timeout"] is True
+def test_tool_guard_has_no_runtime_timeout_override():
+    guard = RepeatToolCallMiddleware(scope="executor")
+    assert not hasattr(guard, "tool_timeout")

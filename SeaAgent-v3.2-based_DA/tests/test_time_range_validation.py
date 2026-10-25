@@ -78,23 +78,17 @@ def test_the_tool_surfaces_the_rejection_to_the_model():
     """经真实工具调用走一遍：模型拿到的必须是 ok=false 与原因，而不是空结果。"""
 
     class _Service:
-        """只提供 getTrack 的真实实现，其余方法兜住（build_tools 启动时会校验方法存在）。
-
-        这里必须绑**真实的** getTrack，否则测的是桩自己，校验根本没被走到。
-        """
-
         def __init__(self):
-            # 真实实现：校验逻辑在 ToolService.getTrack 里，直接绑它的方法
             self.service = ToolService.__new__(ToolService)
 
-        def getTrack(self, **kwargs):
-            return ToolService.getTrack(self.service, **kwargs)
+        def recognizeTracks(self, **kwargs):
+            return ToolService.recognizeTracks(self.service, **kwargs)
 
         def __getattr__(self, name):
             return lambda **kwargs: {"ok": True}
 
-    tool = {item.name: item for item in build_tools(load_config(), _Service())}["get_track"]
-    result = tool.invoke({"time_range": [0.0, 1e-16]})
+    tool = {item.name: item for item in build_tools(load_config(), _Service())}["recognize_tracks"]
+    result = tool.invoke({"time_range": [0.0, 1e-16], "description": "yellow vessel"})
     assert result["ok"] is False
     assert result["error"] == "invalid_time_range"
     assert "2017" in result["hint"]

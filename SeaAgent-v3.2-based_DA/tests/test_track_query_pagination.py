@@ -45,28 +45,33 @@ def test_track_page_applies_time_overlap_and_hull_filters(tmp_path):
     all_tracks, all_has_more = repository.find_tracks_page((150, 160))
 
     assert [item["trackId"] for item in page] == ["inside"]
-    assert has_more is False
+    assert not has_more
     assert {item["trackId"] for item in all_tracks} == {"inside", "unknown"}
-    assert all_has_more is False
+    assert not all_has_more
 
 
-def test_get_track_omitted_time_means_all_and_uses_bounded_pages():
+def test_scan_tracks_reads_every_page_without_returning_pages_to_the_agent():
     class Repository:
+        def __init__(self):
+            self.cursors = []
+
         def find_tracks_page(self, time_range, hull_number, match_type, after, limit):
+            self.cursors.append(after)
             assert time_range is None
-            assert after is None
-            assert limit == 50
-            return ([{"trackId": f"t-{index}", "startTime": index} for index in range(50)], True)
+            assert hull_number is None
+            assert limit == 100
+            start = 0 if after is None else int(after[1].split("-")[1]) + 1
+            end = min(start + 100, 205)
+            page = [{"trackId": f"t-{index}", "startTime": index} for index in range(start, end)]
+            return page, end < 205
 
     service = ToolService.__new__(ToolService)
     service.repository = Repository()
-    result = service.getTrack()
+    tracks, complete = service._scan_tracks(None)
 
-    assert result["queryScope"] is None
-    assert result["hasMore"] is True
-    assert result["nextCursor"] == {"afterStartTime": 49, "afterTrackId": "t-49"}
-    assert len(result["tracks"]) == 50
-    assert "trackIds" not in result
+    assert len(tracks) == 205
+    assert complete is True
+    assert service.repository.cursors == [None, (99.0, "t-99"), (199.0, "t-199")]
 
 
 def test_track_record_formats_monitor_and_video_times_without_losing_zero():
@@ -85,52 +90,12 @@ def test_track_record_formats_monitor_and_video_times_without_losing_zero():
     assert track["videoEndTimeText"] == "Video 00:01:00"
 
 
-def test_zero_limit_uses_default_instead_of_returning_all():
-    class Repository:
-        def find_tracks_page(self, time_range, hull_number, match_type, after, limit):
-            assert limit == 50
-            return ([], False)
-
+def test_explicit_range_formats_local_iso_time():
     service = ToolService.__new__(ToolService)
-    service.repository = Repository()
-    result = service.getTrack(limit=0)
-
-    assert result["ok"] is True
-    assert result["hasMore"] is False
-
-
-def test_page_size_is_capped():
-    class Repository:
-        def find_tracks_page(self, time_range, hull_number, match_type, after, limit):
-            assert limit == 100
-            return ([], False)
-
-    service = ToolService.__new__(ToolService)
-    service.repository = Repository()
-    assert service.getTrack(limit=1000)["ok"] is True
-
-
-def test_explicit_range_is_returned_as_readable_local_iso_time():
-    class Repository:
-        def find_tracks_page(self, time_range, hull_number, match_type, after, limit):
-            expected = (
-                datetime.fromisoformat("2026-10-22T10:00:00+08:00").timestamp(),
-                datetime.fromisoformat("2026-10-22T11:00:00+08:00").timestamp(),
-            )
-            assert time_range == expected
-            return ([], False)
-
-    service = ToolService.__new__(ToolService)
-    service.repository = Repository()
-    result = service.getTrack(timeRange=("2026-10-22T10:00:00+08:00", "2026-10-22T11:00:00+08:00"))
-
-    assert result["queryScope"] == ["2026-10-22T10:00:00+08:00", "2026-10-22T11:00:00+08:00"]
-
-
-def test_invalid_pagination_is_not_reported_as_an_empty_search():
-    service = ToolService.__new__(ToolService)
-    result = service.getTrack(afterStartTime=1)
-
-    assert result["ok"] is False
-    assert result["error"] == "invalid_pagination"
-    assert "tracks" not in result
+    scope, error = service._validate_time_range(
+        ("2026-10-22T10:00:00+08:00", "2026-10-22T11:00:00+08:00")
+    )
+    assert not error
+    assert service._result_scope(scope, [], True)["queryScope"] == [
+        datetime.fromtimestamp(value, service.DEFAULT_TIMEZONE).isoformat() for value in scope
+    ]

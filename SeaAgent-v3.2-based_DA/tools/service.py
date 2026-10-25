@@ -4,14 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
 import shutil
 import subprocess
+import threading
 import uuid
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import cv2
 import numpy as np
@@ -24,9 +24,22 @@ from vector_store import VectorCatalog
 
 
 class ToolService:
-    DEFAULT_TRACK_PAGE_SIZE = 50
     MAX_TRACK_PAGE_SIZE = 100
     DEFAULT_TIMEZONE = MONITOR_TIMEZONE
+    IDENTIFICATION_TIMEOUT_SECONDS = 60
+    STATISTICS_TIMEOUT_SECONDS = 120
+    EVIDENCE_TIMEOUT_SECONDS = 120
+    TOOL_TIMEOUTS: ClassVar[dict[str, int]] = {
+        "recognize_tracks": IDENTIFICATION_TIMEOUT_SECONDS,
+        "match_registry_tracks": IDENTIFICATION_TIMEOUT_SECONDS,
+        "verify_vessel_images": IDENTIFICATION_TIMEOUT_SECONDS,
+        "count_total_entities": STATISTICS_TIMEOUT_SECONDS,
+        "count_registry_entities": STATISTICS_TIMEOUT_SECONDS,
+        "count_unregistered_entities": STATISTICS_TIMEOUT_SECONDS,
+        "show_evidence": EVIDENCE_TIMEOUT_SECONDS,
+    }
+    MAX_RETURNED_MATCHES = 10
+    MAX_FRAMES_PER_TRACK = 3
 
     def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None):
         self.config = config or load_config()
@@ -35,6 +48,650 @@ class ToolService:
         self.llm = llm or AgentLLMService(self.config)
         self.vectors = vectors or VectorCatalog(self.config)
         self.settings = self.config["pipeline"]["retrieval"]
+
+    # 1.1 业务工具在服务层自行执行时间预算；运行时只负责调用和记录结果。
+    def _run_with_timeout(self, operation: Any, timeout: float, tool_name: str) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        finished = threading.Event()
+
+        def invoke() -> None:
+            try:
+                result["value"] = operation()
+            except Exception as error:  # noqa: BLE001 - 工具边界统一返回模型可读错误。
+                result["error"] = error
+            finally:
+                finished.set()
+
+        threading.Thread(target=invoke, name=f"sea-{tool_name}", daemon=True).start()
+        if not finished.wait(max(0.001, float(timeout))):
+            return {
+                "ok": False,
+                "error": "tool_timeout",
+                "tool": tool_name,
+                "timeoutSeconds": float(timeout),
+                "hint": f"{tool_name} 超过 {float(timeout):.0f} 秒，已返回超时结果。",
+            }
+        if "error" in result:
+            error = result["error"]
+            return {"ok": False, "error": "tool_failed", "tool": tool_name, "hint": str(error)}
+        value = result.get("value")
+        return value if isinstance(value, dict) else {"ok": True, "value": value}
+
+    def _run_tool(self, tool_name: str, operation: Any) -> dict[str, Any]:
+        return self._run_with_timeout(operation, self.TOOL_TIMEOUTS[tool_name], tool_name)
+
+    def _scan_tracks(
+        self,
+        scope: tuple[float, float] | None,
+        hull_number: str | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Read the complete matching track scope without exposing raw pages to the model."""
+        tracks: list[dict[str, Any]] = []
+        cursor: tuple[float, str] | None = None
+        complete = False
+        for _ in range(1000):
+            page, has_more = self.repository.find_tracks_page(
+                scope, hull_number, None, cursor, self.MAX_TRACK_PAGE_SIZE
+            )
+            tracks.extend(page)
+            if not has_more or not page:
+                complete = True
+                break
+            cursor = (float(page[-1]["startTime"]), str(page[-1]["trackId"]))
+        return tracks, complete
+
+    def _load_search_frames(
+        self,
+        tracks: list[dict[str, Any]],
+    ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+        """Keep only a few searchable frames per track; full frame records stay inside the service."""
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        missing: list[str] = []
+        track_ids = [str(track["trackId"]) for track in tracks]
+        for offset in range(0, len(track_ids), 40):
+            batch = track_ids[offset : offset + 40]
+            raw = self.repository.get_keyframes(batch, embedded_only=False)
+            for track_id in batch:
+                frames = sorted(
+                    raw.get(track_id, []),
+                    key=lambda item: (
+                        str(item.get("hasReadableHullNumber") or "no").lower() == "yes",
+                        float(item.get("readabilityConfidence") or 0),
+                        float(item.get("retentionScore") or 0),
+                    ),
+                    reverse=True,
+                )[: self.MAX_FRAMES_PER_TRACK]
+                if not frames:
+                    missing.append(track_id)
+                    grouped[track_id] = []
+                    continue
+                searchable = [
+                    frame for frame in frames
+                    if frame.get("keyframeVectorId") is not None or frame.get("keyframePath")
+                ]
+                vectors, _ = self._ensure_image_vectors(
+                    searchable,
+                    vector_key="keyframeVectorId",
+                    path_keys=("keyframePath", "imagePath", "path"),
+                    index=self.vectors.keyframes,
+                )
+                searchable = [
+                    frame for frame in searchable
+                    if frame.get("keyframeVectorId") is not None
+                    and int(frame["keyframeVectorId"]) in vectors
+                ]
+                grouped[track_id] = searchable
+                if not searchable:
+                    missing.append(track_id)
+        return grouped, missing
+
+    @staticmethod
+    def _flatten_frames(groups: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        return [frame for frames in groups.values() for frame in frames]
+
+    def _result_scope(
+        self,
+        scope: tuple[float, float] | None,
+        tracks: list[dict[str, Any]],
+        complete: bool,
+    ) -> dict[str, Any]:
+        return {
+            "queryScope": [
+                datetime.fromtimestamp(value, self.DEFAULT_TIMEZONE).isoformat()
+                for value in scope
+            ]
+            if scope is not None
+            else None,
+            "searchedTrackCount": len(tracks),
+            "coverageComplete": complete,
+        }
+
+    def _track_match_summary(
+        self,
+        track: dict[str, Any],
+        frames: list[dict[str, Any]],
+        *,
+        score: float | None = None,
+        band: str = "mismatch",
+        reference_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        confidence = {"match": "confirmed", "uncertain": "unconfirmed", "mismatch": "mismatch"}.get(band, "unconfirmed")
+        return {
+            "trackId": str(track["trackId"]),
+            "startTime": track.get("startTime"),
+            "endTime": track.get("endTime"),
+            "startTimeText": track.get("startTimeText"),
+            "endTimeText": track.get("endTimeText"),
+            "hullNumber": track.get("finalHullNumber"),
+            "description": track.get("finalDescription", ""),
+            "score": round(float(score), 6) if score is not None else None,
+            "confidence": confidence,
+            "scoreBand": band,
+            "keyframeIds": [str(frame["keyframeId"]) for frame in frames[: self.MAX_FRAMES_PER_TRACK]],
+            "registryReferenceIds": list(dict.fromkeys(reference_ids or []))[: self.MAX_FRAMES_PER_TRACK],
+        }
+
+    def _track_text_scores(
+        self,
+        description: str,
+        frame_groups: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, dict[str, Any]]:
+        gallery = self._flatten_frames(frame_groups)
+        if not gallery:
+            return {}
+        try:
+            query = self.embedder.encode_text(
+                description,
+                self.config["prompts"]["text_retrieval_instruction"],
+            )
+            vectors, _ = self._ensure_image_vectors(
+                gallery,
+                vector_key="keyframeVectorId",
+                path_keys=("keyframePath", "imagePath", "path"),
+                index=self.vectors.keyframes,
+            )
+        except Exception:  # noqa: BLE001 - failed embedding must remain an unconfirmed search.
+            return {}
+        scored: list[dict[str, Any]] = []
+        for track_id, track_frames in frame_groups.items():
+            values = [
+                (float(np.dot(query, vectors[int(frame["keyframeVectorId"])])), frame)
+                for frame in track_frames
+                if frame.get("keyframeVectorId") is not None
+                and int(frame["keyframeVectorId"]) in vectors
+            ]
+            if not values:
+                continue
+            values.sort(key=lambda item: item[0], reverse=True)
+            score = values[0][0]
+            scored.append({
+                "matchedTrackId": track_id,
+                "embeddingScore": round(score, 6),
+                "scoreBand": self._band(score, "text"),
+                "matchedKeyframeIds": [item[1]["keyframeId"] for item in values[:2]],
+            })
+        scored.sort(key=lambda item: float(item["embeddingScore"]), reverse=True)
+        return {str(item["matchedTrackId"]): item for item in scored}
+
+    def _track_image_scores(
+        self,
+        image_path: str,
+        frame_groups: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, dict[str, Any]]:
+        frames = self._flatten_frames(frame_groups)
+        if not frames or not Path(image_path).is_file():
+            return {}
+        try:
+            query = self.embedder.encode_images([image_path])[0]
+            vectors, _ = self._ensure_image_vectors(
+                frames,
+                vector_key="keyframeVectorId",
+                path_keys=("keyframePath", "imagePath", "path"),
+                index=self.vectors.keyframes,
+            )
+        except Exception:  # noqa: BLE001 - failed embedding must remain an unconfirmed search.
+            return {}
+        scored: list[dict[str, Any]] = []
+        for track_id, track_frames in frame_groups.items():
+            values = [
+                (float(np.dot(query, vectors[int(frame["keyframeVectorId"])])), frame)
+                for frame in track_frames
+                if frame.get("keyframeVectorId") is not None
+                and int(frame["keyframeVectorId"]) in vectors
+            ]
+            if not values:
+                continue
+            values.sort(key=lambda item: item[0], reverse=True)
+            score = values[0][0]
+            scored.append(
+                {
+                    "matchedTrackId": track_id,
+                    "embeddingScore": round(score, 6),
+                    "scoreBand": self._band(score, "image"),
+                    "matchedKeyframeIds": [item[1]["keyframeId"] for item in values[:2]],
+                }
+            )
+        scored.sort(key=lambda item: float(item["embeddingScore"]), reverse=True)
+        return {str(item["matchedTrackId"]): item for item in scored}
+
+    def _recognize_tracks(
+        self,
+        hull_number: str | None = None,
+        description: str | None = None,
+        image_path: str | None = None,
+        time_range: tuple[str | float, str | float] | None = None,
+        top_k: int | None = None,
+    ) -> dict[str, Any]:
+        scope, problem = self._validate_time_range(time_range)
+        if problem:
+            return {"ok": False, "error": "invalid_time_range", "hint": problem}
+        hull = normalize_hull_number(hull_number)
+        description = str(description or "").strip()
+        image_path = str(image_path or "").strip()
+        if not hull and not description and not image_path:
+            return {"ok": False, "error": "recognition_query_required", "hint": "至少提供 hull_number、description 或 image_path。"}
+
+        tracks, search_complete = self._scan_tracks(scope)
+        filter_missed = bool(hull) and not any(
+            normalize_hull_number(track.get("finalHullNumber")) == hull for track in tracks
+        )
+        frames, missing = self._load_search_frames(tracks)
+        keyframe_hull_matches: dict[str, list[dict[str, Any]]] = {}
+        if hull:
+            track_ids = [str(track["trackId"]) for track in tracks]
+            for offset in range(0, len(track_ids), 40):
+                batch = track_ids[offset : offset + 40]
+                for track_id, stored_frames in self.repository.get_keyframes(batch, embedded_only=False).items():
+                    matching = [
+                        frame for frame in stored_frames
+                        if normalize_hull_number(frame.get("vlmHullNumber")) == hull
+                        and float(frame.get("readabilityConfidence") or 0) >= 0.75
+                    ]
+                    if matching:
+                        keyframe_hull_matches[track_id] = matching
+            filter_missed = filter_missed and not keyframe_hull_matches
+        by_id = {str(track["trackId"]): track for track in tracks}
+        text_scores = self._track_text_scores(description, frames) if description else {}
+        image_scores = self._track_image_scores(image_path, frames) if image_path else {}
+        unscored_tracks = [
+            track_id for track_id in by_id
+            if description or image_path
+            if track_id not in text_scores and track_id not in image_scores
+            and not (hull and normalize_hull_number(by_id[track_id].get("finalHullNumber")) == hull)
+            and not keyframe_hull_matches.get(track_id)
+        ]
+        missing = list(dict.fromkeys(missing + unscored_tracks))
+        candidates: list[dict[str, Any]] = []
+        for track_id, track in by_id.items():
+            text_item = text_scores.get(track_id, {})
+            image_item = image_scores.get(track_id, {})
+            exact = bool(
+                hull
+                and (
+                    normalize_hull_number(track.get("finalHullNumber")) == hull
+                    or keyframe_hull_matches.get(track_id)
+                )
+            )
+            score_values = [
+                float(item["embeddingScore"])
+                for item in (text_item, image_item)
+                if item.get("embeddingScore") is not None
+            ]
+            score = max(score_values) if score_values else (1.0 if exact else None)
+            band = "match" if exact else (
+                self._band(score, "image" if image_item else "text") if score is not None else "uncertain"
+            )
+            frame_ids = list(dict.fromkeys(
+                text_item.get("matchedKeyframeIds", []) + image_item.get("matchedKeyframeIds", [])
+            ))
+            if exact and not frame_ids:
+                frame_ids = [frame["keyframeId"] for frame in keyframe_hull_matches.get(track_id, [])[:2]]
+            selected_frames = [frame for frame in frames.get(track_id, []) if frame["keyframeId"] in frame_ids]
+            if exact:
+                selected_frames.extend(keyframe_hull_matches.get(track_id, [])[:2])
+            # 只把有明确舷号证据或实际匹配分数的轨迹返回；未评分轨迹只影响覆盖状态，
+            # 不应把整段轨迹列表膨胀进模型上下文。
+            if exact or score is not None:
+                candidates.append(self._track_match_summary(track, selected_frames, score=score, band=band))
+        candidates = [item for item in candidates if item["confidence"] != "mismatch"]
+        candidates.sort(key=lambda item: (item["confidence"] != "confirmed", -(item["score"] or -1)))
+        selected = candidates[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
+        confirmed = [item for item in selected if item["confidence"] == "confirmed"]
+        uncertain = [item for item in selected if item["confidence"] == "unconfirmed"]
+        search_complete = search_complete and not missing
+        status = "confirmed" if confirmed else "unconfirmed" if uncertain or not search_complete else "mismatch"
+        return {
+            "ok": True,
+            "task": "direct_recognition",
+            "status": status,
+            "confidence": status,
+            "matches": selected,
+            "confirmedMatches": confirmed,
+            "uncertainMatches": uncertain,
+            "mismatch": status == "mismatch",
+            "hullNumber": hull or None,
+            "filterMissed": filter_missed,
+            "searchCoverageComplete": search_complete,
+            "nextStep": "match_registry_tracks" if hull and status != "confirmed" else None,
+            "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],
+            "trackIds": [item["trackId"] for item in selected],
+            "statistics": {
+                "searchedTrackCount": len(tracks),
+                "candidateCount": len(selected),
+                "confirmedCount": len(confirmed),
+                "unconfirmedCount": len(uncertain),
+                "unsearchableTrackCount": len(missing),
+            },
+            **self._result_scope(scope, tracks, search_complete),
+        }
+
+    def recognizeTracks(self, hullNumber: str | None = None, description: str | None = None, imagePath: str | None = None, timeRange: tuple[str | float, str | float] | None = None, topK: int | None = None) -> dict[str, Any]:
+        return self._run_tool(
+            "recognize_tracks",
+            lambda: self._recognize_tracks(hullNumber, description, imagePath, timeRange, topK),
+        )
+
+    def _match_registry_tracks(
+        self,
+        hull_number: str,
+        time_range: tuple[str | float, str | float] | None = None,
+        top_k: int | None = None,
+    ) -> dict[str, Any]:
+        scope, problem = self._validate_time_range(time_range)
+        if problem:
+            return {"ok": False, "error": "invalid_time_range", "hint": problem}
+        hull = normalize_hull_number(hull_number)
+        if not hull:
+            return {"ok": False, "error": "hull_number_required", "hint": "先验库辅助识别必须提供舷号。"}
+        registry_items = self.repository.registry_by_hull(hull)
+        references = [
+            reference
+            for item in registry_items
+            for reference in item.get("references", [])
+            if isinstance(reference, dict)
+        ]
+        tracks, complete = self._scan_tracks(scope)
+        frames, missing = self._load_search_frames(tracks)
+        if not registry_items or not references:
+            coverage_complete = complete and not missing and bool(registry_items and references)
+            return {
+                "ok": True,
+                "task": "registry_assisted_recognition",
+                "status": "unconfirmed",
+                "confidence": "unconfirmed",
+                "registryFound": bool(registry_items),
+                "registryReferenceIds": [str(item["referenceId"]) for item in references[: self.MAX_RETURNED_MATCHES]],
+                "matches": [],
+                "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],
+                "trackIds": [],
+                "searchCoverageComplete": coverage_complete,
+                "statistics": {
+                    "searchedTrackCount": len(tracks),
+                    "candidateCount": 0,
+                    "confirmedCount": 0,
+                    "unconfirmedCount": 0,
+                    "registryReferenceCount": len(references),
+                    "unsearchableTrackCount": len(missing),
+                },
+                **self._result_scope(scope, tracks, coverage_complete),
+            }
+        result = self._match_images(
+            queryImages=references,
+            galleryImages=self._flatten_frames(frames),
+            topK=top_k or self.MAX_RETURNED_MATCHES,
+        )
+        by_id = {str(track["trackId"]): track for track in tracks}
+        matches: list[dict[str, Any]] = []
+        for item in result.get("matches", []):
+            track = by_id.get(str(item.get("matchedTrackId")))
+            if track is None:
+                continue
+            frame_ids = item.get("matchedKeyframeIds") or []
+            selected_frames = [frame for frame in frames.get(str(track["trackId"]), []) if frame["keyframeId"] in frame_ids]
+            matches.append(self._track_match_summary(
+                track,
+                selected_frames,
+                score=item.get("embeddingScore"),
+                band=str(item.get("scoreBand") or "uncertain"),
+                reference_ids=item.get("matchedRegistryReferenceIds"),
+            ))
+        matches.sort(key=lambda item: (item["confidence"] != "confirmed", -(item["score"] or -1)))
+        matches = matches[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
+        confirmed = [item for item in matches if item["confidence"] == "confirmed"]
+        uncertain = [item for item in matches if item["confidence"] == "unconfirmed"]
+        missing = list(dict.fromkeys(missing + [str(value) for value in result.get("unscoredTrackIds", [])]))
+        visual_complete = bool(result.get("registryCoverageComplete")) and complete and not missing
+        status = "confirmed" if confirmed else "unconfirmed" if uncertain or not visual_complete else "mismatch"
+        return {
+            "ok": True,
+            "task": "registry_assisted_recognition",
+            "status": status,
+            "confidence": status,
+            "registryFound": True,
+            "registryReferenceIds": [str(item["referenceId"]) for item in references[: self.MAX_RETURNED_MATCHES]],
+            "matches": matches,
+            "confirmedMatches": confirmed,
+            "uncertainMatches": uncertain,
+            "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],
+            "trackIds": [item["trackId"] for item in matches],
+            "statistics": {
+                "searchedTrackCount": len(tracks),
+                "candidateCount": len(matches),
+                "confirmedCount": len(confirmed),
+                "unconfirmedCount": len(uncertain),
+                "registryReferenceCount": len(references),
+                "unsearchableTrackCount": len(missing),
+            },
+            "searchCoverageComplete": visual_complete,
+            **self._result_scope(scope, tracks, visual_complete),
+        }
+
+    def matchRegistryTracks(self, hullNumber: str, timeRange: tuple[str | float, str | float] | None = None, topK: int | None = None) -> dict[str, Any]:
+        return self._run_tool(
+            "match_registry_tracks",
+            lambda: self._match_registry_tracks(hullNumber, timeRange, topK),
+        )
+
+    def verifyVesselImages(
+        self,
+        referenceImage: str | None = None,
+        referenceRegistryReferenceId: str | None = None,
+        candidateImage: str | None = None,
+        candidateKeyframeId: str | None = None,
+    ) -> dict[str, Any]:
+        def verify() -> dict[str, Any]:
+            reference = str(referenceImage or "").strip()
+            reference_id = str(referenceRegistryReferenceId or "").strip()
+            candidate = str(candidateImage or "").strip()
+            keyframe_id = str(candidateKeyframeId or "").strip()
+            if bool(reference) == bool(reference_id) or bool(candidate) == bool(keyframe_id):
+                return {"ok": False, "error": "two_images_required", "decision": "uncertain"}
+            if reference_id:
+                references = self.repository.references_by_ids([reference_id])
+                reference = str(references[0].get("imagePath") or "") if references else ""
+                if not reference:
+                    return {
+                        "ok": False,
+                        "error": "registry_reference_not_found",
+                        "decision": "uncertain",
+                        "registryReferenceId": reference_id,
+                    }
+            if keyframe_id:
+                frame = self.repository.get_keyframe(keyframe_id)
+                candidate = str(frame.get("keyframePath") or "") if frame else ""
+                if not candidate:
+                    return {"ok": False, "error": "keyframe_not_found", "decision": "uncertain"}
+            if not Path(reference).is_file() or not Path(candidate).is_file():
+                return {"ok": False, "error": "image_not_found", "decision": "uncertain"}
+            result = self.llm.verify([reference], [candidate])
+            return {
+                "ok": True,
+                "task": "vlm_image_verification",
+                "registryReferenceId": reference_id or None,
+                "keyframeId": keyframe_id or None,
+                **result,
+            }
+
+        return self._run_tool("verify_vessel_images", verify)
+
+    def _entity_analysis(self, time_range: tuple[str | float, str | float] | None = None, compare_registry: bool = True) -> dict[str, Any]:
+        scope, problem = self._validate_time_range(time_range)
+        if problem:
+            return {"ok": False, "error": "invalid_time_range", "hint": problem}
+        tracks, complete = self._scan_tracks(scope)
+        frames, missing = self._load_search_frames(tracks)
+        dedup = self._deduplicate_tracks(tracks, {track_id: {"keyframes": values} for track_id, values in frames.items()})
+        missing = list(dict.fromkeys(missing + dedup.get("unsearchableTrackIds", [])))
+        groups = dedup.get("highGroups") or [[str(track["trackId"])] for track in tracks]
+        pending_merge_count = int(dedup.get("pendingMergeCount") or 0)
+        dedup_stable = str(dedup.get("countStability") or "stable") == "stable"
+        track_by_id = {str(track["trackId"]): track for track in tracks}
+        group_items = [{"entityId": f"entity-{index + 1}", "trackIds": group, "status": "unknown"} for index, group in enumerate(groups)]
+        visual_matches: dict[str, dict[str, Any]] = {}
+        visual: dict[str, Any] = {}
+        registry_items = self.repository.list_registry() if compare_registry else []
+        references = [reference for item in registry_items for reference in item.get("references", []) if isinstance(reference, dict)]
+        if compare_registry and references and frames:
+            visual = self._match_images(
+                queryImages=references,
+                galleryImages=self._flatten_frames(frames),
+                registryItems=registry_items,
+            )
+            visual_matches = {str(item.get("matchedTrackId")): item for item in visual.get("matches", [])}
+        visual_coverage_complete = not compare_registry or not registry_items or bool(
+            references and visual.get("registryCoverageComplete")
+        )
+        visual_unscored = {
+            str(value) for value in (visual.get("unscoredTrackIds", []) if compare_registry else [])
+        }
+        registry_hulls = {
+            normalize_hull_number(value)
+            for item in registry_items
+            for value in [item.get("hullNumber"), *(item.get("aliases") or [])]
+            if normalize_hull_number(value)
+        }
+        for entity in group_items:
+            statuses = []
+            entity["keyframeIds"] = []
+            entity["registryReferenceIds"] = []
+            for track_id in entity["trackIds"]:
+                track = track_by_id.get(str(track_id), {})
+                hull = normalize_hull_number(track.get("finalHullNumber"))
+                track_frames = frames.get(str(track_id), [])
+                entity["keyframeIds"].extend(
+                    str(frame["keyframeId"])
+                    for frame in track_frames[:2]
+                    if frame.get("keyframeId")
+                )
+                visual = visual_matches.get(str(track_id), {})
+                entity["registryReferenceIds"].extend(
+                    str(value) for value in visual.get("matchedRegistryReferenceIds", []) if value
+                )
+                hull_frame_match = any(
+                    normalize_hull_number(frame.get("vlmHullNumber")) in registry_hulls
+                    and float(frame.get("readabilityConfidence") or 0) >= 0.75
+                    for frame in track_frames
+                )
+                if hull in registry_hulls or hull_frame_match or visual.get("scoreBand") == "match":
+                    statuses.append("in_registry")
+                elif hull or hull_frame_match or not registry_items or (
+                    visual_coverage_complete
+                    and str(track_id) not in missing
+                    and str(track_id) not in visual_unscored
+                ):
+                    statuses.append("unregistered")
+                else:
+                    statuses.append("uncertain")
+            entity["status"] = (
+                "in_registry" if "in_registry" in statuses
+                else "unregistered" if statuses and all(item == "unregistered" for item in statuses)
+                else "uncertain"
+            ) if compare_registry else "unknown"
+            entity["keyframeIds"] = list(dict.fromkeys(entity["keyframeIds"]))[: self.MAX_FRAMES_PER_TRACK * len(entity["trackIds"])]
+            entity["registryReferenceIds"] = list(dict.fromkeys(entity["registryReferenceIds"]))
+        in_registry = sum(item["status"] == "in_registry" for item in group_items)
+        unregistered = sum(item["status"] == "unregistered" for item in group_items)
+        uncertain = sum(item["status"] == "uncertain" for item in group_items)
+        count_uncertain = uncertain if compare_registry else sum(
+            1 for item in group_items if any(str(track_id) in missing for track_id in item["trackIds"])
+        )
+        count_uncertain += pending_merge_count
+        registry_incomplete = compare_registry and bool(registry_items) and (
+            not references or not visual_coverage_complete
+        )
+        count_incomplete = bool(
+            missing or not complete or not dedup_stable or pending_merge_count or registry_incomplete
+        )
+        return {
+            "ok": True,
+            "entityCount": len(group_items),
+            "minimumEntityCount": len(dedup.get("lowGroups") or groups),
+            "maximumEntityCount": len(dedup.get("highGroups") or groups),
+            "trackCount": len(tracks),
+            "inRegistryCount": in_registry,
+            "unregisteredCount": unregistered,
+            "uncertainCount": uncertain,
+            "countUncertain": count_uncertain,
+            "countIsUpperBound": count_incomplete,
+            "countConfidence": "uncertain" if count_incomplete else "confirmed",
+            "countStability": dedup.get("countStability", "stable"),
+            "pendingMergeCount": pending_merge_count,
+            "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],
+            "registryCompared": compare_registry,
+            "countType": "total" if not compare_registry else "membership",
+            "trackIds": list(dict.fromkeys(
+                str(track_id) for entity in group_items
+                for track_id in entity["trackIds"]
+            ))[: self.MAX_RETURNED_MATCHES],
+            "keyframeIds": list(dict.fromkeys(
+                keyframe_id for entity in group_items
+                for keyframe_id in entity.get("keyframeIds", [])
+            ))[: self.MAX_RETURNED_MATCHES * self.MAX_FRAMES_PER_TRACK],
+            "registryReferenceIds": list(dict.fromkeys(
+                reference_id for entity in group_items
+                for reference_id in entity.get("registryReferenceIds", [])
+            ))[: self.MAX_RETURNED_MATCHES],
+            "statistics": {
+                "trackCount": len(tracks),
+                "entityCount": len(group_items),
+                "minimumEntityCount": len(dedup.get("lowGroups") or groups),
+                "maximumEntityCount": len(dedup.get("highGroups") or groups),
+                "inRegistryCount": in_registry,
+                "unregisteredCount": unregistered,
+                "uncertainCount": uncertain,
+                "countUncertain": count_uncertain,
+                "pendingMergeCount": pending_merge_count,
+                "countStability": dedup.get("countStability", "stable"),
+                "countConfidence": "uncertain" if count_incomplete else "confirmed",
+                "unsearchableTrackCount": len(missing),
+            },
+            **self._result_scope(scope, tracks, not count_incomplete),
+        }
+
+    def countTotalEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+        return self._run_tool(
+            "count_total_entities",
+            lambda: self._entity_count(timeRange, False, "entityCount"),
+        )
+
+    def countRegistryEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+        return self._run_tool(
+            "count_registry_entities",
+            lambda: self._entity_count(timeRange, True, "inRegistryCount"),
+        )
+
+    def countUnregisteredEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+        return self._run_tool(
+            "count_unregistered_entities",
+            lambda: self._entity_count(timeRange, True, "unregisteredCount"),
+        )
+
+    def _entity_count(self, time_range: Any, compare_registry: bool, field: str) -> dict[str, Any]:
+        result = self._entity_analysis(time_range, compare_registry)
+        if result.get("ok"):
+            result["count"] = result[field]
+            result.setdefault("statistics", {})["count"] = result[field]
+        return result
 
     # epoch 秒的合理下限（2017 年）：早于此说明模型在编数字，而不是在描述监控录像
     MIN_PLAUSIBLE_EPOCH = datetime(2017, 1, 1, tzinfo=DEFAULT_TIMEZONE).timestamp()
@@ -83,51 +740,7 @@ class ToolService:
             )
         return (start, end), ""
 
-    def getTrack(
-        self,
-        timeRange: tuple[str | float, str | float] | None = None,
-        hullNumber: str | None = None,
-        finalMatchType: str | None = None,
-        afterStartTime: float | None = None,
-        afterTrackId: str | None = None,
-        limit: int = DEFAULT_TRACK_PAGE_SIZE,
-    ) -> dict[str, Any]:
-        scope, problem = self._validate_time_range(timeRange)
-        if problem:
-            return {"ok": False, "error": "invalid_time_range", "hint": problem}
-        try:
-            requested_limit = int(limit or self.DEFAULT_TRACK_PAGE_SIZE)
-        except (TypeError, ValueError, OverflowError):
-            return {"ok": False, "error": "invalid_pagination", "hint": "limit 必须是整数"}
-        if requested_limit < 0:
-            return {"ok": False, "error": "invalid_pagination", "hint": "limit 不能为负数"}
-        if (afterStartTime is None) != (afterTrackId is None):
-            return {"ok": False, "error": "invalid_pagination", "hint": "分页游标必须同时包含 after_start_time 和 after_track_id"}
-        after = None
-        if afterStartTime is not None:
-            if isinstance(afterStartTime, bool):
-                return {"ok": False, "error": "invalid_pagination", "hint": "after_start_time 必须是有限数字"}
-            try:
-                cursor_time = float(afterStartTime)
-            except (TypeError, ValueError, OverflowError):
-                return {"ok": False, "error": "invalid_pagination", "hint": "after_start_time 必须是有限数字"}
-            if not math.isfinite(cursor_time) or not str(afterTrackId).strip():
-                return {"ok": False, "error": "invalid_pagination", "hint": "分页游标时间必须有限，轨迹 ID 不能为空"}
-            after = cursor_time, str(afterTrackId)
-        page_size = min(requested_limit or self.DEFAULT_TRACK_PAGE_SIZE, self.MAX_TRACK_PAGE_SIZE)
-        selected, has_more = self.repository.find_tracks_page(scope, hullNumber, finalMatchType, after, page_size)
-        return {
-            "ok": True,
-            "queryScope": [datetime.fromtimestamp(value, self.DEFAULT_TIMEZONE).isoformat() for value in scope] if scope is not None else None,
-            "tracks": selected,
-            "hasMore": has_more,
-            "nextCursor": {
-                "afterStartTime": selected[-1]["startTime"],
-                "afterTrackId": selected[-1]["trackId"],
-            } if has_more else None,
-        }
-
-    def getFrames(self, trackIds: Iterable[str | int]) -> dict[str, Any]:
+    def _build_frames(self, trackIds: Iterable[str | int]) -> dict[str, Any]:
         ids = [str(value) for value in dict.fromkeys(trackIds)]
         all_frames = self.repository.get_keyframes(ids, embedded_only=False)
         vector_ids = [
@@ -143,11 +756,10 @@ class ToolService:
             invalid = []
             for frame in all_frames.get(track_id, []):
                 vid = frame.get("keyframeVectorId")
-                if vid is not None and int(vid) in available_vectors:
-                    patched = dict(frame)
-                    patched["isEmbedded"] = True
-                    valid.append(patched)
-                else:
+                patched = dict(frame)
+                patched["isEmbedded"] = vid is not None and int(vid) in available_vectors
+                valid.append(patched)
+                if not patched["isEmbedded"]:
                     invalid.append(frame.get("keyframeId"))
             grouped[track_id] = {"keyframeIds": [frame["keyframeId"] for frame in valid], "keyframes": valid}
             discarded.extend(invalid)
@@ -163,7 +775,7 @@ class ToolService:
             "unsearchableTrackIds": missing,
         }
 
-    def getClip(self, trackId: str | int, timeRange: tuple[str | float, str | float] | None = None, scale: float | None = None) -> dict[str, Any]:
+    def _build_clip(self, trackId: str | int, timeRange: tuple[str | float, str | float] | None = None, scale: float | None = None) -> dict[str, Any]:
         scope, problem = self._validate_time_range(timeRange)
         if problem:
             return {"ok": False, "error": "invalid_time_range", "hint": problem, "trackId": str(trackId)}
@@ -209,8 +821,8 @@ class ToolService:
         evidence = self.config["pipeline"].get("evidence", {})
         media_scale = self._evidence_scale(scale)
         canvas_size = (
-            self._even_size(max(160, int(round(evidence.get("clip_width", 640) * media_scale)))),
-            self._even_size(max(90, int(round(evidence.get("clip_height", 360) * media_scale)))),
+            self._even_size(max(160, round(evidence.get("clip_width", 640) * media_scale))),
+            self._even_size(max(90, round(evidence.get("clip_height", 360) * media_scale))),
         )
         clip_fps = max(1.0, float(evidence.get("clip_fps", 15)))
         clip_crf = max(0, min(51, int(evidence.get("clip_crf", 31))))
@@ -263,7 +875,7 @@ class ToolService:
             return {"ok": False, "error": "segment_codec_unavailable", "trackId": str(trackId)}
         written = 0
         last_written_frame: int | None = None
-        frame_gap = max(1, int(round(source_fps / output_fps)))
+        frame_gap = max(1, round(source_fps / output_fps))
         poster_frame: np.ndarray | None = None
         poster_area = -1
         try:
@@ -323,7 +935,7 @@ class ToolService:
         if image is None or image.size == 0:
             return source_path
         height, width = image.shape[:2]
-        target_size = (max(1, int(round(width * media_scale))), max(1, int(round(height * media_scale))))
+        target_size = (max(1, round(width * media_scale)), max(1, round(height * media_scale)))
         preview = cv2.resize(image, target_size, interpolation=cv2.INTER_AREA)
         cache_dir.mkdir(parents=True, exist_ok=True)
         quality = max(1, min(100, int(self.config["pipeline"].get("evidence", {}).get("image_preview_quality", 82))))
@@ -335,254 +947,7 @@ class ToolService:
             temporary_path.unlink(missing_ok=True)
         return preview_path if preview_path.is_file() else source_path
 
-    def getRegistry(self, hullNumber: str) -> dict[str, Any]:
-        items = self.repository.registry_by_hull(hullNumber)
-        # 库项自带 references；再按 registryId 扫一遍表，避免嵌套漏图
-        references: list[dict[str, Any]] = []
-        seen_ref: set[str] = set()
-        for item in items:
-            for reference in item.get("references") or []:
-                if not isinstance(reference, dict):
-                    continue
-                rid = str(reference.get("referenceId") or "")
-                if rid and rid in seen_ref:
-                    continue
-                if rid:
-                    seen_ref.add(rid)
-                references.append(reference)
-        if items:
-            extra = self.repository.registry_references(
-                [str(item.get("registryId")) for item in items if item.get("registryId")],
-                embedded_only=False,
-            )
-            for reference in extra:
-                rid = str(reference.get("referenceId") or "")
-                if rid and rid in seen_ref:
-                    continue
-                if rid:
-                    seen_ref.add(rid)
-                references.append(reference)
-        # 以向量库是否命中为准，不唯 isEmbedded 标志（标志可能滞后）
-        candidate_ids = [
-            int(item["registryVectorId"])
-            for item in references
-            if item.get("registryVectorId") is not None
-        ]
-        available_vectors = self.vectors.registry.get_many(candidate_ids) if candidate_ids else {}
-        valid: list[dict[str, Any]] = []
-        discarded: list[str] = []
-        for item in references:
-            vid = item.get("registryVectorId")
-            if vid is None:
-                discarded.append(item.get("referenceId"))
-                continue
-            if int(vid) in available_vectors:
-                patched = dict(item)
-                patched["isEmbedded"] = True
-                valid.append(patched)
-            else:
-                discarded.append(item.get("referenceId"))
-        # 始终导出全部参考图：索引命中的直接使用，未命中的交给 matchImage 按路径现场编码。
-        available_ids = {int(key) for key in available_vectors}
-        export_refs = [
-            dict(item, isEmbedded=(item.get("registryVectorId") is not None and int(item["registryVectorId"]) in available_ids))
-            for item in references
-            if isinstance(item, dict)
-        ]
-        registry_ids = [str(item["registryId"]) for item in items if item.get("registryId")]
-        visual_ids = {str(item.get("registryId")) for item in export_refs if item.get("registryId")}
-        searchable_ids = {str(item.get("registryId")) for item in valid if item.get("registryId")}
-        return {
-            "ok": True,
-            "found": bool(items),
-            "searchable": bool(valid),
-            "hullNumber": normalize_hull_number(hullNumber),
-            "registryIds": registry_ids,
-            "registryItems": items,
-            "registryReferenceIds": [item["referenceId"] for item in export_refs if item.get("referenceId")],
-            "registryReferences": export_refs,
-            "discardedReferenceIds": discarded,
-            "referenceCount": len(references),
-            "searchableReferenceCount": len(valid),
-            "totalRegistryCount": len(registry_ids),
-            "visualRegistryCount": len(visual_ids),
-            "searchableRegistryCount": len(searchable_ids),
-            "missingReferenceRegistryIds": [rid for rid in registry_ids if rid not in visual_ids],
-        }
-
-    def matchHull(self, hullNumberArray: Iterable[str | None]) -> dict[str, Any]:
-        hull_numbers = list(dict.fromkeys(normalize_hull_number(value) for value in hullNumberArray if normalize_hull_number(value)))
-        matches = {hull: self.repository.registry_by_hull(hull) for hull in hull_numbers}
-        return {"ok": True, "exactMatches": {hull: items for hull, items in matches.items() if items}, "matchedHullNumbers": [hull for hull, items in matches.items() if items], "unmatchedHullNumbers": [hull for hull, items in matches.items() if not items]}
-
-    def listRegistry(self) -> dict[str, Any]:
-        items = self.repository.list_registry()
-        references = [reference for item in items for reference in item.get("references", []) if isinstance(reference, dict)]
-        vector_ids = [
-            int(item["registryVectorId"])
-            for item in references
-            if item.get("registryVectorId") is not None
-        ]
-        available_vectors = self.vectors.registry.get_many(vector_ids) if vector_ids else {}
-        valid: list[dict[str, Any]] = []
-        discarded: list[str] = []
-        for item in references:
-            vid = item.get("registryVectorId")
-            if vid is not None and int(vid) in available_vectors:
-                patched = dict(item)
-                patched["isEmbedded"] = True
-                valid.append(patched)
-            else:
-                discarded.append(str(item.get("referenceId") or ""))
-        # 始终导出全部参考图，不能因部分向量有效而丢掉其余库项。
-        available_ids = {int(key) for key in available_vectors}
-        export_refs = [
-            dict(item, isEmbedded=(item.get("registryVectorId") is not None and int(item["registryVectorId"]) in available_ids))
-            for item in references
-        ]
-        registry_ids = [str(item["registryId"]) for item in items if item.get("registryId")]
-        visual_ids = {str(item.get("registryId")) for item in export_refs if item.get("registryId")}
-        searchable_ids = {str(item.get("registryId")) for item in valid if item.get("registryId")}
-        return {
-            "ok": True,
-            "found": bool(items),
-            "searchable": bool(valid),
-            "registryItems": items,
-            "registryReferenceIds": [item["referenceId"] for item in export_refs if item.get("referenceId")],
-            "registryReferences": export_refs,
-            "discardedReferenceIds": discarded,
-            "unsearchableRegistryIds": [rid for rid in registry_ids if rid not in searchable_ids],
-            "missingReferenceRegistryIds": [rid for rid in registry_ids if rid not in visual_ids],
-            "referenceCount": len(references),
-            "searchableReferenceCount": len(valid),
-            "totalRegistryCount": len(registry_ids),
-            "visualRegistryCount": len(visual_ids),
-            "searchableRegistryCount": len(searchable_ids),
-        }
-
-    def matchText(self, description: str, galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None, topK: int | None = None) -> dict[str, Any]:
-        if not description.strip():
-            return {"ok": False, "error": "description_required", "matches": []}
-        # 直接传入 registryItems 列表时保留，供无参考图时的关键字弱匹配
-        raw_registry_items: list[dict[str, Any]] = []
-        if isinstance(galleryImages, list):
-            raw_registry_items = [
-                item for item in galleryImages
-                if isinstance(item, dict)
-                and item.get("registryId") is not None
-                and (item.get("description") is not None or item.get("hullNumber") is not None)
-            ]
-        galleryImages = self._flatten_image_records(galleryImages)
-        if not galleryImages and not raw_registry_items:
-            return {"ok": False, "error": "galleryImages_required", "matches": [], "hint": "请先 getFrames 或 listRegistry，再把 keyframes/registryReferences 作为 galleryImages"}
-        registry_images = [item for item in galleryImages if item.get("registryId") is not None and item.get("registryVectorId") is not None and item.get("isEmbedded")]
-        # 可嵌入库图为空时：对库项描述做关键字弱匹配
-        if not registry_images:
-            text_items = raw_registry_items or [
-                item for item in galleryImages
-                if (item.get("registryId") is not None or item.get("hullNumber") is not None)
-                and (item.get("description") or item.get("hullNumber"))
-            ]
-            if text_items:
-                return self._match_registry_by_text(description, text_items, topK)
-        if registry_images:
-            query = self.embedder.encode_text(description, self.config["prompts"]["text_retrieval_instruction"])
-            vectors = self.vectors.registry.get_many(item["registryVectorId"] for item in registry_images)
-            grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
-            for image in registry_images:
-                vector = vectors.get(int(image["registryVectorId"]))
-                if vector is not None:
-                    grouped.setdefault(str(image["registryId"]), []).append((float(np.dot(query, vector)), image))
-            matches = []
-            for registry_id, scored in grouped.items():
-                ranked = sorted(scored, key=lambda item: item[0], reverse=True)
-                if not ranked:
-                    continue
-                # 先验库多视角：以最高相似参考图为准，避免弱视角把强匹配平均稀释
-                best_score = float(ranked[0][0])
-                support = ranked[:3]
-                mean_top3 = float(np.mean([item[0] for item in support]))
-                matches.append({
-                    "matchedRegistryId": registry_id,
-                    "embeddingScore": round(best_score, 6),
-                    "maxEmbeddingScore": round(best_score, 6),
-                    "meanTop3Score": round(mean_top3, 6),
-                    "scoreBand": self._band(best_score, "text"),
-                    "matchedRegistryReferenceIds": [item[1]["referenceId"] for item in support],
-                    "supportReferenceCount": len(support),
-                })
-            matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
-            # 附加 rank gap，便于后续灰区判断
-            if len(matches) >= 2:
-                matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]) - float(matches[1]["embeddingScore"]), 6)
-            elif matches:
-                matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]), 6)
-            selected_matches = matches[:topK] if topK else matches
-            return {
-                "ok": True,
-                "matchMode": "text_to_registry",
-                "matches": selected_matches,
-                "confirmedMatches": [item for item in selected_matches if item.get("scoreBand") == "match"],
-                "uncertainMatches": [item for item in selected_matches if item.get("scoreBand") == "uncertain"],
-                "mismatchCount": sum(1 for item in selected_matches if item.get("scoreBand") == "mismatch"),
-                "matchThresholds": self._match_thresholds("text"),
-            }
-        images = [item for item in galleryImages if item.get("isEmbedded") and item.get("keyframeVectorId") is not None]
-        if not images:
-            return {"ok": True, "matchMode": "text_to_image", "matches": [], "missingKeyframeIds": []}
-        query = self.embedder.encode_text(description, self.config["prompts"]["text_retrieval_instruction"])
-        vectors = self.vectors.keyframes.get_many(item["keyframeVectorId"] for item in images)
-        missing = [item["keyframeId"] for item in images if int(item["keyframeVectorId"]) not in vectors]
-        grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
-        for image in images:
-            vector = vectors.get(int(image["keyframeVectorId"]))
-            if vector is not None:
-                grouped.setdefault(str(image["trackId"]), []).append((float(np.dot(query, vector)), image))
-        matches = []
-        for track_id, scored in grouped.items():
-            ranked = sorted(scored, key=lambda item: item[0], reverse=True)
-            if not ranked:
-                continue
-            top = ranked[:2]
-            best_score = float(top[0][0])
-            mean_top2 = float(np.mean([item[0] for item in top]))
-            # 轨迹描述检索：主分用最高关键帧，避免次优帧把分数拉低
-            matches.append({
-                "matchedTrackId": track_id,
-                "embeddingScore": round(best_score, 6),
-                "maxEmbeddingScore": round(best_score, 6),
-                "meanTop2Score": round(mean_top2, 6),
-                "scoreBand": self._band(best_score, "text"),
-                "matchedKeyframeIds": [item[1]["keyframeId"] for item in top],
-            })
-        matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
-        if topK:
-            matches = matches[: max(1, int(topK))]
-        confirmed = [m for m in matches if m.get("scoreBand") == "match"]
-        uncertain = [m for m in matches if m.get("scoreBand") == "uncertain"]
-        hint = None
-        if matches and not confirmed and uncertain:
-            hint = "最高分未达 text_match 确认阈值，仅灰区候选；勿将 uncertain 直接当作确认出现"
-        # 附带分差，便于发现“分数塌缩导致总是同一批轨迹”
-        if len(matches) >= 2:
-            matches[0]["rankGap"] = round(
-                float(matches[0]["embeddingScore"]) - float(matches[1]["embeddingScore"]), 6
-            )
-        elif matches:
-            matches[0]["rankGap"] = round(float(matches[0]["embeddingScore"]), 6)
-        return {
-            "ok": True,
-            "matchMode": "text_to_image",
-            "matches": matches,
-            "confirmedMatches": confirmed,
-            "uncertainMatches": uncertain,
-            "missingKeyframeIds": missing,
-            "scoredTrackCount": len(grouped),
-            "matchThresholds": self._match_thresholds("text"),
-            "hint": hint,
-        }
-
-    def matchImage(
+    def _match_images(
         self,
         queryImages: list[dict[str, Any]] | dict[str, Any] | None = None,
         galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None,
@@ -649,11 +1014,11 @@ class ToolService:
 
         frame_vectors, recovered_frames = self._ensure_image_vectors(
             keyframes, vector_key="keyframeVectorId", path_keys=("keyframePath", "imagePath", "path"),
-            index=self.vectors.keyframes, owner_key="keyframeId",
+            index=self.vectors.keyframes,
         )
         reference_vectors, recovered_refs = self._ensure_image_vectors(
             references, vector_key="registryVectorId", path_keys=("imagePath", "keyframePath", "path"),
-            index=self.vectors.registry, owner_key="referenceId",
+            index=self.vectors.registry,
         )
         missing_keyframes = [item.get("keyframeId") for item in keyframes if item.get("keyframeVectorId") is None or int(item["keyframeVectorId"]) not in frame_vectors]
         missing_references = [item.get("referenceId") for item in references if item.get("registryVectorId") is None or int(item["registryVectorId"]) not in reference_vectors]
@@ -775,173 +1140,103 @@ class ToolService:
             "matchThresholds": self._match_thresholds("image"), "hint": hint,
         }
 
-    def verifyTarget(self, description: str | None = None, registryReferenceIds: list[str] | None = None, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None) -> dict[str, Any]:
-        """支持三类核验：
-        1) 文字描述 vs 轨迹关键帧/片段
-        2) 库参考图 vs 轨迹关键帧/片段
-        3) 文字描述 vs 库参考图（先验库描述灰区）
-        """
-        has_description = bool(description and str(description).strip())
-        has_registry = bool(registryReferenceIds)
-        has_keyframes = bool(keyframeIds)
-        has_segments = bool(shipSegmentIds)
-        text_to_registry = has_description and has_registry and not has_keyframes and not has_segments
-        text_to_track = has_description and not has_registry and (has_keyframes != has_segments)
-        registry_to_track = has_registry and not has_description and (has_keyframes != has_segments)
-        if not (text_to_registry or text_to_track or registry_to_track):
-            return {"ok": False, "error": "unsupported_verify_combination", "decision": "uncertain"}
-
-        references = self.repository.references_by_ids(registryReferenceIds or [])
-        reference_paths = [
-            item["imagePath"]
-            for item in references
-            if Path(item["imagePath"]).exists() and Path(item["imagePath"]).suffix.lower() not in {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-        ][:3]
-        if has_keyframes:
-            frames = self.repository.keyframes_by_ids(keyframeIds or [])
-            # 只传静态图路径；视频片段走 _sample_segments 抽帧，避免 vLLM 拉本地 video URL
-            evidence = [
-                item["keyframePath"]
-                for item in frames
-                if Path(item["keyframePath"]).exists() and Path(item["keyframePath"]).suffix.lower() not in {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-            ][:6 if has_description else 3]
-        elif has_segments:
-            evidence = self._sample_segments(shipSegmentIds or [], 6 if has_description else 3)
-        else:
-            # 文字描述核验先验库：库参考图本身作为待审图像
-            evidence = reference_paths[:3]
-
-        if text_to_registry:
-            if not evidence:
-                return {"ok": True, "targetType": "description_registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": "uncertain", "facts": ["先验库参考图不可用"], "keyframeIds": [], "shipSegmentIds": []}
-            result = self.llm.verify(description, [], evidence)
-            return {"ok": True, "targetType": "description_registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": result["decision"], "facts": result["facts"], "keyframeIds": [], "shipSegmentIds": []}
-
-        if not evidence or (registry_to_track and not reference_paths):
-            return {"ok": True, "targetType": "description" if has_description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": "uncertain", "facts": ["视觉证据不足"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
-        result = self.llm.verify(description if has_description else None, reference_paths, evidence)
-        return {"ok": True, "targetType": "description" if has_description else "registry", "description": description, "registryReferenceIds": registryReferenceIds or [], "decision": result["decision"], "facts": result["facts"], "keyframeIds": keyframeIds or [], "shipSegmentIds": shipSegmentIds or []}
-
-
-    def _registry_writer(self):
-        """惰性构造写入工具：它要 ShipService 的完整事务（写档案 → 存图 → 重建索引）。
-
-        放在这里而不是模块顶层 import，是为了不让 tools 层反向依赖 web 层；
-        真正被调用的时机只有一个——模型决定调用 add_registry_vessel 的时候。
-        """
-        writer = getattr(self, "_registry_writer_instance", None)
-        if writer is None:
-            from harness.registry_write import RegistryWriteTool
-            from web.services import ShipService
-
-            service = ShipService(self.config, self.repository, self.embedder, self.llm, self.vectors)
-            writer = RegistryWriteTool(service)
-            self._registry_writer_instance = writer
-        return writer
-
-    def addRegistryVessel(self, hullNumber: str, description: str | None = None, imagePaths: Any = None, aliases: Any = None, userIntent: str | None = None) -> dict[str, Any]:
-        """新增一条先验库记录（写前会被人工确认中断拦下）。"""
-        return self._registry_writer().addRegistryVessel(
-            hull_number=hullNumber,
-            description=description,
-            image_paths=imagePaths,
-            aliases=aliases,
-            user_intent=userIntent,
-        )
-
-    def showEvidence(self, keyframeIds: list[str] | None = None, shipSegmentIds: list[str] | None = None, registryReferenceIds: list[str] | None = None) -> dict[str, Any]:
+    def _show_evidence(
+        self,
+        track_ids: list[str] | None = None,
+        keyframe_ids: list[str] | None = None,
+        registry_reference_ids: list[str] | None = None,
+        time_range: tuple[str | float, str | float] | None = None,
+        max_items: int | None = None,
+    ) -> dict[str, Any]:
+        scope, problem = self._validate_time_range(time_range)
+        if problem:
+            return {"ok": False, "error": "invalid_time_range", "hint": problem}
+        limit = max(1, min(20, int(max_items or self.MAX_RETURNED_MATCHES)))
+        track_ids = list(dict.fromkeys(str(value) for value in (track_ids or []) if value))[:limit]
+        keyframe_ids = list(dict.fromkeys(str(value) for value in (keyframe_ids or []) if value))
+        registry_reference_ids = list(dict.fromkeys(str(value) for value in (registry_reference_ids or []) if value))
+        generated_segments: list[str] = []
+        shown_keyframes = list(keyframe_ids)
+        track_summaries: list[dict[str, Any]] = []
+        for track_id in track_ids:
+            frames = self._build_frames([track_id]).get("keyframes", [])
+            if frames:
+                selected = frames[: self.MAX_FRAMES_PER_TRACK]
+                shown_keyframes.extend(str(frame["keyframeId"]) for frame in selected)
+            clip = self._build_clip(track_id, scope)
+            if clip.get("ok") and clip.get("found") and clip.get("shipSegmentId"):
+                generated_segments.append(str(clip["shipSegmentId"]))
+            track_summaries.append({
+                "trackId": track_id,
+                "keyframeIds": [str(frame["keyframeId"]) for frame in frames[: self.MAX_FRAMES_PER_TRACK]],
+                "shipSegmentIds": [str(clip["shipSegmentId"])] if clip.get("shipSegmentId") else [],
+            })
+        shown_keyframes = list(dict.fromkeys(shown_keyframes))[:limit * self.MAX_FRAMES_PER_TRACK]
+        shown_segments = list(dict.fromkeys(generated_segments))[:limit]
+        shown_references = self._representative_registry_reference_ids(registry_reference_ids)[:limit]
         return {
             "ok": True,
             "displayId": f"display-{uuid.uuid4().hex[:12]}",
-            "shownKeyframeIds": list(dict.fromkeys(keyframeIds or [])),
-            "shownShipSegmentIds": list(dict.fromkeys(shipSegmentIds or [])),
-            "shownRegistryReferenceIds": self._representative_registry_reference_ids(registryReferenceIds or []),
+            "shownKeyframeIds": shown_keyframes,
+            "shownShipSegmentIds": shown_segments,
+            "shownRegistryReferenceIds": shown_references,
+            "trackIds": track_ids,
+            "trackSummaries": track_summaries,
+            "statistics": {
+                "trackCount": len(track_ids),
+                "keyframeCount": len(shown_keyframes),
+                "clipCount": len(shown_segments),
+                "registryReferenceCount": len(shown_references),
+                "totalEvidenceCount": len(shown_keyframes) + len(shown_segments) + len(shown_references),
+            },
         }
 
-    def _normalize_dedup_track_records(self, tracks: Any) -> tuple[list[dict[str, Any]], list[str]]:
-        """兼容完整轨迹、getTrack 结果外壳和纯 trackId 列表，并恢复完整时间字段。"""
-        raw = tracks.get("tracks") if isinstance(tracks, dict) else tracks
-        if not isinstance(raw, (list, tuple)):
-            return [], ["<invalid-tracks>"] if raw not in (None, "") else []
-        repository = getattr(self, "repository", None)
-        records: list[dict[str, Any]] = []
-        unresolved: list[str] = []
-        seen: set[str] = set()
-        for item in raw:
-            track_id = item.get("trackId") if isinstance(item, dict) else item
-            if track_id is None:
-                unresolved.append("<missing-trackId>")
-                continue
-            key = str(track_id)
-            if key in seen:
-                continue
-            record = item if isinstance(item, dict) else None
-            needs_full_record = not isinstance(record, dict) or any(
-                record.get(field) is None for field in ("trackId", "startTime", "endTime")
-            )
-            if needs_full_record and repository is not None and callable(getattr(repository, "get_track", None)):
-                recovered = repository.get_track(track_id)
-                if isinstance(recovered, dict):
-                    record = recovered
-            if not isinstance(record, dict) or any(
-                record.get(field) is None for field in ("trackId", "startTime", "endTime")
-            ):
-                unresolved.append(key)
-                continue
-            seen.add(key)
-            records.append(record)
-        return records, unresolved
+    def showEvidence(
+        self,
+        trackIds: list[str] | None = None,
+        keyframeIds: list[str] | None = None,
+        registryReferenceIds: list[str] | None = None,
+        timeRange: tuple[str | float, str | float] | None = None,
+        maxItems: int | None = None,
+    ) -> dict[str, Any]:
+        return self._run_tool(
+            "show_evidence",
+            lambda: self._show_evidence(trackIds, keyframeIds, registryReferenceIds, timeRange, maxItems),
+        )
 
-    @staticmethod
-    def _normalize_dedup_keyframe_groups(value: Any) -> dict[str, Any]:
-        """兼容 getFrames 外壳、按轨迹分组对象和关键帧平铺列表。"""
-        if isinstance(value, dict) and isinstance(value.get("keyframesByTrack"), dict):
-            value = value["keyframesByTrack"]
-        if isinstance(value, list):
-            grouped: dict[str, list[dict[str, Any]]] = {}
-            for frame in value:
-                if isinstance(frame, dict) and frame.get("trackId") is not None:
-                    grouped.setdefault(str(frame["trackId"]), []).append(frame)
-            return grouped
-        if not isinstance(value, dict):
-            return {}
-        return {str(track_id): group for track_id, group in value.items()}
-
-    def dedupTracks(self, tracks: Any, keyframesByTrack: Any) -> dict[str, Any]:
-        tracks, unresolved_track_ids = self._normalize_dedup_track_records(tracks)
-        if unresolved_track_ids:
-            return {
-                "ok": False,
-                "error": "dedup_tracks_unresolved",
-                "unresolvedTrackIds": unresolved_track_ids,
-                "hint": "dedupTracks 需要完整轨迹记录；请传入 getTrack.tracks，而不是 trackIds",
-            }
-        keyframes_by_track = self._normalize_dedup_keyframe_groups(keyframesByTrack)
+    def _deduplicate_tracks(
+        self,
+        tracks: list[dict[str, Any]],
+        keyframes_by_track: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
         candidates: dict[str, list[dict[str, Any]]] = {}
         for track in tracks:
             track_id = str(track["trackId"])
             group = keyframes_by_track.get(track_id, {})
-            if isinstance(group, dict):
-                frames = group.get("keyframes") if isinstance(group.get("keyframes"), list) else []
-            elif isinstance(group, list):
-                frames = group
-            else:
-                frames = []
+            frames = group.get("keyframes", [])
             valid_frames: list[dict[str, Any]] = []
             for frame in frames:
-                if not isinstance(frame, dict) or frame.get("keyframeVectorId") is None or frame.get("isEmbedded") is False:
-                    continue
-                try:
-                    vector_id = int(frame["keyframeVectorId"])
-                except (TypeError, ValueError):
+                if not isinstance(frame, dict) or (
+                    frame.get("keyframeVectorId") is None
+                    and not any(frame.get(key) for key in ("keyframePath", "imagePath", "path"))
+                ):
                     continue
                 normalized_frame = dict(frame)
-                normalized_frame["keyframeVectorId"] = vector_id
+                if normalized_frame.get("keyframeVectorId") is not None:
+                    try:
+                        normalized_frame["keyframeVectorId"] = int(normalized_frame["keyframeVectorId"])
+                    except (TypeError, ValueError):
+                        normalized_frame["keyframeVectorId"] = None
                 valid_frames.append(normalized_frame)
             candidates[track_id] = valid_frames
         track_map = {str(item["trackId"]): item for item in tracks}
-        vector_ids = [frame["keyframeVectorId"] for frames in candidates.values() for frame in frames]
-        vectors = self.vectors.keyframes.get_many(vector_ids) if vector_ids else {}
+        frames = [frame for group in candidates.values() for frame in group]
+        vectors, _ = self._ensure_image_vectors(
+            frames,
+            vector_key="keyframeVectorId",
+            path_keys=("keyframePath", "imagePath", "path"),
+            index=self.vectors.keyframes,
+        )
         selected, missing = {}, []
         for track_id, frames in candidates.items():
             available = [frame for frame in frames if int(frame["keyframeVectorId"]) in vectors]
@@ -1066,65 +1361,6 @@ class ToolService:
         visit(value)
         return records
 
-    def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        tool = getattr(self, name, None)
-        if not callable(tool) or name.startswith("_") or name == "execute":
-            return {"ok": False, "error": "tool_not_allowed", "tool": name}
-        try:
-            return tool(**arguments)
-        except Exception as error:
-            return {"ok": False, "error": str(error), "tool": name}
-
-    def _match_registry_by_text(
-        self,
-        description: str,
-        items: list[dict[str, Any]],
-        topK: int | None,
-    ) -> dict[str, Any]:
-        """无可用向量时：按描述关键字对库项做弱匹配（颜色/船型等）。"""
-        query = str(description or "").strip().lower()
-        tokens = [t for t in re.findall(r"[一-鿿]{1,4}|[a-z0-9]{2,}", query) if t not in {"哪些", "哪个", "什么", "有没有", "是否", "数据库", "先验库", "船", "船舶"}]
-        if not tokens:
-            tokens = [query] if query else []
-        scored: list[tuple[float, dict[str, Any]]] = []
-        for item in items:
-            text = f"{item.get('description') or ''} {item.get('hullNumber') or ''} {' '.join(item.get('aliases') or [])}".lower()
-            if not text.strip():
-                continue
-            hits = sum(1 for token in tokens if token and token in text)
-            if not hits:
-                continue
-            score = hits / max(1, len(tokens))
-            # 强颜色词（如黄色）命中时抬高
-            if any(token in text for token in tokens if token in {"黄", "黄色", "蓝", "蓝色", "白", "白色", "灰", "灰色", "红", "红色"}):
-                score = min(1.0, score + 0.25)
-            band = "match" if score >= 0.66 else "uncertain" if score >= 0.34 else "mismatch"
-            if band == "mismatch":
-                continue
-            scored.append((score, {
-                "matchedRegistryId": item.get("registryId"),
-                "registryId": item.get("registryId"),
-                "hullNumber": item.get("hullNumber"),
-                "description": item.get("description"),
-                "embeddingScore": round(score, 6),
-                "scoreBand": band,
-                "matchMode": "text_keyword_registry",
-                "registryReferenceIds": [
-                    ref.get("referenceId")
-                    for ref in (item.get("references") or [])
-                    if isinstance(ref, dict) and ref.get("referenceId")
-                ],
-            }))
-        scored.sort(key=lambda pair: pair[0], reverse=True)
-        limit = max(1, min(20, int(topK or self.settings.get("top_k") or 3)))
-        matches = [item for _, item in scored[:limit]]
-        return {
-            "ok": True,
-            "matchMode": "text_keyword_registry",
-            "matches": matches,
-            "hint": "当前库参考图不可检索，已用描述关键字弱匹配库项",
-        }
-
     def _ensure_image_vectors(
         self,
         records: list[dict[str, Any]],
@@ -1132,11 +1368,22 @@ class ToolService:
         vector_key: str,
         path_keys: tuple[str, ...],
         index: Any,
-        owner_key: str,
     ) -> tuple[dict[int, np.ndarray], int]:
         """先读 FAISS；缺失时按本地图片路径现场编码并写回索引。"""
         # 对“有图片路径但无持久向量编号”的记录分配本轮临时负编号，使其也能现场编码。
-        next_temporary_id = -1
+        temporary_ids: list[int] = []
+        for item in records:
+            if not isinstance(item, dict) or item.get(vector_key) is None:
+                continue
+            try:
+                value = int(item[vector_key])
+            except (TypeError, ValueError):
+                item[vector_key] = None
+                continue
+            item[vector_key] = value
+            if value < 0:
+                temporary_ids.append(value)
+        next_temporary_id = min(temporary_ids, default=0) - 1
         for item in records:
             if not isinstance(item, dict) or item.get(vector_key) is not None:
                 continue
@@ -1152,7 +1399,7 @@ class ToolService:
         if ids:
             try:
                 vectors = dict(index.get_many(ids))
-            except Exception:
+            except Exception:  # noqa: BLE001 - an unavailable vector index falls back to image encoding.
                 vectors = {}
         missing_records = [
             item for item in records
@@ -1190,7 +1437,7 @@ class ToolService:
             return vectors, recovered
         try:
             encoded = self.embedder.encode_images(path_list)
-        except Exception:
+        except Exception:  # noqa: BLE001 - failed embedding leaves the item unsearchable.
             return vectors, recovered
         if encoded is None or len(encoded) == 0:
             return vectors, recovered
@@ -1205,7 +1452,7 @@ class ToolService:
                     [item[0] for item in persistent],
                     np.asarray([item[1] for item in persistent], dtype=np.float32),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - index persistence is best effort.
                 pass
         return vectors, recovered
 
@@ -1293,8 +1540,8 @@ class ToolService:
         content_height = max(2, int(canvas_height * 0.94))
         crop_height, crop_width = crop.shape[:2]
         scale = min(content_width / max(1, crop_width), content_height / max(1, crop_height))
-        resized_width = max(1, min(content_width, int(round(crop_width * scale))))
-        resized_height = max(1, min(content_height, int(round(crop_height * scale))))
+        resized_width = max(1, min(content_width, round(crop_width * scale)))
+        resized_height = max(1, min(content_height, round(crop_height * scale)))
         interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
         resized = cv2.resize(crop, (resized_width, resized_height), interpolation=interpolation)
         canvas = np.full((canvas_height, canvas_width, 3), (5, 14, 20), dtype=np.uint8)
@@ -1342,24 +1589,6 @@ class ToolService:
         source_path.replace(output_path)
         return codec
 
-    def _sample_segments(self, segment_ids: list[str], limit: int) -> list[np.ndarray]:
-        samples = []
-        for segment_id in segment_ids:
-            path = Path(self.config["paths"]["clip_dir"]) / f"{segment_id}.mp4"
-            capture = cv2.VideoCapture(str(path))
-            total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-            positions = np.linspace(0, max(0, total - 1), min(limit - len(samples), max(1, total)), dtype=int)
-            for position in positions:
-                capture.set(cv2.CAP_PROP_POS_FRAMES, int(position))
-                ok, frame = capture.read()
-                if ok:
-                    samples.append(frame)
-            capture.release()
-            if len(samples) >= limit:
-                break
-        return samples[:limit]
-
-    @staticmethod
     def _overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return not (float(left["endTime"]) < float(right["startTime"]) or float(right["endTime"]) < float(left["startTime"]))
 

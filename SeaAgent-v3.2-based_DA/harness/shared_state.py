@@ -444,9 +444,9 @@ class SharedTaskState:
                 return False
             self._values.setdefault("closeout_reminder_sent", {})[role] = True
             self._changed()
-            return True
+            return True   #请写状态的提醒
 
-    def claim_closeout_repair(self, role: str) -> bool:  # 领取一次补写机会；用过返回 False
+    def claim_closeout_repair(self, role: str) -> bool:  # 领取一次补写机会；用过返回 False（after agent维度的机会）
         with self._lock:
             if self._values["closeout_repair_used"].get(role):
                 return False
@@ -460,7 +460,6 @@ class SharedTaskState:
         role: str,
         key: str | None,
         tool_name: str,
-        write: bool = False,
         repeat_limit: int = 4,
     ) -> dict[str, Any]:
         """统计所有工具请求；重复达到阈值时切换到状态收尾。"""
@@ -468,16 +467,12 @@ class SharedTaskState:
             counts = self._values["tool_calls"]
             counts[role] = counts.get(role, 0) + 1
             previous = self._values["call_history"].get(key) if key else None
-            # A model response may already contain several tool calls. If an earlier
-            # call in that batch entered closeout, stop its remaining ordinary calls;
-            # StateWriteMiddleware filters tools on the next model request.
             if not key:
                 self._changed()
                 return {"execute": True}
-            if previous is None:
+            if previous is None or previous.get("status") == "invalidated":
                 self._values["call_history"][key] = {
                     "status": "pending",
-                    "write": write,
                     "tool": tool_name,
                     "repeat_count": 1,
                 }
@@ -491,7 +486,7 @@ class SharedTaskState:
             self._changed()
             return {"execute": True} if previous is None else deepcopy(previous)
 
-    # 2.1.11 保存调用结果，写入后使相关查询缓存失效
+    # 2.1.11 保存调用结果
     def finish_call(self, key: str | None, result: Any, failed: bool) -> None:
         if key is None:
             return
@@ -502,14 +497,6 @@ class SharedTaskState:
             record.update(
                 status="error" if failed else "completed", result=bounded, truncated=truncated
             )
-            if record.get("write"):
-                # 即使写入结果不确定，旧先验库查询也可能已失效。
-                invalidated_tools = {"get_registry", "list_registry", "match_hull", "match_text"}
-                self._values["call_history"] = {
-                    name: value
-                    for name, value in self._values["call_history"].items()
-                    if value.get("tool") not in invalidated_tools
-                }
             self._changed()
 
     # 2.1.12 记录领域工具结果，只从成功结果收集证据

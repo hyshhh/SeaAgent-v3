@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import shutil
+import tempfile
 import threading
 import uuid
 from pathlib import Path
 
+import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
@@ -19,6 +24,12 @@ from web.models import AgentQuery, AgentResume
 
 router = APIRouter(tags=["agent-memory"])
 logger = logging.getLogger(__name__)
+MAX_QUERY_IMAGE_BYTES = 4 * 1024 * 1024
+QUERY_IMAGE_SUFFIXES = {
+    "data:image/jpeg;base64": ".jpg",
+    "data:image/png;base64": ".png",
+    "data:image/webp;base64": ".webp",
+}
 
 # ------------------------------------------------------------------ #
 # 一、请求入口                                                             #
@@ -36,6 +47,43 @@ def _controller(request: Request, event_handler=None) -> AgentController:
     )
 
 
+def _save_query_image(data_url: str | None) -> tuple[str | None, Path | None]:
+    if not data_url:
+        return None, None
+    header, separator, encoded = data_url.partition(",")
+    suffix = QUERY_IMAGE_SUFFIXES.get(header)
+    if not separator or suffix is None:
+        raise HTTPException(422, "Only JPEG, PNG and WebP images are supported")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise HTTPException(422, "The attached image is invalid") from error
+    if not content or len(content) > MAX_QUERY_IMAGE_BYTES:
+        raise HTTPException(413, "Attached image must be smaller than 4 MB")
+    decoded = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise HTTPException(422, "The attached image cannot be decoded")
+    directory = Path(tempfile.mkdtemp(prefix="seaagent-qa-"))
+    path = directory / f"reference{suffix}"
+    try:
+        path.write_bytes(content)
+    except OSError:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    return str(path), directory
+
+
+def _remove_query_image(directory: Path | None) -> None:
+    if directory is not None:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def _answer_controller(controller: AgentController, question: str, session_id: str, cancel: threading.Event, image_path: str | None):
+    """Call both current and lightweight test controllers without passing an empty image argument."""
+    kwargs = {"image_path": image_path} if image_path else {}
+    return controller.answer(question, session_id, cancel, **kwargs)
+
+
 # 1.2 把证据图片路径包成响应
 async def _evidence_image_response(request: Request, image_path: Path, scale: float):
     preview_path = await run_in_threadpool(request.app.state.tool_service.getImagePreview, image_path, scale)
@@ -48,9 +96,19 @@ async def _evidence_image_response(request: Request, image_path: Path, scale: fl
 async def query_agent(body: AgentQuery, request: Request):
     session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     cancel = _begin_run(request, session_id)
+    image_path, image_dir = None, None
     try:
-        return await run_in_threadpool(_controller(request).answer, body.question, session_id, cancel)
+        image_path, image_dir = _save_query_image(body.image)
+        return await run_in_threadpool(
+            _answer_controller,
+            _controller(request),
+            body.question,
+            session_id,
+            cancel,
+            image_path,
+        )
     finally:
+        _remove_query_image(image_dir)
         request.app.state.agent_runs.pop(session_id, None)
 
 
@@ -89,6 +147,11 @@ async def stream_agent_query(body: AgentQuery, request: Request):
     """逐行返回 Harness 状态、工具与最终回答事件。"""
     session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     cancel = _begin_run(request, session_id)
+    try:
+        image_path, image_dir = _save_query_image(body.image)
+    except Exception:
+        request.app.state.agent_runs.pop(session_id, None)
+        raise
 
     async def events():
         loop = asyncio.get_running_loop()
@@ -98,9 +161,13 @@ async def stream_agent_query(body: AgentQuery, request: Request):
         worker: asyncio.Task | None = None
         captured_terminal: dict | None = None
 
+        def cleanup() -> None:
+            _remove_query_image(image_dir)
+
         def release(_task=None) -> None:
             if request.app.state.agent_runs.get(session_id) is cancel:
                 request.app.state.agent_runs.pop(session_id, None)
+            cleanup()
             if _task is not None and not _task.cancelled():
                 _task.exception()  # 已断开的客户端也要消费后台异常。
 
@@ -120,7 +187,16 @@ async def stream_agent_query(body: AgentQuery, request: Request):
             # 预算读取也要在 try 内：任何异常都必须变成一条终止事件，
             # 否则事件队列永远不出队，整条 NDJSON 流会永久等待（这个坑刚踩过）
             try:
-                worker = asyncio.create_task(run_in_threadpool(_controller(request, emit).answer, body.question, session_id, cancel))
+                worker = asyncio.create_task(
+                    run_in_threadpool(
+                        _answer_controller,
+                        _controller(request, emit),
+                        body.question,
+                        session_id,
+                        cancel,
+                        image_path,
+                    )
+                )
                 worker.add_done_callback(release)
                 result = await asyncio.shield(worker)
                 if terminal_seen.is_set():
@@ -301,7 +377,7 @@ async def memory_summary(request: Request):
 # 4.1 轨迹关键帧
 @router.get("/api/memory/tracks/{track_id}/frames")
 async def track_frames(track_id: str, request: Request):
-    return request.app.state.tool_service.getFrames([track_id])
+    return request.app.state.tool_service._build_frames([track_id])
 
 # 4.2 关键帧文件
 @router.get("/api/evidence/keyframes/{keyframe_id}")
@@ -344,7 +420,7 @@ async def clip_poster(segment_id: str, request: Request, scale: float = 1.0):
 @router.get("/api/evidence/tracks/{track_id}/clip")
 async def track_clip(track_id: str, request: Request, startTime: float | None = None, endTime: float | None = None, scale: float = 1.0):
     time_range = (startTime, endTime) if startTime is not None and endTime is not None else None
-    result = await run_in_threadpool(request.app.state.tool_service.getClip, track_id, time_range, scale)
+    result = await run_in_threadpool(request.app.state.tool_service._build_clip, track_id, time_range, scale)
     path = Path(result.get("segmentPath", ""))
     if not result.get("ok") or not result.get("found", True) or not path.is_file():
         raise HTTPException(404, result.get("error") or "目标船片段不存在")

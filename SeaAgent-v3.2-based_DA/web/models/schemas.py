@@ -1,7 +1,10 @@
 """网页接口数据结构。"""
 from __future__ import annotations
+
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 
 class ShipCreate(BaseModel):
     hull_number: str = Field(..., min_length=1, max_length=50)
@@ -35,6 +38,18 @@ class AgentQuery(BaseModel):
 
     question: str = Field(..., min_length=1, max_length=1000)
     session_id: str | None = Field(default=None, alias="sessionId", max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    image: str | None = Field(default=None, max_length=6_000_000)
+
+    @field_validator("image")
+    @classmethod
+    def _validate_image_data_url(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith((
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+        )):
+            raise ValueError("image must be a JPEG, PNG or WebP data URL")
+        return value
 
 class ApiResponse(BaseModel):
     success: bool
