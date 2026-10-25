@@ -8,7 +8,7 @@ embedding:
 yolo:
   confidence: 0.5
   iou: 0.5
-  detect_every_n_frames: 1
+  detect_every_n_frames: 3
   tracker_params:
     track_high_thresh: 0.5
     track_low_thresh: 0.2
@@ -16,10 +16,19 @@ yolo:
     match_thresh: 0.8
     track_buffer: 90
   device: ''
-  model: yolov8n.pt
+  model: yolov8m.pt
 pipeline:
   target_fps: 0.0
   pipe_scale: 1.0
   max_frames: 0
   max_stale_frames: 120
   save_output_video: true
+  keyframe_pool_size: 3
+  candidate_pool_size: 6
+  quality:
+    min_score: 0.35
+    min_clarity: 0.0
+    min_completeness: 0.4
+    min_exposure: 0.4
+    min_scale: 0.0
+    relative_floor_ratio: 0.85

@@ -4,6 +4,9 @@ pipeline:
   candidate_pool_size: 8
   keyframe_pool_size: 6
   max_stale_frames: 120
+  # 轨迹记忆入库门槛：正式池里至少有一帧关键帧才开始记录该轨迹。
+  # 关掉（false）则恢复旧行为——只要检测到就写一行，即使没有任何证据。
+  memory_requires_keyframe: true
   recognition_workers: 3
   recognition_timeout_seconds: 45
   min_crop_width: 80
@@ -16,8 +19,23 @@ pipeline:
   save_output_video: true
   demo: true
   quality:
+    # 加权总分下限（0~1）。准入无条件生效，不再只在正式池满时才检查。
     min_score: 0.2
-    sharpness_reference: 180.0
+    # 清晰度分项硬下限：低于它直接判为模糊，与总分无关。
+    min_clarity: 0.0
+    # 完整度硬下限：贴边裁掉的帧（每条边扣 0.2）低于它直接丢弃。
+    min_completeness: 0.0
+    # 曝光硬下限：过暗/过曝像素占比过高时丢弃。
+    min_exposure: 0.0
+    # 尺寸硬下限：相对画面过小的远距离目标丢弃。
+    min_scale: 0.0
+    # 轨道内相对质量下限：候选质量不得低于本轨迹已见最好分的该比例。
+    # 绝对阈值在不同场景（高清 0.95 / 低清 0.50）下差异过大，这个比例
+    # 让筛选自适应场景；0 表示关闭。
+    relative_floor_ratio: 0.0
+    # 拉普拉斯方差归一化参考。候选会被缩放到 256~512px，实测方差
+    # p10≈930 / p50≈1290 / p90≈1460；180 会让 clarity 恒为 1，评分失效。
+    sharpness_reference: 1400.0
     size_min: 0.04
     size_max: 0.35
   retention:

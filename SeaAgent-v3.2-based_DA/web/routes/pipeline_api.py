@@ -289,7 +289,8 @@ def _record_pool_event(task_id: str, event: dict[str, Any]) -> None:
                 image_bytes = base64.b64decode(image.partition(",")[2], validate=True)
             except (ValueError, TypeError):
                 logger.warning("池缩略图解码失败 [%s/%s/%s]", pool, track_id, record_id)
-        capacity = _MAX_CANDIDATE_FRAMES_PER_TRACK
+        # 容量以 pipeline 事件携带的 candidate_pool_size 为准；12 只是兜底上限。
+        capacity = max(1, int(event.get("capacity") or (row or {}).get("capacity") or _MAX_CANDIDATE_FRAMES_PER_TRACK))
         image_key = (pool, track_id, record_id)
         frame_changed = (
             frame is None

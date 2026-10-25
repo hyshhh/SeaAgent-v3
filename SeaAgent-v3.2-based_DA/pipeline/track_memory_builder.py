@@ -18,7 +18,7 @@ import numpy as np
 from config import load_config
 from memory import MemoryRepository, TrackMemoryManager
 from pipeline.aggregation import aggregate_keyframes
-from pipeline.quality import score_frame
+from pipeline.quality import quality_gate, score_frame
 from services import AgentLLMService, QwenMultimodalEmbedder
 from vector_store import VectorCatalog, stable_vector_id
 
@@ -52,6 +52,8 @@ class ActiveTrack:
     final_description: str = ""
     final_match_type: str = "unknown"
     bbox_history: list[dict[str, Any]] = field(default_factory=list)
+    # 该轨迹迄今见过的最好质量分，用于"轨道内相对质量"判定（见 _submit_candidate）
+    best_quality: float = 0.0
 
 class TrackMemoryBuilder:
     def __init__(self, config: dict[str, Any] | None = None, repository: MemoryRepository | None = None, embedder: QwenMultimodalEmbedder | None = None, llm: AgentLLMService | None = None, vectors: VectorCatalog | None = None, pool_event_callback: Callable[[dict[str, Any]], None] | None = None):
@@ -164,7 +166,10 @@ class TrackMemoryBuilder:
                 if state is None:
                     state = ActiveTrack(self._allocate_track_id(), observed_at, observed_at, timestamp, timestamp, tuple(detection.bbox))
                     self.active[source_track_id] = state
-                    self._write_track(state)
+                    # 轨迹记忆的门槛是"至少一帧关键帧入池"（见 _memory_eligible）：
+                    # 没证据的轨迹只存在于内存，不落 tracks.csv。
+                    if self._memory_eligible(state):
+                        self._write_track(state)
                 state.last_time, state.video_last_time, state.latest_bbox, state.missed_frames = observed_at, timestamp, tuple(detection.bbox), 0
                 state.bbox_history.append({"frameIndex": frame_index, "timestamp": round(timestamp, 6), "observedAt": round(observed_at, 6), "bbox": list(detection.bbox)})
                 if frame_index % interval == 0 and detection.crop is not None:
@@ -182,9 +187,23 @@ class TrackMemoryBuilder:
         min_width, min_height = int(self.settings.get("min_crop_width", 80)), int(self.settings.get("min_crop_height", 80))
         if crop.shape[1] < min_width or crop.shape[0] < min_height:
             return
-        quality = score_frame(crop, bbox, frame_shape, self.settings.get("quality", {}))["qualityScore"]
-        keyframe_limit = int(self.settings.get("keyframe_pool_size", 6))
-        if len(state.keyframe_pool) >= keyframe_limit and quality < float(self.settings.get("quality", {}).get("min_score", 0.2)):
+        quality_config = self.settings.get("quality", {})
+        metrics = score_frame(crop, bbox, frame_shape, quality_config)
+        quality = metrics["qualityScore"]
+        # 质量准入无条件生效；旧逻辑只在正式池已满时才看 min_score，
+        # 池子空着时任何裁剪都能成为关键帧。
+        reason = quality_gate(metrics, quality_config)
+        if reason is None:
+            # 轨道内相对质量：不同场景的绝对分差异很大（实测同一批视频里
+            # 清晰画面中位数 0.95，低清/远距离画面只有 0.50），绝对阈值会
+            # 整段误杀。这里再要求候选不低于本轨迹已见最好分的 ratio 倍，
+            # 既能在低清场景里保留可用帧，也能在高清场景里淘汰垫底帧。
+            ratio = float(quality_config.get("relative_floor_ratio", 0.0))
+            if ratio > 0 and state.best_quality > 0 and quality < state.best_quality * ratio:
+                reason = f"below_track_best<{ratio:g}"
+        state.best_quality = max(state.best_quality, quality)
+        if reason is not None:
+            self.trace.append({"event": "candidate_rejected", "trackId": state.track_id, "timestamp": timestamp, "reason": reason, **metrics})
             return
         if not self._reserve_candidate_slot(state, quality):
             return
@@ -198,6 +217,7 @@ class TrackMemoryBuilder:
             "trackId": state.track_id,
             "timestamp": timestamp,
             "status": "识别中",
+            "capacity": int(self.settings.get("candidate_pool_size", 12)),
         }
         if self.settings.get("pool_preview_events"):
             event["image"] = self._candidate_preview(crop)
@@ -258,6 +278,13 @@ class TrackMemoryBuilder:
     def _promote_candidate(self, state: ActiveTrack, candidate: CandidateFrame, result: dict[str, Any]) -> None:
         readable = result.get("has_readable_hull_number") == "yes"
         confidence = float(result.get("readability_confidence") or 0)
+        # 晋升时再兜一次质量下限：配置可能在候选排队期间被改严，
+        # 也防止低质量候选借"池子未满"直接落库。
+        min_score = float(self.settings.get("quality", {}).get("min_score", 0.2))
+        if candidate.quality_score < min_score:
+            self.trace.append({"event": "keyframe_rejected", "trackId": state.track_id, "candidateId": candidate.candidate_id, "reason": "quality_score", "qualityScore": candidate.quality_score})
+            self._emit_pool_event("candidate", "upsert", recordId=candidate.candidate_id, trackId=state.track_id, hullNumber=None, description="候选质量不足", status="质量不足")
+            return
         retention_config = self.settings.get("retention", {})
         retention = (
             float(retention_config.get("readable_bonus", 1.0))
@@ -288,7 +315,11 @@ class TrackMemoryBuilder:
         state.keyframe_pool.append(committed)
         state.keyframe_pool.sort(key=lambda frame: (-frame["retentionScore"], frame["timestamp"]))
         state.pool_revision += 1
-        if len(state.keyframe_pool) == limit:
+        if len(state.keyframe_pool) == 1:
+            # 第一帧关键帧入池：这一刻起该轨迹才值得进入轨迹记忆。
+            self._aggregate_if_changed(state)
+            self._write_track(state)
+        elif len(state.keyframe_pool) == limit:
             self._aggregate_if_changed(state)
         self.trace.append({"event": "keyframe_committed", "trackId": state.track_id, "keyframeId": committed["keyframeId"], "isEmbedded": committed["isEmbedded"]})
         self._emit_pool_event("candidate", "upsert", **candidate_event, status="已进入正式池")
@@ -407,12 +438,26 @@ class TrackMemoryBuilder:
         state.final_hull_number = result["finalHullNumber"]
         state.final_description = result["finalDescription"]
         state.final_match_type = result["finalMatchType"]
-        self._write_track(state)
+        if self._memory_eligible(state):
+            self._write_track(state)
         state.aggregated_revision = state.pool_revision
 
     def _aggregate_if_changed(self, state: ActiveTrack) -> None:
         if state.aggregated_revision != state.pool_revision:
             self._aggregate(state)
+
+    def _memory_eligible(self, state: ActiveTrack) -> bool:
+        """轨迹是否有资格写入记忆。
+
+        默认要求正式池里至少有一帧关键帧：一条只被检测到、却没有任何可用
+        证据（模糊/过曝/太小/VLM 读不出）的轨迹，写进 tracks.csv 只会让
+        Track Table 堆满 "No stable hull / 0/0" 的空行。
+
+        ``memory_requires_keyframe: false`` 可恢复旧行为（检测到即入库）。
+        """
+        if not bool(self.settings.get("memory_requires_keyframe", True)):
+            return True
+        return bool(state.keyframe_pool)
 
     def _write_track(self, state: ActiveTrack, trajectory_path: str = "") -> None:
         current = self.repository.get_track(state.track_id)
@@ -424,7 +469,8 @@ class TrackMemoryBuilder:
             return
         self._last_maintenance_time = timestamp
         for state in self.active.values():
-            self._write_track(state)
+            if self._memory_eligible(state):
+                self._write_track(state)
         retention = self.memory_manager.settings.read()["retentionSeconds"]
         protected = [state.track_id for state in self.active.values() if retention <= 0 or timestamp - state.last_time <= retention]
         expired = self.memory_manager.prune_expired(timestamp, protected)
@@ -449,6 +495,10 @@ class TrackMemoryBuilder:
                 self.active.pop(track_id, None)
 
     def _finalize_track(self, state: ActiveTrack) -> None:
+        if not self._memory_eligible(state):
+            self.trace.append({"event": "track_discarded", "trackId": state.track_id, "reason": "no_keyframe_in_pool"})
+            self._emit_track_status(state, state.last_time, remove=True)
+            return
         path = Path(self.config["paths"]["trajectory_dir"]) / f"{state.track_id}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"trackId": state.track_id, "sourceVideoPath": self._source_path, "sourceFps": self._source_fps, "monitorStartTime": state.start_time, "monitorEndTime": state.last_time, "frameSize": self._frame_size, "boxes": sorted(state.bbox_history, key=lambda item: item["timestamp"])}
