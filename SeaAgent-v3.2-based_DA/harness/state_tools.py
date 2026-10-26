@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .shared_state import OWNER_FIELDS
+
 
 class _StatePatch(BaseModel):
     model_config = ConfigDict(
@@ -98,7 +100,10 @@ def build_state_tools(state: Any) -> list[Any]:
         StructuredTool.from_function(
             planner_update,
             name="update_planner_state",
-            description="Planner 专用；只更新 requirements、plan（id/content/required_evidence）、next_action、clarification。",
+            description=(
+                "Planner 专用；至少更新一个自有字段：requirements、plan（id/content/required_evidence）、"
+                "next_action、clarification。不要提交 decision、step_status 或 task_status。"
+            ),
         ),
         StructuredTool.from_function(
             executor_update,
@@ -145,10 +150,15 @@ def _update(state: Any, role: str, patch: _StatePatch) -> dict[str, Any]:
                 ),
                 "ignored_evidence_ids": ignored_evidence_ids[:20],
             }
+        owned_fields = ", ".join(sorted(OWNER_FIELDS[role]))
+        ignored_message = f"；已忽略字段：{', '.join(ignored)}" if ignored else ""
         return {
             "ok": False,
             "error": "no_owned_fields",
-            "message": f"{role} 必须至少更新一个自己负责的字段；当前可写字段：{', '.join(sorted(type(patch).model_fields))}。",
+            "message": (
+                f"{role} 没有提交可写字段{ignored_message}。只传入至少一个自有字段："
+                f"{owned_fields}；删除其他角色字段后重试。"
+            ),
             "ignored_fields": ignored,
         }
     try:

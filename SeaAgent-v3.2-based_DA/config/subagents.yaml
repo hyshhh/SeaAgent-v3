@@ -15,11 +15,12 @@ agents:
     system_prompt: |
       你是 Planner Agent：只规划，不调用业务工具；负责 requirements、plan、next_action、clarification。
       先读共享状态。每步包含唯一 id、content、required_evidence（字符串数组）；重规划保留未变步骤的 id。
-      无时间条件时省略 time_range，按全部已存轨迹规划；有时间条件时保留用户范围。识别先规划 recognize_tracks；
+      先区分识别与统计：识别任务规划 recognize_tracks；统计任务只规划对应 count_* 工具，不得加入 recognize_tracks。
+      无时间范围（包括“所有时间”）时不设置 time_range，也不单独创建时间步骤；有明确范围时保留用户范围。
       舷号/别名任务可加条件步骤 match_registry_tracks，仅在结果 nextStep 指向它时执行；图片候选不确定时可规划 verify_vessel_images。
-      统计只规划用户要求的口径，遵循 acceptance 技能中的工具映射。
+      统计按用户要求的口径映射：总数 count_total_entities、在库 count_registry_entities、不在库 count_unregistered_entities；混合问题才组合对应步骤。
       证据展示统一使用 show_evidence。
-      仅在缺少信息会阻止正确执行时请求澄清；调用 update_planner_state 写入负责字段，不复制整份状态。
+      仅在缺少信息会阻止正确执行时请求澄清；只用 update_planner_state 写入 requirements、plan、next_action 或 clarification，不写决策、执行状态或任务状态。
 
   - name: executor
     description: 执行封装后的识别与统计业务工具，并记录进度和证据。

@@ -265,6 +265,9 @@ def test_agent_end_gets_one_state_write_repair():
     repair = middleware.after_agent({})
     assert repair["jump_to"] == "model"
     assert "update_planner_state" in repair["messages"][0].content
+    assert "clarification, next_action, plan, requirements" in repair["messages"][0].content
+    assert "无需重复读取" in repair["messages"][0].content
+    assert "其他角色字段" in repair["messages"][0].content
     filtered = middleware._request(
         _Request([_tool("read_shared_state"), _tool("update_planner_state"), _tool("get_track")])
     )
@@ -283,6 +286,22 @@ def test_a_second_missing_state_repair_is_rejected():
     assert middleware.after_agent({})["jump_to"] == "model"
     with pytest.raises(MissingStateWrite, match="一次收尾机会"):
         middleware.after_agent({})
+
+
+def test_closeout_reminder_names_the_fields_owned_by_each_role():
+    expected = {
+        "planner": ("clarification, next_action, plan, requirements", "update_planner_state"),
+        "executor": ("evidence_ids, execution_status, step_status", "update_execution_state"),
+        "reflector": ("assessment, conflicts, decision, evidence_gaps", "update_reflection_state"),
+    }
+    for role, (fields, tool_name) in expected.items():
+        state = SharedTaskState("q")
+        state.start_agent(role)
+        middleware = StateWriteMiddleware(role, state, 4, 2)
+
+        reminder = middleware.after_agent({})["messages"][0].content
+        assert fields in reminder
+        assert tool_name in reminder
 
 
 def test_counters_survive_restore_and_reset_for_a_new_phase(tmp_path):

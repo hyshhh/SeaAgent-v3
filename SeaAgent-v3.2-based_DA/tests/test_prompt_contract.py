@@ -69,9 +69,21 @@ def test_count_skills_map_user_intent_to_configured_tools():
 
     assert all(name in planning for name in expected)
     assert all(name in statistics for name in expected)
-    assert "acceptance 技能" in agents["planner"]["system_prompt"]
+    assert "统计按用户要求的口径映射" in agents["planner"]["system_prompt"]
     assert "statistics 技能" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
+
+
+def test_planner_keeps_count_only_requests_out_of_recognition_flow():
+    role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
+    planner = next(item for item in role_config["agents"] if item["name"] == "planner")
+    acceptance = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
+    time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
+
+    assert "统计任务只规划对应 count_* 工具，不得加入 recognize_tracks" in planner["system_prompt"]
+    assert "Count-only plans must contain only the requested count tools, never `recognize_tracks`" in acceptance
+    assert "including “所有时间”" in time_scope
+    assert "Time scope is not a separate plan step" in time_scope
 
 
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():

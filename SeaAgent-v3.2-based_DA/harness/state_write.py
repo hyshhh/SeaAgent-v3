@@ -8,10 +8,11 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import HumanMessage
 
-from .shared_state import ROLE_UPDATE_TOOLS
+from .shared_state import OWNER_FIELDS, ROLE_UPDATE_TOOLS
 
 STATE_WRITE_REMINDER = (
-    "本角色必须把已确认进展写入共享状态。先调用 read_shared_state，再调用 {tool}；"
+    "状态收尾（{role}）：调用 {tool}，至少提交一个你负责的字段：{fields}。"
+    "不要提交其他角色字段；结合当前状态和已有结果写入，无需重复读取刚读过的状态。"
     "不得把未验证步骤标为完成。"
 )
 
@@ -59,6 +60,14 @@ class StateWriteMiddleware(AgentMiddleware):
             state["assessment"].get("final_answer") or ""
         ).strip()
 
+    def _reminder(self) -> str:
+        fields = ", ".join(sorted(OWNER_FIELDS[self.role]))
+        return STATE_WRITE_REMINDER.format(
+            role=self.role,
+            tool=ROLE_UPDATE_TOOLS[self.role],
+            fields=fields,
+        )
+
     def _request(self, request: Any) -> Any:
         mode = self.shared_state.claim_model_request(
             self.role, self.model_request_budget, self.closeout_request_budget
@@ -83,7 +92,7 @@ class StateWriteMiddleware(AgentMiddleware):
         if self._write_required() and self.shared_state.mark_closeout_reminder(self.role):
             overrides["messages"] = [
                 *request.messages,
-                HumanMessage(content=STATE_WRITE_REMINDER.format(tool=ROLE_UPDATE_TOOLS[self.role])),
+                HumanMessage(content=self._reminder()),
             ]
         if request.tools is not None:
             overrides["tools"] = [
@@ -111,5 +120,4 @@ class StateWriteMiddleware(AgentMiddleware):
         self.shared_state.mark_closeout_reminder(self.role)
         if self.persist:
             self.persist()
-        reminder = STATE_WRITE_REMINDER.format(tool=ROLE_UPDATE_TOOLS[self.role])
-        return {"messages": [HumanMessage(content=reminder)], "jump_to": "model"}
+        return {"messages": [HumanMessage(content=self._reminder())], "jump_to": "model"}

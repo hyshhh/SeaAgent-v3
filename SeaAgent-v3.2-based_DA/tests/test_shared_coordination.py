@@ -160,6 +160,8 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     assert rejected["ok"] is False
     assert rejected["error"] == "no_owned_fields"
     assert rejected["ignored_fields"] == ["task_status", "version"]
+    assert "clarification, next_action, plan, requirements" in rejected["message"]
+    assert "删除其他角色字段后重试" in rejected["message"]
     assert state.snapshot() == updated
 
 
