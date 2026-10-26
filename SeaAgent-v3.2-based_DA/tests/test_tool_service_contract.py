@@ -33,10 +33,12 @@ def test_direct_recognition_returns_scored_candidates_not_all_tracks():
     result = service._recognize_tracks(description="yellow vessel")
 
     assert result["status"] == "confirmed"
-    assert result["trackIds"] == ["t-7"]
+    assert [item["trackId"] for item in result["matches"]] == ["t-7"]
     assert result["statistics"]["searchedTrackCount"] == 150
     assert result["statistics"]["unsearchableTrackCount"] == 149
-    assert len(result["unsearchableTrackIds"]) <= service.MAX_RETURNED_MATCHES
+    assert result["coverageComplete"] is False
+    assert "confidence" not in result
+    assert "confirmedMatches" not in result
     assert "tracks" not in result
 
 
@@ -61,7 +63,6 @@ def test_hull_number_in_keyframe_counts_as_a_hit():
     result = service._recognize_tracks(hull_number="0857")
 
     assert result["status"] == "confirmed"
-    assert result["filterMissed"] is False
     assert result["matches"][0]["keyframeIds"] == ["kf-0857"]
 
 
@@ -132,8 +133,49 @@ def test_registry_assisted_search_without_reference_images_is_unconfirmed():
     result = service._match_registry_tracks("0857")
 
     assert result["status"] == "unconfirmed"
-    assert result["confidence"] == "unconfirmed"
+    assert result["status"] == "unconfirmed"
+    assert "confidence" not in result
     assert result["coverageComplete"] is False
+
+
+def test_count_tool_returns_only_requested_count_and_compact_quality_metadata():
+    service = ToolService.__new__(ToolService)
+    service._entity_analysis = lambda *_args: {
+        "ok": True,
+        "entityCount": 12,
+        "minimumEntityCount": 10,
+        "maximumEntityCount": 12,
+        "inRegistryCount": 4,
+        "unregisteredCount": 6,
+        "uncertainCount": 1,
+        "countComplete": False,
+        "countStability": "sensitive",
+        "pendingMergeCount": 2,
+        "trackCount": 20,
+        "unsearchableTrackCount": 1,
+        "trackIds": ["t-1"],
+        "keyframeIds": ["kf-1"],
+        "registryReferenceIds": ["ref-1"],
+    }
+
+    result = service._entity_count(None, False, "entityCount")
+
+    assert result == {
+        "ok": True,
+        "count": 12,
+        "countComplete": False,
+        "countStability": "sensitive",
+        "uncertainCount": 1,
+        "pendingMergeCount": 2,
+        "trackCount": 20,
+        "unsearchableTrackCount": 1,
+        "trackIds": ["t-1"],
+        "keyframeIds": ["kf-1"],
+        "registryReferenceIds": ["ref-1"],
+        "minimumCount": 10,
+    }
+    assert "inRegistryCount" not in result
+    assert "unregisteredCount" not in result
 
 
 def test_registered_entity_without_comparable_reference_is_uncertain():
@@ -147,7 +189,6 @@ def test_registered_entity_without_comparable_reference_is_uncertain():
     service._scan_tracks = lambda _scope: ([_track("t-1")], True)
     service._load_search_frames = lambda _tracks: ({"t-1": [{"keyframeId": "kf-1"}]}, [])
     service._deduplicate_tracks = lambda *_args: {
-        "ok": True,
         "highGroups": [["t-1"]],
         "lowGroups": [["t-1"]],
         "pendingMergeCount": 0,
@@ -160,7 +201,51 @@ def test_registered_entity_without_comparable_reference_is_uncertain():
     assert result["inRegistryCount"] == 0
     assert result["unregisteredCount"] == 0
     assert result["uncertainCount"] == 1
-    assert result["countConfidence"] == "uncertain"
+    assert result["countComplete"] is False
+
+
+def test_image_match_does_not_encode_or_persist_missing_vectors():
+    class Index:
+        def __init__(self):
+            self.writes = 0
+
+        def get_many(self, _ids):
+            return {}
+
+        def add_many(self, *_args):
+            self.writes += 1
+
+    class Embedder:
+        def encode_images(self, _paths):
+            raise AssertionError("tool matching must not encode missing stored vectors")
+
+    service = ToolService.__new__(ToolService)
+    service.vectors = type("Vectors", (), {"keyframes": Index(), "registry": Index()})()
+    service.embedder = Embedder()
+    result = service._match_images(
+        queryImages=[{
+            "registryId": "r-1",
+            "referenceId": "ref-1",
+            "registryVectorId": 10,
+            "imagePath": "/missing/reference.jpg",
+        }],
+        galleryImages=[{
+            "trackId": "t-1",
+            "keyframeId": "kf-1",
+            "keyframeVectorId": 20,
+            "keyframePath": "/missing/keyframe.jpg",
+        }],
+        registryItems=[{"registryId": "r-1"}],
+    )
+
+    assert result == {
+        "ok": True,
+        "matches": [],
+        "unscoredTrackIds": ["t-1"],
+        "registryCoverageComplete": False,
+    }
+    assert service.vectors.keyframes.writes == 0
+    assert service.vectors.registry.writes == 0
 
 
 def test_each_business_tool_has_its_own_timeout_budget():

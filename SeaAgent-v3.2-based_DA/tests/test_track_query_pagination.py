@@ -96,6 +96,7 @@ def test_explicit_range_formats_local_iso_time():
         ("2026-10-22T10:00:00+08:00", "2026-10-22T11:00:00+08:00")
     )
     assert not error
-    assert service._result_scope(scope, [], True)["queryScope"] == [
-        datetime.fromtimestamp(value, service.DEFAULT_TIMEZONE).isoformat() for value in scope
-    ]
+    assert scope == (
+        datetime.fromisoformat("2026-10-22T10:00:00+08:00").timestamp(),
+        datetime.fromisoformat("2026-10-22T11:00:00+08:00").timestamp(),
+    )

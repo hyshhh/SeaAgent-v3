@@ -89,6 +89,19 @@ test('evidence statistics render even when the query returns no visual items', (
   assert.match(html, /Evidence display/);
 });
 
+test('compact count result metadata remains visible in the evidence panel', () => {
+  const ui = page();
+  ui.run(`renderEvidence({ statistics: { queryByTool: [{
+    tool: 'count_total_entities',
+    statistics: { count: 12, minimumCount: 10, countComplete: false, countStability: 'sensitive', uncertainCount: 2 }
+  }] } });`);
+  const html = ui.elements.get('evidenceGallery').innerHTML;
+  assert.match(html, /Count: 12/);
+  assert.match(html, /Minimum count: 10/);
+  assert.match(html, /Count complete: No/);
+  assert.match(html, /Count stability: sensitive/);
+});
+
 test('skill loading and reading events collapse into one summary row per agent and phase', () => {
   const ui = page();
   ui.run(`

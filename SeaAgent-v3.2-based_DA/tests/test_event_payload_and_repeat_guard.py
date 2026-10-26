@@ -14,7 +14,7 @@ from config import load_config
 from harness.middleware import build_middleware
 from harness.shared_state import SharedTaskState
 from harness.tool_guard import REPEAT_HINT, RepeatToolCallMiddleware
-from harness.trace import _bounded
+from harness.trace import _bounded, _Trace
 
 
 class _Request:
@@ -36,6 +36,68 @@ def test_repeat_call_is_skipped_with_a_hint():
     assert replay["cached_result"] == "executed:read_file"
     assert replay["message"] == REPEAT_HINT
     assert second.status == "success", "跳过不是失败，否则会误触发连续失败守卫"
+
+
+def test_tool_result_is_compact_for_model_but_full_for_trace_and_state():
+    guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
+    full_result = {
+        "ok": True,
+        "task": "direct_recognition",
+        "status": "confirmed",
+        "confidence": "confirmed",
+        "coverageComplete": True,
+        "matches": [
+            {
+                "trackId": "t-1",
+                "score": 0.92,
+                "scoreBand": "match",
+                "keyframeIds": ["kf-1"],
+                "description": "yellow vessel",
+            }
+        ],
+    }
+    message = guard.wrap_tool_call(
+        _Request("recognize_tracks", {"description": "yellow vessel"}),
+        lambda request: ToolMessage(
+            content=json.dumps(full_result),
+            name="recognize_tracks",
+            tool_call_id=request.tool_call["id"],
+        ),
+    )
+
+    model_result = json.loads(message.content)
+    assert model_result["status"] == "confirmed"
+    assert model_result["matches"][0]["trackId"] == "t-1"
+    assert model_result["matches"][0]["scoreBand"] == "match"
+    assert "confidence" not in model_result
+    assert "task" not in model_result
+    assert message.artifact["full_result"] == full_result
+    assert guard.state.snapshot()["tool_results"][0]["result"] == full_result
+
+    trace = _Trace(None, event_limit=4000, shared_state=SharedTaskState("q"))
+    trace.consume({"messages": [message]}, agent_name="executor")
+    assert trace.records[0]["result"] == full_result
+
+
+def test_tool_error_keeps_error_type_for_model_debugging():
+    guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
+    message = guard.wrap_tool_call(
+        _Request("count_total_entities", {"time_range": [1, 2]}),
+        lambda _request: ToolMessage(
+            content=json.dumps({"ok": False, "error": "tool_timeout", "errorType": "TimeoutError", "hint": "timed out"}),
+            name="count_total_entities",
+            status="error",
+            tool_call_id="c1",
+        ),
+    )
+
+    error = json.loads(message.content)
+    assert error == {
+        "ok": False,
+        "error": "tool_timeout",
+        "errorType": "TimeoutError",
+        "hint": "timed out",
+    }
 
 
 def test_different_arguments_are_not_skipped():

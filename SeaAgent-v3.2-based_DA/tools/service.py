@@ -143,18 +143,11 @@ class ToolService:
                     missing.append(track_id)
                     grouped[track_id] = []
                     continue
-                searchable = [
-                    frame for frame in frames
-                    if frame.get("keyframeVectorId") is not None or frame.get("keyframePath")
-                ]
-                vectors, _ = self._ensure_image_vectors(
-                    searchable,
-                    vector_key="keyframeVectorId",
-                    path_keys=("keyframePath", "imagePath", "path"),
-                    index=self.vectors.keyframes,
+                vectors = self._load_indexed_vectors(
+                    frames, vector_key="keyframeVectorId", index=self.vectors.keyframes
                 )
                 searchable = [
-                    frame for frame in searchable
+                    frame for frame in frames
                     if frame.get("keyframeVectorId") is not None
                     and int(frame["keyframeVectorId"]) in vectors
                 ]
@@ -168,24 +161,6 @@ class ToolService:
     def _flatten_frames(groups: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
         return [frame for frames in groups.values() for frame in frames]
 
-    # 2.4 统一结果里的查询范围与覆盖标记
-    def _result_scope(
-        self,
-        scope: tuple[float, float] | None,
-        tracks: list[dict[str, Any]],
-        complete: bool,
-    ) -> dict[str, Any]:
-        return {
-            "queryScope": [  # 查询时间范围（ISO 文本），未指定时为 null
-                datetime.fromtimestamp(value, self.DEFAULT_TIMEZONE).isoformat()
-                for value in scope
-            ]
-            if scope is not None
-            else None,
-            "searchedTrackCount": len(tracks),  # 范围内扫描到的轨迹数
-            "coverageComplete": complete,  # 时间扫描是否完整
-        }
-
     # 2.5 组装单条轨迹的匹配摘要
     def _track_match_summary(
         self,
@@ -196,21 +171,27 @@ class ToolService:
         band: str = "mismatch",
         reference_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        confidence = {"match": "confirmed", "uncertain": "unconfirmed", "mismatch": "mismatch"}.get(band, "unconfirmed")
-        return {
+        summary = {
             "trackId": str(track["trackId"]),  # 轨迹编号
-            "startTime": track.get("startTime"),  # 轨迹开始（epoch 秒）
-            "endTime": track.get("endTime"),  # 轨迹结束（epoch 秒）
-            "startTimeText": track.get("startTimeText"),  # 开始时间文本
-            "endTimeText": track.get("endTimeText"),  # 结束时间文本
-            "hullNumber": track.get("finalHullNumber"),  # 轨迹最终的舷号结论
-            "description": track.get("finalDescription", ""),  # 轨迹最终的外观描述
-            "score": round(float(score), 6) if score is not None else None,  # 相似度分数，无分数为 null
-            "confidence": confidence,  # confirmed / unconfirmed / mismatch
             "scoreBand": band,  # 原始档位 match / uncertain / mismatch
-            "keyframeIds": [str(frame["keyframeId"]) for frame in frames[: self.MAX_FRAMES_PER_TRACK]],  # 代表关键帧，每条轨迹限量
-            "registryReferenceIds": list(dict.fromkeys(reference_ids or []))[: self.MAX_FRAMES_PER_TRACK],  # 关联的库参考图编号
         }
+        for field in ("startTimeText", "endTimeText"):
+            if track.get(field):
+                summary[field] = track[field]  # 轨迹时间
+        hull = track.get("finalHullNumber")
+        description = str(track.get("finalDescription") or "").strip()
+        keyframe_ids = [str(frame["keyframeId"]) for frame in frames[: self.MAX_FRAMES_PER_TRACK]]
+        if hull:
+            summary["hullNumber"] = hull  # 轨迹最终的舷号结论
+        if description:
+            summary["description"] = description[:160]  # 轨迹最终的外观描述
+        if score is not None:
+            summary["score"] = round(float(score), 6)  # 相似度分数
+        if keyframe_ids:
+            summary["keyframeIds"] = keyframe_ids  # 代表关键帧，每条轨迹限量
+        if reference_ids:
+            summary["registryReferenceIds"] = list(dict.fromkeys(reference_ids))[: self.MAX_FRAMES_PER_TRACK]  # 关联的库参考图编号
+        return summary
 
     # 2.6 按外观文本给轨迹打分
     def _track_text_scores(
@@ -226,11 +207,8 @@ class ToolService:
                 description,
                 self.config["prompts"]["text_retrieval_instruction"],
             )
-            vectors, _ = self._ensure_image_vectors(
-                gallery,
-                vector_key="keyframeVectorId",
-                path_keys=("keyframePath", "imagePath", "path"),
-                index=self.vectors.keyframes,
+            vectors = self._load_indexed_vectors(
+                gallery, vector_key="keyframeVectorId", index=self.vectors.keyframes
             )
         except Exception:  # noqa: BLE001 - failed embedding must remain an unconfirmed search.
             return {}
@@ -266,11 +244,8 @@ class ToolService:
             return {}
         try:
             query = self.embedder.encode_images([image_path])[0]
-            vectors, _ = self._ensure_image_vectors(
-                frames,
-                vector_key="keyframeVectorId",
-                path_keys=("keyframePath", "imagePath", "path"),
-                index=self.vectors.keyframes,
+            vectors = self._load_indexed_vectors(
+                frames, vector_key="keyframeVectorId", index=self.vectors.keyframes
             )
         except Exception:  # noqa: BLE001 - failed embedding must remain an unconfirmed search.
             return {}
@@ -316,9 +291,6 @@ class ToolService:
             return {"ok": False, "error": "recognition_query_required", "hint": "至少提供 hull_number、description 或 image_path。"}
 
         tracks, search_complete = self._scan_tracks(scope)
-        filter_missed = bool(hull) and not any(
-            normalize_hull_number(track.get("finalHullNumber")) == hull for track in tracks
-        )
         frames, missing = self._load_search_frames(tracks)
         keyframe_hull_matches: dict[str, list[dict[str, Any]]] = {}
         if hull:
@@ -333,7 +305,6 @@ class ToolService:
                     ]
                     if matching:
                         keyframe_hull_matches[track_id] = matching
-            filter_missed = filter_missed and not keyframe_hull_matches
         by_id = {str(track["trackId"]): track for track in tracks}
         text_scores = self._track_text_scores(description, frames) if description else {}
         image_scores = self._track_image_scores(image_path, frames) if image_path else {}
@@ -377,37 +348,25 @@ class ToolService:
             # 不应把整段轨迹列表膨胀进模型上下文。
             if exact or score is not None:
                 candidates.append(self._track_match_summary(track, selected_frames, score=score, band=band))
-        candidates = [item for item in candidates if item["confidence"] != "mismatch"]
-        candidates.sort(key=lambda item: (item["confidence"] != "confirmed", -(item["score"] or -1)))
+        candidates = [item for item in candidates if item["scoreBand"] != "mismatch"]
+        candidates.sort(key=lambda item: (item["scoreBand"] != "match", -(item["score"] or -1)))
         selected = candidates[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
-        confirmed = [item for item in selected if item["confidence"] == "confirmed"]
-        uncertain = [item for item in selected if item["confidence"] == "unconfirmed"]
         search_complete = search_complete and not missing
-        status = "confirmed" if confirmed else "unconfirmed" if uncertain or not search_complete else "mismatch"
-        return {
+        status = "confirmed" if any(item["scoreBand"] == "match" for item in selected) else "unconfirmed" if selected or not search_complete else "mismatch"
+        result = {
             "ok": True,  # 调用成功
-            "task": "direct_recognition",  # 任务类型标识
             "status": status,  # 本轮结论：confirmed / unconfirmed / mismatch
-            "confidence": status,  # 与 status 同值，沿用识别结果的置信语义
             "matches": selected,  # 入选候选轨迹摘要（确认优先、分数降序、按 topK 截断）
-            "confirmedMatches": confirmed,  # matches 中已确认的子集
-            "uncertainMatches": uncertain,  # matches 中落在灰区、尚不能确认的子集
-            "mismatch": status == "mismatch",  # 是否已确定不匹配
-            "hullNumber": hull or None,  # 规范化后的舷号，未提供时为 null
-            "filterMissed": filter_missed,  # 舷号筛选未命中：轨迹与关键帧都没有该舷号证据
-            "searchCoverageComplete": search_complete,  # 时间扫描完整且不存在无法检索的轨迹
-            "nextStep": "match_registry_tracks" if hull and status != "confirmed" else None,  # 有舷号但未确认时，引导去登记表比对
-            "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],  # 缺帧或缺向量、无法打分的轨迹编号（截断返回）
-            "trackIds": [item["trackId"] for item in selected],  # 入选轨迹的编号
+            "coverageComplete": search_complete,  # 时间扫描完整且不存在无法检索的轨迹
             "statistics": {  # 本轮检索统计
                 "searchedTrackCount": len(tracks),  # 时间范围内扫描到的轨迹数
                 "candidateCount": len(selected),  # 入选候选数
-                "confirmedCount": len(confirmed),  # 已确认数
-                "unconfirmedCount": len(uncertain),  # 未确认（灰区）数
                 "unsearchableTrackCount": len(missing),  # 无法检索的轨迹数
             },
-            **self._result_scope(scope, tracks, search_complete),  # 摊入查询时间范围、扫描数与覆盖是否完整
         }
+        if hull and status != "confirmed":
+            result["nextStep"] = "match_registry_tracks"  # 有舷号但未确认时，引导去登记表比对
+        return result
 
     # 2.9 轨迹识别工具的入口
     def recognizeTracks(self, hullNumber: str | None = None, description: str | None = None, imagePath: str | None = None, timeRange: tuple[str | float, str | float] | None = None, topK: int | None = None) -> dict[str, Any]:
@@ -445,24 +404,15 @@ class ToolService:
             coverage_complete = complete and not missing and bool(registry_items and references)
             return {  # 库里查不到该舷号或没有参考图：只能返回未确认
                 "ok": True,  # 调用成功
-                "task": "registry_assisted_recognition",  # 任务类型
                 "status": "unconfirmed",  # 没有可比对证据，无法给结论
-                "confidence": "unconfirmed",  # 与 status 同值
                 "registryFound": bool(registry_items),  # 库里是否登记过该舷号
-                "registryReferenceIds": [str(item["referenceId"]) for item in references[: self.MAX_RETURNED_MATCHES]],  # 截断后的库参考图编号
                 "matches": [],  # 没有可匹配的参考图
-                "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],  # 缺帧或缺向量、无法检索的轨迹
-                "trackIds": [],  # 没有候选轨迹
-                "searchCoverageComplete": coverage_complete,  # 扫描是否完整
+                "coverageComplete": coverage_complete,  # 扫描是否完整
                 "statistics": {  # 本轮统计
                     "searchedTrackCount": len(tracks),  # 扫描轨迹数
                     "candidateCount": 0,  # 候选数
-                    "confirmedCount": 0,  # 确认数
-                    "unconfirmedCount": 0,  # 未确认数
-                    "registryReferenceCount": len(references),  # 库中参考图总数
                     "unsearchableTrackCount": len(missing),  # 无法检索的轨迹数
                 },
-                **self._result_scope(scope, tracks, coverage_complete),  # 摊入查询时间范围与覆盖信息
             }
         result = self._match_images(
             queryImages=references,
@@ -484,35 +434,22 @@ class ToolService:
                 band=str(item.get("scoreBand") or "uncertain"),
                 reference_ids=item.get("matchedRegistryReferenceIds"),
             ))
-        matches.sort(key=lambda item: (item["confidence"] != "confirmed", -(item["score"] or -1)))
+        matches.sort(key=lambda item: (item["scoreBand"] != "match", -(item.get("score") or -1)))
         matches = matches[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
-        confirmed = [item for item in matches if item["confidence"] == "confirmed"]
-        uncertain = [item for item in matches if item["confidence"] == "unconfirmed"]
         missing = list(dict.fromkeys(missing + [str(value) for value in result.get("unscoredTrackIds", [])]))
         visual_complete = bool(result.get("registryCoverageComplete")) and complete and not missing
-        status = "confirmed" if confirmed else "unconfirmed" if uncertain or not visual_complete else "mismatch"
+        status = "confirmed" if any(item["scoreBand"] == "match" for item in matches) else "unconfirmed" if matches or not visual_complete else "mismatch"
         return {
             "ok": True,  # 调用成功
-            "task": "registry_assisted_recognition",  # 任务类型
             "status": status,  # confirmed / unconfirmed / mismatch
-            "confidence": status,  # 与 status 同值
             "registryFound": True,  # 已找到该舷号的库项
-            "registryReferenceIds": [str(item["referenceId"]) for item in references[: self.MAX_RETURNED_MATCHES]],  # 参与比对的库参考图编号（截断）
             "matches": matches,  # 每条轨迹取最高分配对后的候选
-            "confirmedMatches": confirmed,  # 已确认子集
-            "uncertainMatches": uncertain,  # 灰区子集
-            "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],  # 视觉不可检索的轨迹（含未评分）
-            "trackIds": [item["trackId"] for item in matches],  # 候选轨迹编号
             "statistics": {  # 本轮统计
                 "searchedTrackCount": len(tracks),  # 扫描轨迹数
                 "candidateCount": len(matches),  # 候选数
-                "confirmedCount": len(confirmed),  # 确认数
-                "unconfirmedCount": len(uncertain),  # 未确认数
-                "registryReferenceCount": len(references),  # 库参考图总数
                 "unsearchableTrackCount": len(missing),  # 无法检索的轨迹数
             },
-            "searchCoverageComplete": visual_complete,  # 时间与视觉覆盖都完整、无遗漏轨迹
-            **self._result_scope(scope, tracks, visual_complete),  # 摊入查询时间范围与覆盖信息
+            "coverageComplete": visual_complete,  # 时间与视觉覆盖都完整、无遗漏轨迹
         }
 
     # 3.2 先验库匹配工具的入口
@@ -558,13 +495,18 @@ class ToolService:
             if not Path(reference).is_file() or not Path(candidate).is_file():
                 return {"ok": False, "error": "image_not_found", "decision": "uncertain"}  # 文件路径不存在
             result = self.llm.verify([reference], [candidate])
-            return {
+            facts = result.get("facts") or []
+            facts = facts if isinstance(facts, list) else [facts]
+            response = {
                 "ok": True,  # 调用成功
-                "task": "vlm_image_verification",  # 任务类型
-                "registryReferenceId": reference_id or None,  # 使用/输入的库参考图编号
-                "keyframeId": keyframe_id or None,  # 使用/输入的关键帧编号
-                **result,  # 视觉模型的核验结论（decision、理由等原样摊入）
+                "decision": result.get("decision", "uncertain"),  # 视觉模型的核验结论
+                "facts": [str(fact).strip()[:200] for fact in facts[:3] if str(fact).strip()],  # 限长的可见依据
             }
+            if reference_id:
+                response["registryReferenceId"] = reference_id  # 使用的库参考图编号
+            if keyframe_id:
+                response["keyframeId"] = keyframe_id  # 使用的轨迹关键帧编号
+            return response
 
         return self._run_tool("verify_vessel_images", verify)
 
@@ -581,10 +523,10 @@ class ToolService:
         dedup = self._deduplicate_tracks(tracks, {track_id: {"keyframes": values} for track_id, values in frames.items()})
         missing = list(dict.fromkeys(missing + dedup.get("unsearchableTrackIds", [])))
         groups = dedup.get("highGroups") or [[str(track["trackId"])] for track in tracks]
+        low_groups = dedup.get("lowGroups") or groups
         pending_merge_count = int(dedup.get("pendingMergeCount") or 0)
         dedup_stable = str(dedup.get("countStability") or "stable") == "stable"
         track_by_id = {str(track["trackId"]): track for track in tracks}
-        group_items = [{"entityId": f"entity-{index + 1}", "trackIds": group, "status": "unknown"} for index, group in enumerate(groups)]
         visual_matches: dict[str, dict[str, Any]] = {}
         visual: dict[str, Any] = {}
         registry_items = self.repository.list_registry() if compare_registry else []
@@ -607,53 +549,52 @@ class ToolService:
             for item in registry_items
             for value in [item.get("hullNumber"), *(item.get("aliases") or [])]
             if normalize_hull_number(value)
-        }
-        for entity in group_items:
+        } if compare_registry else set()
+        in_registry = unregistered = uncertain = 0
+        track_ids: list[str] = []
+        keyframe_ids: list[str] = []
+        reference_ids: list[str] = []
+        for group in groups:
             statuses = []
-            entity["keyframeIds"] = []
-            entity["registryReferenceIds"] = []
-            for track_id in entity["trackIds"]:
-                track = track_by_id.get(str(track_id), {})
-                hull = normalize_hull_number(track.get("finalHullNumber"))
-                track_frames = frames.get(str(track_id), [])
-                entity["keyframeIds"].extend(
+            for track_id in group:
+                track_id = str(track_id)
+                track_frames = frames.get(track_id, [])
+                track_ids.append(track_id)
+                keyframe_ids.extend(
                     str(frame["keyframeId"])
                     for frame in track_frames[:2]
                     if frame.get("keyframeId")
                 )
-                visual = visual_matches.get(str(track_id), {})
-                entity["registryReferenceIds"].extend(
-                    str(value) for value in visual.get("matchedRegistryReferenceIds", []) if value
+                if not compare_registry:
+                    continue
+                track = track_by_id.get(track_id, {})
+                hull = normalize_hull_number(track.get("finalHullNumber"))
+                match = visual_matches.get(track_id, {})
+                reference_ids.extend(
+                    str(value) for value in match.get("matchedRegistryReferenceIds", []) if value
                 )
                 hull_frame_match = any(
                     normalize_hull_number(frame.get("vlmHullNumber")) in registry_hulls
                     and float(frame.get("readabilityConfidence") or 0) >= 0.75
                     for frame in track_frames
                 )
-                if hull in registry_hulls or hull_frame_match or visual.get("scoreBand") == "match":
+                if hull in registry_hulls or hull_frame_match or match.get("scoreBand") == "match":
                     statuses.append("in_registry")
-                elif hull or hull_frame_match or not registry_items or (
+                elif hull or not registry_items or (
                     visual_coverage_complete
-                    and str(track_id) not in missing
-                    and str(track_id) not in visual_unscored
+                    and track_id not in missing
+                    and track_id not in visual_unscored
                 ):
                     statuses.append("unregistered")
                 else:
                     statuses.append("uncertain")
-            entity["status"] = (
-                "in_registry" if "in_registry" in statuses
-                else "unregistered" if statuses and all(item == "unregistered" for item in statuses)
-                else "uncertain"
-            ) if compare_registry else "unknown"
-            entity["keyframeIds"] = list(dict.fromkeys(entity["keyframeIds"]))[: self.MAX_FRAMES_PER_TRACK * len(entity["trackIds"])]
-            entity["registryReferenceIds"] = list(dict.fromkeys(entity["registryReferenceIds"]))
-        in_registry = sum(item["status"] == "in_registry" for item in group_items)
-        unregistered = sum(item["status"] == "unregistered" for item in group_items)
-        uncertain = sum(item["status"] == "uncertain" for item in group_items)
-        count_uncertain = uncertain if compare_registry else sum(
-            1 for item in group_items if any(str(track_id) in missing for track_id in item["trackIds"])
-        )
-        count_uncertain += pending_merge_count
+            if compare_registry:
+                if "in_registry" in statuses:
+                    in_registry += 1
+                elif statuses and all(status == "unregistered" for status in statuses):
+                    unregistered += 1
+                else:
+                    uncertain += 1
         registry_incomplete = compare_registry and bool(registry_items) and (
             not references or not visual_coverage_complete
         )
@@ -662,48 +603,19 @@ class ToolService:
         )
         return {
             "ok": True,  # 调用成功
-            "entityCount": len(group_items),  # 去重后的实体（船）数
-            "minimumEntityCount": len(dedup.get("lowGroups") or groups),  # 低阈值合并出的最少实体数
-            "maximumEntityCount": len(dedup.get("highGroups") or groups),  # 高阈值合并出的最多实体数
+            "entityCount": len(groups),  # 去重后的实体（船）数
+            "minimumEntityCount": len(low_groups),  # 低阈值合并出的最少实体数
             "trackCount": len(tracks),  # 原始轨迹数
             "inRegistryCount": in_registry,  # 库内实体数
             "unregisteredCount": unregistered,  # 库外实体数
             "uncertainCount": uncertain,  # 归属不确定的实体数
-            "countUncertain": count_uncertain,  # 计入待合并后的不确定数
-            "countIsUpperBound": count_incomplete,  # 计数是否只能当上界使用
-            "countConfidence": "uncertain" if count_incomplete else "confirmed",  # 计数置信度
+            "countComplete": not count_incomplete,  # 计数是否完整
             "countStability": dedup.get("countStability", "stable"),  # 去重稳定性 stable / sensitive / incomplete
             "pendingMergeCount": pending_merge_count,  # 待确认合并的组数
-            "unsearchableTrackIds": missing[: self.MAX_RETURNED_MATCHES],  # 缺帧或缺向量、无法检索的轨迹
-            "registryCompared": compare_registry,  # 是否做了库内/库外比对
-            "countType": "total" if not compare_registry else "membership",  # 计数口径：总数 / 归属
-            "trackIds": list(dict.fromkeys(  # 实体覆盖的轨迹编号（截断）
-                str(track_id) for entity in group_items
-                for track_id in entity["trackIds"]
-            ))[: self.MAX_RETURNED_MATCHES],
-            "keyframeIds": list(dict.fromkeys(  # 代表关键帧编号（截断）
-                keyframe_id for entity in group_items
-                for keyframe_id in entity.get("keyframeIds", [])
-            ))[: self.MAX_RETURNED_MATCHES * self.MAX_FRAMES_PER_TRACK],
-            "registryReferenceIds": list(dict.fromkeys(  # 命中的库参考图编号（截断）
-                reference_id for entity in group_items
-                for reference_id in entity.get("registryReferenceIds", [])
-            ))[: self.MAX_RETURNED_MATCHES],
-            "statistics": {  # 统计副本，供前端与模型直接读取
-                "trackCount": len(tracks),  # 原始轨迹数
-                "entityCount": len(group_items),  # 实体数
-                "minimumEntityCount": len(dedup.get("lowGroups") or groups),  # 最少实体数
-                "maximumEntityCount": len(dedup.get("highGroups") or groups),  # 最多实体数
-                "inRegistryCount": in_registry,  # 库内实体数
-                "unregisteredCount": unregistered,  # 库外实体数
-                "uncertainCount": uncertain,  # 不确定实体数
-                "countUncertain": count_uncertain,  # 含待合并的不确定数
-                "pendingMergeCount": pending_merge_count,  # 待确认合并组数
-                "countStability": dedup.get("countStability", "stable"),  # 去重稳定性
-                "countConfidence": "uncertain" if count_incomplete else "confirmed",  # 计数置信度
-                "unsearchableTrackCount": len(missing),  # 无法检索的轨迹数
-            },
-            **self._result_scope(scope, tracks, not count_incomplete),  # 摊入查询时间范围与覆盖信息
+            "unsearchableTrackCount": len(missing),  # 缺帧或缺向量、无法检索的轨迹数
+            "trackIds": list(dict.fromkeys(track_ids))[: self.MAX_RETURNED_MATCHES],  # 实体覆盖的轨迹编号（截断）
+            "keyframeIds": list(dict.fromkeys(keyframe_ids))[: self.MAX_RETURNED_MATCHES * self.MAX_FRAMES_PER_TRACK],  # 代表关键帧编号（截断）
+            "registryReferenceIds": list(dict.fromkeys(reference_ids))[: self.MAX_RETURNED_MATCHES],  # 命中的库参考图编号（截断）
         }
 
     # 5.2 统计全部实体
@@ -730,10 +642,24 @@ class ToolService:
     # 5.5 计数工具的公共封装
     def _entity_count(self, time_range: Any, compare_registry: bool, field: str) -> dict[str, Any]:
         result = self._entity_analysis(time_range, compare_registry)
-        if result.get("ok"):
-            result["count"] = result[field]
-            result.setdefault("statistics", {})["count"] = result[field]
-        return result
+        if not result.get("ok"):
+            return result
+        compact = {
+            "ok": True,
+            "count": result[field],
+            "countComplete": result["countComplete"],
+            "countStability": result["countStability"],
+            "uncertainCount": result["uncertainCount"],
+            "pendingMergeCount": result["pendingMergeCount"],
+            "trackCount": result["trackCount"],
+            "unsearchableTrackCount": result["unsearchableTrackCount"],
+            "trackIds": result["trackIds"],
+            "keyframeIds": result["keyframeIds"],
+            "registryReferenceIds": result["registryReferenceIds"],
+        }
+        if field == "entityCount" and result["countStability"] != "stable":
+            compact["minimumCount"] = result["minimumEntityCount"]
+        return compact
 
     # epoch 秒的合理下限（2017 年）：早于此说明模型在编数字，而不是在描述监控录像
     MIN_PLAUSIBLE_EPOCH = datetime(2017, 1, 1, tzinfo=DEFAULT_TIMEZONE).timestamp()
@@ -1030,28 +956,18 @@ class ToolService:
 
         declared_registry_ids = _registry_ids(registryItems)
         if not queryImages or not galleryImages:
-            return {  # 查询图或底图库为空：成功但零配对
-                "ok": True, "matchMode": "image_to_image", "queryType": None, "matches": [],  # 无候选
-                "bestMatchesAscending": [], "missingKeyframeIds": [], "missingRegistryReferenceIds": [],  # 无缺失编号
-                "visualAttempted": True, "totalTrackCount": 0, "scoredTrackCount": 0,  # 轨迹侧计数全为 0
-                "totalRegistryCount": len(declared_registry_ids), "visualRegistryCount": 0,  # 只记录声明的库项数
-                "scoredRegistryCount": 0, "registryCoverageRatio": 0.0,  # 未比对任何库项
-                "pairCoverageRatio": 0.0, "registryCoverageComplete": False,  # 覆盖不完整
-                "matchThresholds": self._match_thresholds("image"),  # 本轮阈值
-                "hint": "queryImages 或 galleryImages 为空",  # 给模型的原因
+            return {
+                "ok": True,
+                "matches": [],
+                "unscoredTrackIds": [],
+                "registryCoverageComplete": False,
             }
 
-        # 有本地路径但没有向量编号的图，也允许进入现场编码流程。
-        def _has_path(item: dict[str, Any], keys: tuple[str, ...]) -> bool:
-            return any(item.get(key) for key in keys)
         def _is_keyframe(item: dict[str, Any]) -> bool:
-            return item.get("trackId") is not None and (
-                item.get("keyframeVectorId") is not None or _has_path(item, ("keyframePath", "imagePath", "path"))
-            )
+            return item.get("trackId") is not None and item.get("keyframeId") is not None
+
         def _is_reference(item: dict[str, Any]) -> bool:
-            return item.get("registryId") is not None and (
-                item.get("registryVectorId") is not None or _has_path(item, ("imagePath", "keyframePath", "path"))
-            )
+            return item.get("registryId") is not None and item.get("referenceId") is not None
 
         query_keyframes = [item for item in queryImages if _is_keyframe(item)]
         query_references = [item for item in queryImages if _is_reference(item)]
@@ -1060,89 +976,77 @@ class ToolService:
         query_is_registry = bool(query_references) and bool(gallery_keyframes)
         query_is_track = (not query_is_registry) and bool(query_keyframes) and bool(gallery_references)
         if not query_is_track and not query_is_registry:
-            return {  # 两侧图片类型不配对：必须一边关键帧、一边库参考图
-                "ok": False, "error": "one_keyframe_side_and_one_registry_side_required",  # 调用失败及原因
-                "matchMode": "image_to_image", "matches": [], "bestMatchesAscending": [],  # 无候选
-                "visualAttempted": True, "matchThresholds": self._match_thresholds("image"),  # 已尝试视觉匹配与阈值
-                "hint": f"query: kf={len(query_keyframes)} ref={len(query_references)}; gallery: kf={len(gallery_keyframes)} ref={len(gallery_references)}",  # 两侧图片数量
+            return {
+                "ok": False,
+                "error": "one_keyframe_side_and_one_registry_side_required",
+                "matches": [],
+                "unscoredTrackIds": [],
+                "registryCoverageComplete": False,
             }
         keyframes = query_keyframes if query_is_track else gallery_keyframes
         references = gallery_references if query_is_track else query_references
 
-        frame_vectors, recovered_frames = self._ensure_image_vectors(
-            keyframes, vector_key="keyframeVectorId", path_keys=("keyframePath", "imagePath", "path"),
-            index=self.vectors.keyframes,
+        frame_vectors = self._load_indexed_vectors(
+            keyframes, vector_key="keyframeVectorId", index=self.vectors.keyframes
         )
-        reference_vectors, recovered_refs = self._ensure_image_vectors(
-            references, vector_key="registryVectorId", path_keys=("imagePath", "keyframePath", "path"),
-            index=self.vectors.registry,
+        reference_vectors = self._load_indexed_vectors(
+            references, vector_key="registryVectorId", index=self.vectors.registry
         )
-        missing_keyframes = [item.get("keyframeId") for item in keyframes if item.get("keyframeVectorId") is None or int(item["keyframeVectorId"]) not in frame_vectors]
-        missing_references = [item.get("referenceId") for item in references if item.get("registryVectorId") is None or int(item["registryVectorId"]) not in reference_vectors]
         frames_by_track = self._group(keyframes, "trackId")
         refs_by_registry = self._group(references, "registryId")
         visual_registry_ids = {str(key) for key in refs_by_registry}
         all_registry_ids = declared_registry_ids or list(visual_registry_ids)
         total_registry_count = len(all_registry_ids)
 
-        all_matches: list[dict[str, Any]] = []
-        scored_pairs = 0
-        scored_registry_ids: set[str] = set()
+        best_by_track: dict[str, dict[str, Any]] = {}
         compared_by_track: dict[str, set[str]] = {str(track_id): set() for track_id in frames_by_track}
         for track_id, track_frames in frames_by_track.items():
             for registry_id, registry_refs in refs_by_registry.items():
                 frame_scores = []
                 for frame in track_frames:
                     vid = frame.get("keyframeVectorId")
-                    if vid is None or frame_vectors.get(int(vid)) is None:
+                    if vid is None or frame_vectors.get(vid) is None:
                         continue
-                    frame_vector = frame_vectors[int(vid)]
+                    frame_vector = frame_vectors[vid]
                     candidates = []
                     for reference in registry_refs:
                         rid = reference.get("registryVectorId")
-                        if rid is None or reference_vectors.get(int(rid)) is None:
+                        if rid is None or reference_vectors.get(rid) is None:
                             continue
-                        candidates.append((float(np.dot(frame_vector, reference_vectors[int(rid)])), reference))
+                        candidates.append((float(np.dot(frame_vector, reference_vectors[rid])), reference))
                     if candidates:
                         score, reference = max(candidates, key=lambda item: item[0])
                         frame_scores.append((score, frame, reference))
-                        scored_pairs += 1
                 top = sorted(frame_scores, key=lambda item: item[0], reverse=True)[:2]
                 if not top:
                     continue
                 registry_text = str(registry_id)
                 compared_by_track[str(track_id)].add(registry_text)
-                scored_registry_ids.add(registry_text)
                 score = float(np.mean([item[0] for item in top]))
                 matched_keyframes = [item[1]["keyframeId"] for item in top]
-                matched_references = list(dict.fromkeys(item[2]["referenceId"] for item in top))
-                all_matches.append({
-                    "matchedTrackId": track_id, "matchedRegistryId": registry_id,
+                matched_references = list(dict.fromkeys(
+                    item[2]["referenceId"] for item in top if item[2].get("referenceId")
+                ))
+                candidate = {
+                    "matchedTrackId": str(track_id),
                     "embeddingScore": round(score, 6), "scoreBand": self._band(score, "image"),
-                    "queryKeyframeIds": matched_keyframes if query_is_track else [],
-                    "queryRegistryReferenceIds": matched_references if query_is_registry else [],
                     "matchedKeyframeIds": matched_keyframes, "matchedRegistryReferenceIds": matched_references,
-                })
+                }
+                if (
+                    str(track_id) not in best_by_track
+                    or candidate["embeddingScore"] > best_by_track[str(track_id)]["embeddingScore"]
+                ):
+                    best_by_track[str(track_id)] = candidate
 
         # 核心语义：每条轨迹先对所有库项比较，再只保留该轨迹的最高匹配分。
-        best_by_track: dict[str, dict[str, Any]] = {}
-        for item in all_matches:
-            tid = str(item.get("matchedTrackId"))
-            if tid not in best_by_track or item["embeddingScore"] > best_by_track[tid]["embeddingScore"]:
-                best_by_track[tid] = dict(item)
-        matches = []
-        for tid, item in best_by_track.items():
-            compared_count = len(compared_by_track.get(tid, set()))
-            complete = total_registry_count > 0 and compared_count == total_registry_count
-            raw_band = str(item.get("scoreBand") or "uncertain")
-            item.update({
-                "rawScoreBand": raw_band, "comparedRegistryCount": compared_count,
-                "totalRegistryCount": total_registry_count, "registryCoverageComplete": complete,
-                "coverageLimited": not complete,
-            })
-            if raw_band == "mismatch" and not complete:
+        matches = list(best_by_track.values())
+        for item in matches:
+            track_id = item["matchedTrackId"]
+            if (
+                len(compared_by_track[track_id]) != total_registry_count
+                and item["scoreBand"] == "mismatch"
+            ):
                 item["scoreBand"] = "uncertain"
-            matches.append(item)
         matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
         if topK is not None:
             try:
@@ -1151,50 +1055,15 @@ class ToolService:
                 match_limit = 0
             if match_limit > 0:
                 matches = matches[:match_limit]
-        best_ascending = sorted((dict(item) for item in matches), key=lambda item: item["embeddingScore"])
-
-        confirmed = [m for m in matches if m.get("scoreBand") == "match"]
-        uncertain = [m for m in matches if m.get("scoreBand") == "uncertain"]
-        mismatch = [m for m in matches if m.get("scoreBand") == "mismatch"]
-        total_track_count = len(frames_by_track)
-        scored_track_count = len(best_by_track)
-        expected_pairs = total_track_count * total_registry_count
-        compared_pair_count = sum(len(value) for value in compared_by_track.values())
-        coverage_ratio = (len(scored_registry_ids) / total_registry_count) if total_registry_count else 0.0
-        pair_coverage_ratio = (compared_pair_count / expected_pairs) if expected_pairs else 0.0
-        fully_compared = [tid for tid, ids in compared_by_track.items() if total_registry_count > 0 and len(ids) == total_registry_count]
         unscored_track_ids = [str(tid) for tid in frames_by_track if str(tid) not in best_by_track]
-        unscored_registry_ids = [rid for rid in all_registry_ids if rid not in scored_registry_ids]
-        unrepresented_registry_ids = [rid for rid in all_registry_ids if rid not in visual_registry_ids]
-        registry_coverage_complete = bool(total_registry_count) and len(fully_compared) == total_track_count and total_track_count > 0
-        hint = None
-        if not matches:
-            if missing_references and not reference_vectors:
-                hint = "库参考图向量均未命中索引且无法从 imagePath 编码"
-            elif missing_keyframes and not frame_vectors:
-                hint = "关键帧向量均未命中索引且无法从 keyframePath 编码"
-            else:
-                hint = "完成比对但无有效配对"
-        elif not registry_coverage_complete:
-            hint = "先验库视觉覆盖不完整，低分结果仅能列为待确认，不能判定未在库"
-        elif not confirmed and uncertain:
-            hint = f"最高分未达 image_match 确认阈值，仅 {len(uncertain)} 条灰区；勿将 uncertain 直接当作确认出现"
+        registry_coverage_complete = bool(total_registry_count and frames_by_track) and all(
+            len(ids) == total_registry_count for ids in compared_by_track.values()
+        )
         return {
-            "ok": True, "matchMode": "image_to_image", "queryType": "track" if query_is_track else "registry",  # 调用成功与查询方向
-            "matches": matches, "bestMatchesAscending": best_ascending,  # 按分数降序/升序的配对
-            "confirmedMatches": confirmed, "uncertainMatches": uncertain, "mismatchCount": len(mismatch),  # 三档拆分
-            "missingKeyframeIds": missing_keyframes, "missingRegistryReferenceIds": missing_references,  # 无法编码的图片
-            "recoveredKeyframeCount": recovered_frames, "recoveredRegistryReferenceCount": recovered_refs,  # 现场补编码的数量
-            "queryReferenceCount": len(references), "galleryKeyframeCount": len(keyframes),  # 参考图/关键帧数量
-            "scoredPairCount": scored_pairs, "trackRegistryComparisonCount": compared_pair_count,  # 实际比对与计分的配对数
-            "expectedTrackRegistryPairCount": expected_pairs, "totalTrackCount": total_track_count,  # 理论配对数与轨迹数
-            "scoredTrackCount": scored_track_count, "totalRegistryCount": total_registry_count,  # 有分数的轨迹数与库项数
-            "visualRegistryCount": len(visual_registry_ids), "scoredRegistryCount": len(scored_registry_ids),  # 有图的库项与已比对库项
-            "registryCoverageRatio": round(coverage_ratio, 6), "pairCoverageRatio": round(pair_coverage_ratio, 6),  # 库项覆盖率和配对覆盖率
-            "registryCoverageComplete": registry_coverage_complete, "unscoredTrackIds": unscored_track_ids,  # 覆盖是否完整与未评分轨迹
-            "unscoredRegistryIds": unscored_registry_ids, "unrepresentedRegistryIds": unrepresented_registry_ids,  # 未比对/无图的库项
-            "fullyComparedTrackIds": fully_compared, "visualAttempted": True,  # 已和全部库项比过的轨迹
-            "matchThresholds": self._match_thresholds("image"), "hint": hint,  # 阈值与给模型的提示
+            "ok": True,
+            "matches": matches,
+            "unscoredTrackIds": unscored_track_ids,
+            "registryCoverageComplete": registry_coverage_complete,
         }
 
     # ------------------------------------------------------------------ #
@@ -1218,37 +1087,30 @@ class ToolService:
         registry_reference_ids = list(dict.fromkeys(str(value) for value in (registry_reference_ids or []) if value))
         generated_segments: list[str] = []
         shown_keyframes = list(keyframe_ids)
-        track_summaries: list[dict[str, Any]] = []
         for track_id in track_ids:
             frames = self._build_frames([track_id]).get("keyframes", [])
             if frames:
                 selected = frames[: self.MAX_FRAMES_PER_TRACK]
+                # 该轨迹展示的关键帧
                 shown_keyframes.extend(str(frame["keyframeId"]) for frame in selected)
             clip = self._build_clip(track_id, scope)
             if clip.get("ok") and clip.get("found") and clip.get("shipSegmentId"):
+                # 该轨迹生成的视频片段
                 generated_segments.append(str(clip["shipSegmentId"]))
-            track_summaries.append({
-                "trackId": track_id,  # 轨迹编号
-                "keyframeIds": [str(frame["keyframeId"]) for frame in frames[: self.MAX_FRAMES_PER_TRACK]],  # 该轨迹展示的关键帧
-                "shipSegmentIds": [str(clip["shipSegmentId"])] if clip.get("shipSegmentId") else [],  # 该轨迹生成的片段
-            })
         shown_keyframes = list(dict.fromkeys(shown_keyframes))[:limit * self.MAX_FRAMES_PER_TRACK]
         shown_segments = list(dict.fromkeys(generated_segments))[:limit]
         shown_references = self._representative_registry_reference_ids(registry_reference_ids)[:limit]
         return {
             "ok": True,  # 调用成功
-            "displayId": f"display-{uuid.uuid4().hex[:12]}",  # 本次展示的编号
             "shownKeyframeIds": shown_keyframes,  # 展示的关键帧编号
             "shownShipSegmentIds": shown_segments,  # 展示的视频片段编号
             "shownRegistryReferenceIds": shown_references,  # 展示的库参考图编号
             "trackIds": track_ids,  # 汇总的轨迹编号
-            "trackSummaries": track_summaries,  # 每条轨迹的关键帧与片段
             "statistics": {  # 展示数量统计
                 "trackCount": len(track_ids),  # 轨迹数
                 "keyframeCount": len(shown_keyframes),  # 关键帧数
                 "clipCount": len(shown_segments),  # 片段数
                 "registryReferenceCount": len(shown_references),  # 参考图数
-                "totalEvidenceCount": len(shown_keyframes) + len(shown_segments) + len(shown_references),  # 证据总数
             },
         }
 
@@ -1282,30 +1144,23 @@ class ToolService:
             frames = group.get("keyframes", [])
             valid_frames: list[dict[str, Any]] = []
             for frame in frames:
-                if not isinstance(frame, dict) or (
-                    frame.get("keyframeVectorId") is None
-                    and not any(frame.get(key) for key in ("keyframePath", "imagePath", "path"))
-                ):
+                if not isinstance(frame, dict) or frame.get("keyframeVectorId") is None:
                     continue
                 normalized_frame = dict(frame)
-                if normalized_frame.get("keyframeVectorId") is not None:
-                    try:
-                        normalized_frame["keyframeVectorId"] = int(normalized_frame["keyframeVectorId"])
-                    except (TypeError, ValueError):
-                        normalized_frame["keyframeVectorId"] = None
+                try:
+                    normalized_frame["keyframeVectorId"] = int(normalized_frame["keyframeVectorId"])
+                except (TypeError, ValueError):
+                    continue
                 valid_frames.append(normalized_frame)
             candidates[track_id] = valid_frames
         track_map = {str(item["trackId"]): item for item in tracks}
         frames = [frame for group in candidates.values() for frame in group]
-        vectors, _ = self._ensure_image_vectors(
-            frames,
-            vector_key="keyframeVectorId",
-            path_keys=("keyframePath", "imagePath", "path"),
-            index=self.vectors.keyframes,
+        vectors = self._load_indexed_vectors(
+            frames, vector_key="keyframeVectorId", index=self.vectors.keyframes
         )
         selected, missing = {}, []
         for track_id, frames in candidates.items():
-            available = [frame for frame in frames if int(frame["keyframeVectorId"]) in vectors]
+            available = [frame for frame in frames if frame["keyframeVectorId"] in vectors]
             selected[track_id] = sorted(
                 available,
                 key=lambda item: float(item.get("retentionScore") or 0.0),
@@ -1333,69 +1188,21 @@ class ToolService:
         high_groups = self._complete_link(track_ids, track_map, pair_scores, high)
         low_groups = self._complete_link(track_ids, track_map, pair_scores, low)
 
-        def _group_minimum_score(group: list[str]) -> float | None:
-            values = [
-                pair_scores.get(tuple(sorted((left_id, right_id))))
-                for index, left_id in enumerate(group)
-                for right_id in group[index + 1:]
-            ]
-            available = [float(value) for value in values if value is not None]
-            return round(min(available), 6) if available else None
-
-        confirmed_merge_groups = [
-            {
-                "groupId": f"confirmed-{index + 1}",
-                "status": "confirmed",
-                "trackIds": list(group),
-                "minimumScore": _group_minimum_score(group),
-                "threshold": high,
-            }
-            for index, group in enumerate(high_groups)
-            if len(group) > 1
-        ]
-        pending_merge_groups = []
-        for group in low_groups:
-            group_set = set(group)
-            current_groups = [list(item) for item in high_groups if set(item).issubset(group_set)]
-            if len(current_groups) <= 1:
-                continue
-            pending_merge_groups.append({
-                "groupId": f"pending-{len(pending_merge_groups) + 1}",
-                "status": "pending",
-                "trackIds": list(group),
-                "currentGroups": current_groups,
-                "minimumScore": _group_minimum_score(group),
-                "thresholdRange": [low, high],
-                "possibleReduction": len(current_groups) - 1,
-            })
-
-        gray = [{"trackIds": list(pair), "embeddingScore": round(score, 6)} for pair, score in pair_scores.items() if low < score < high]
+        # 高阈值只接受确定合并，因此对应保守（较大）船数；低阈值纳入待确认合并，对应最小船数。
+        pending_merge_count = 0
+        for low_group in low_groups:
+            low_group_ids = set(low_group)
+            high_group_count = sum(
+                set(high_group).issubset(low_group_ids) for high_group in high_groups
+            )
+            pending_merge_count += high_group_count > 1
         status = "incomplete" if missing else "stable" if len(high_groups) == len(low_groups) else "sensitive"
-        scores = [{"trackIds": list(pair), "embeddingScore": round(score, 6)} for pair, score in sorted(pair_scores.items())]
         return {
-            "ok": True,  # 调用成功
-            "trackCount": len(tracks),  # 参与去重的轨迹数
-            # 高阈值只接受确定合并，因此对应保守（较大）船数；低阈值纳入待确认合并，对应最小船数。
-            "minimumShipCount": len(low_groups),  # 低阈值下的最少船数
-            "confirmedShipCount": len(high_groups),  # 高阈值下确认的船数
-            "maximumShipCount": len(high_groups),  # 最大船数（等于确认船数）
-            "highThresholdShipCount": len(high_groups),  # 高阈值船数（别名）
-            "lowThresholdShipCount": len(low_groups),  # 低阈值船数（别名）
-            "confirmedMergeCount": len(confirmed_merge_groups),  # 确认合并组数
-            "pendingMergeCount": len(pending_merge_groups),  # 待确认合并组数
-            "confirmedReduction": len(tracks) - len(high_groups),  # 确认合并减少的轨迹数
-            "pendingReduction": len(high_groups) - len(low_groups),  # 待确认合并还能再减少的数
-            "countStability": status,  # stable / sensitive / incomplete
-            "highThreshold": high,  # 高阈值
-            "lowThreshold": low,  # 低阈值
-            "highGroups": high_groups,  # 高阈值分组结果
-            "lowGroups": low_groups,  # 低阈值分组结果
-            "confirmedMergeGroups": confirmed_merge_groups,  # 确认合并明细
-            "pendingMergeGroups": pending_merge_groups,  # 待确认合并明细
-            "pairScores": scores,  # 全部轨迹对的相似度
-            "grayPairs": gray,  # 落在灰区的轨迹对
-            "unsearchableTrackIds": missing,  # 无可用关键帧、无法比对的轨迹
-            "unresolvedTrackIds": [],  # 预留：尚未定论的轨迹
+            "highGroups": high_groups,
+            "lowGroups": low_groups,
+            "pendingMergeCount": pending_merge_count,
+            "countStability": status,
+            "unsearchableTrackIds": missing,
         }
 
     # ------------------------------------------------------------------ #
@@ -1431,101 +1238,35 @@ class ToolService:
         visit(value)
         return records
 
-    # 11.2 缺失向量时现场编码并写回索引
-    def _ensure_image_vectors(
+    # 11.2 读取已存在的图像向量
+    def _load_indexed_vectors(
         self,
         records: list[dict[str, Any]],
         *,
         vector_key: str,
-        path_keys: tuple[str, ...],
         index: Any,
-    ) -> tuple[dict[int, np.ndarray], int]:
-        """先读 FAISS；缺失时按本地图片路径现场编码并写回索引。"""
-        # 对“有图片路径但无持久向量编号”的记录分配本轮临时负编号，使其也能现场编码。
-        temporary_ids: list[int] = []
+    ) -> dict[int, np.ndarray]:
+        """只读取已有向量；缺失项保持不可检索，由调用方标记覆盖不完整。"""
+        ids = []
         for item in records:
-            if not isinstance(item, dict) or item.get(vector_key) is None:
+            if not isinstance(item, dict) or item.get(vector_key) in (None, ""):
                 continue
             try:
-                value = int(item[vector_key])
+                vector_id = int(item[vector_key])
             except (TypeError, ValueError):
                 item[vector_key] = None
                 continue
-            item[vector_key] = value
-            if value < 0:
-                temporary_ids.append(value)
-        next_temporary_id = min(temporary_ids, default=0) - 1
-        for item in records:
-            if not isinstance(item, dict) or item.get(vector_key) is not None:
+            if vector_id < 0:
+                item[vector_key] = None
                 continue
-            if any(item.get(key) for key in path_keys):
-                item[vector_key] = next_temporary_id
-                next_temporary_id -= 1
-        ids = [
-            int(item[vector_key])
-            for item in records
-            if isinstance(item, dict) and item.get(vector_key) is not None
-        ]
-        vectors: dict[int, np.ndarray] = {}
-        if ids:
-            try:
-                vectors = dict(index.get_many(ids))
-            except Exception:  # noqa: BLE001 - an unavailable vector index falls back to image encoding.
-                vectors = {}
-        missing_records = [
-            item for item in records
-            if isinstance(item, dict)
-            and item.get(vector_key) is not None
-            and int(item[vector_key]) not in vectors
-        ]
-        recovered = 0
-        if not missing_records:
-            return vectors, recovered
-
-        path_list: list[str] = []
-        id_list: list[int] = []
-        for item in missing_records:
-            path = None
-            for key in path_keys:
-                value = item.get(key)
-                if value:
-                    path = str(value)
-                    break
-            if not path:
-                continue
-            file_path = Path(path)
-            if not file_path.is_file():
-                # 相对路径尝试拼到项目根
-                alt = Path.cwd() / path
-                if alt.is_file():
-                    file_path = alt
-                else:
-                    continue
-            path_list.append(str(file_path))
-            id_list.append(int(item[vector_key]))
-
-        if not path_list:
-            return vectors, recovered
+            item[vector_key] = vector_id
+            ids.append(vector_id)
+        if not ids:
+            return {}
         try:
-            encoded = self.embedder.encode_images(path_list)
-        except Exception:  # noqa: BLE001 - failed embedding leaves the item unsearchable.
-            return vectors, recovered
-        if encoded is None or len(encoded) == 0:
-            return vectors, recovered
-        for vector_id, vector in zip(id_list, encoded):
-            vectors[int(vector_id)] = np.asarray(vector, dtype=np.float32)
-            recovered += 1
-        # 只写回真实（非负）向量编号；临时负编号仅在本轮内存中使用。
-        persistent = [(vector_id, vector) for vector_id, vector in zip(id_list, encoded) if int(vector_id) >= 0]
-        if persistent:
-            try:
-                index.add_many(
-                    [item[0] for item in persistent],
-                    np.asarray([item[1] for item in persistent], dtype=np.float32),
-                )
-            except Exception:  # noqa: BLE001, S110 - index persistence is best effort.
-                pass
-        return vectors, recovered
+            return dict(index.get_many(dict.fromkeys(ids)))
+        except Exception:  # noqa: BLE001 - an unavailable index leaves images unsearchable.
+            return {}
 
     # 11.3 返回本轮的确认/排除/灰区阈值
     def _match_thresholds(self, mode: str) -> dict[str, Any]:

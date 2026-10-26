@@ -19,6 +19,18 @@ REFERENCE_ID_KEYS = (
     "matchedRegistryReferenceIds",
     "queryRegistryReferenceIds",
 )
+TOOL_STATISTIC_KEYS = (
+    "status",
+    "count",
+    "minimumCount",
+    "countComplete",
+    "coverageComplete",
+    "countStability",
+    "uncertainCount",
+    "pendingMergeCount",
+    "trackCount",
+    "unsearchableTrackCount",
+)
 NESTED_KEYS = ("keyframes", "keyframesByTrack", "matches", "registryItems", "registryReferences", "tracks")  # 需要下钻的嵌套容器：工具结果常把明细放在这些键下
 
 
@@ -185,10 +197,12 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
         if not isinstance(result, dict):
             continue
         statistics = result.get("statistics")
+        statistics = dict(statistics) if isinstance(statistics, dict) else {}
+        statistics.update({key: result[key] for key in TOOL_STATISTIC_KEYS if key in result})
         if isinstance(statistics, dict):
             if str(record.get("tool") or "") == "show_evidence":
                 display_statistics = statistics
-            else:
+            elif statistics:
                 query_statistics.update(statistics)
                 query_statistics_by_tool.append({
                     "tool": str(record.get("tool") or ""),

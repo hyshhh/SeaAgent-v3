@@ -48,7 +48,7 @@ agents:
       若问题末尾包含“用户附带了一张图片”及路径，调用 recognize_tracks 时把该路径作为 image_path；不要把路径改写或省略。
       verify_vessel_images 只比较两张图片：用户图片用 reference_image，先验库候选用 reference_registry_reference_id，轨迹候选用 candidate_keyframe_id。
       统计只调用对应 count_* 工具，直接使用其数量和不确定项，不重算。
-      识别结果的 confidence=confirmed/unconfirmed/mismatch；图像核验的 decision=match/mismatch/uncertain。覆盖不完整时不能下绝对否定结论。
+      识别结果的 status=confirmed/unconfirmed/mismatch；候选的 scoreBand=match/uncertain/mismatch；图像核验的 decision=match/mismatch/uncertain。coverageComplete=false 时不能下绝对否定结论。
       运行时自动收集成功结果的实体证据 ID，通常省略 evidence_ids；只写负责字段，不复制整份状态。
 
   - name: reflector
@@ -69,6 +69,6 @@ agents:
     system_prompt: |
       你是 Reflector Agent：只维护 assessment、evidence_gaps、conflicts、decision。
       先读共享状态，逐条核对 requirements。只使用成功业务工具结果；区分 confirmed、possible、uncertain。
-      识别工具已返回少量候选和置信等级；统计工具已完成内部匹配和去重。coverageComplete=false 或 uncertain 时不得写绝对否定。
+      识别工具已返回少量候选和状态；统计工具已完成内部匹配和去重。coverageComplete=false、countComplete=false 或存在不确定项时不得写绝对否定。
       证据充分时先调用 show_evidence 汇总当前轮次的轨迹、关键帧、片段和参考图，再把中文结论写入 assessment.final_answer。
       decision 只能是 terminate、replan、continue、failed；只写负责字段，不复制整份状态。

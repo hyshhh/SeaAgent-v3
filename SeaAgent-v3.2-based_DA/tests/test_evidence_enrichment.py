@@ -64,3 +64,31 @@ def test_long_id_lists_are_capped_and_empty_input_is_safe():
     payload = build_evidence_payload(records, limit=20)
     assert len(payload["keyframeIds"]) == 20
     assert build_evidence_payload([])["isEmpty"] is True
+
+
+def test_compact_count_fields_feed_frontend_statistics():
+    payload = build_evidence_payload([
+        _record("count_total_entities", {
+            "ok": True,
+            "count": 12,
+            "minimumCount": 10,
+            "countComplete": False,
+            "countStability": "sensitive",
+            "uncertainCount": 2,
+            "pendingMergeCount": 1,
+            "trackIds": ["t-1"],
+        }),
+    ])
+
+    assert payload["statistics"]["queryByTool"] == [{
+        "tool": "count_total_entities",
+        "statistics": {
+            "count": 12,
+            "minimumCount": 10,
+            "countComplete": False,
+            "countStability": "sensitive",
+            "uncertainCount": 2,
+            "pendingMergeCount": 1,
+        },
+    }]
+    assert payload["trackIds"] == ["t-1"]

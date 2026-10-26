@@ -16,6 +16,96 @@ REPEAT_HINT = (
     "该工具与参数已调用过。请使用返回结果或调整参数；不要重复相同调用。"
 )
 _REPEAT_CLOSEOUT_MESSAGE = "相同工具和参数已调用 4 次；已进入状态收尾，本次调用未执行。"
+_MODEL_RESULT_FIELDS = {
+    "recognize_tracks": (
+        "ok", "status", "matches", "coverageComplete", "nextStep",
+    ),
+    "match_registry_tracks": (
+        "ok", "status", "matches", "coverageComplete", "registryFound",
+    ),
+    "verify_vessel_images": (
+        "ok", "decision", "facts", "registryReferenceId", "keyframeId",
+    ),
+    "count_total_entities": (
+        "ok", "count", "minimumCount", "countComplete", "coverageComplete",
+        "countStability", "uncertainCount", "pendingMergeCount",
+    ),
+    "count_registry_entities": (
+        "ok", "count", "countComplete", "coverageComplete", "countStability",
+        "uncertainCount", "pendingMergeCount",
+    ),
+    "count_unregistered_entities": (
+        "ok", "count", "countComplete", "coverageComplete", "countStability",
+        "uncertainCount", "pendingMergeCount",
+    ),
+    "show_evidence": (
+        "ok", "shownKeyframeIds", "shownShipSegmentIds",
+        "shownRegistryReferenceIds", "trackIds", "statistics",
+    ),
+}
+_MATCH_FIELDS = (
+    "trackId", "startTimeText", "endTimeText", "hullNumber", "description",
+        "scoreBand", "keyframeIds", "registryReferenceIds",
+)
+
+
+def _payload(response: Any) -> Any:
+    value = getattr(response, "content", response)
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _model_result(name: str, result: Any) -> Any:
+    if name not in _MODEL_RESULT_FIELDS or not isinstance(result, dict):
+        return result
+    if result.get("ok") is False:
+        fields = ("ok", "error", "errorType", "tool", "timeoutSeconds", "hint", "decision", "registryReferenceId", "keyframeId")
+        compact = {key: result[key] for key in fields if result.get(key) is not None}
+        if "hint" in compact:
+            compact["hint"] = str(compact["hint"])[:400]
+        return compact
+    compact = {key: result[key] for key in _MODEL_RESULT_FIELDS[name] if key in result}
+    if name.startswith("count_"):
+        for key, limit in (("trackIds", 3), ("keyframeIds", 6), ("registryReferenceIds", 3)):
+            values = result.get(key)
+            if isinstance(values, list) and values:
+                compact[key] = values[:limit]
+    elif name == "recognize_tracks":
+        compact["searchedTrackCount"] = result.get("searchedTrackCount", 0)
+        compact["unsearchableTrackCount"] = result.get("unsearchableTrackCount", 0)
+    matches = compact.get("matches")
+    if isinstance(matches, list):
+        compact["matches"] = [
+            {key: match[key] for key in _MATCH_FIELDS if key in match}
+            for match in matches[:4]
+            if isinstance(match, dict)
+        ]
+    if isinstance(compact.get("facts"), list):
+        compact["facts"] = [str(fact)[:160] for fact in compact["facts"][:3]]
+    return compact
+
+
+def _model_message(request: Any, response: Any, result: Any) -> Any:
+    call = request.tool_call
+    name = str(call.get("name") or "")
+    if name not in _MODEL_RESULT_FIELDS or not isinstance(result, dict):
+        return response
+    compact = _model_result(name, result)
+    if compact == result:
+        return response
+    previous = getattr(response, "artifact", None)
+    artifact = dict(previous) if isinstance(previous, dict) else {}
+    artifact["full_result"] = result
+    return _message(
+        request,
+        json.dumps(compact, ensure_ascii=False, default=str),
+        status=str(getattr(response, "status", "success") or "success"),
+        artifact=artifact,
+    )
 
 
 class AgentCancelled(RuntimeError):
@@ -128,7 +218,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         artifact = {"replayed": True, "repeat_count": count}
         if record.get("status") == "completed":
             result = record.get("result")
-            payload = {"cached_result": result, "message": REPEAT_HINT}
+            payload = {"cached_result": _model_result(name, result), "message": REPEAT_HINT}
             if record.get("truncated"):
                 payload["truncated"] = True
             content = json.dumps(
@@ -136,14 +226,17 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                 ensure_ascii=False,
                 default=str,
             )
+            artifact["full_result"] = result
             return None, _message(request, content, artifact=artifact)
 
         if record.get("status") == "error":
+            result = record.get("result")
             content = json.dumps(
-                {"cached_error": record.get("result"), "message": REPEAT_HINT},
+                {"cached_error": _model_result(name, result), "message": REPEAT_HINT},
                 ensure_ascii=False,
                 default=str,
             )
+            artifact["full_result"] = result
             return None, _message(request, content, status="error", artifact=artifact)
         return None, _message(request, REPEAT_HINT, artifact=artifact)
 
@@ -189,13 +282,14 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             response = handler(request)
         except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
             self._failed(request, key, error)
-            return _message(
+            result = _error_payload(error)
+            return _model_message(
                 request,
-                json.dumps(_error_payload(error), ensure_ascii=False),
-                status="error",
+                _message(request, json.dumps(result, ensure_ascii=False), status="error"),
+                result,
             )
         self._complete(request, key, response)
-        return response
+        return _model_message(request, response, _payload(response))
 
     async def awrap_tool_call(
         self, request: Any, handler: Callable[[Any], Awaitable[Any]]
@@ -207,10 +301,11 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             response = await handler(request)
         except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
             self._failed(request, key, error)
-            return _message(
+            result = _error_payload(error)
+            return _model_message(
                 request,
-                json.dumps(_error_payload(error), ensure_ascii=False),
-                status="error",
+                _message(request, json.dumps(result, ensure_ascii=False), status="error"),
+                result,
             )
         self._complete(request, key, response)
-        return response
+        return _model_message(request, response, _payload(response))

@@ -1381,14 +1381,15 @@ function renderEvidence(evidence) {
     ['Items', `${shown}/${total}`],
     ['Breakdown', groups.filter(([key]) => Array.isArray(evidence?.[key]) && evidence[key].length)
       .map(([key, label]) => `${label} ${evidence[key].length}`).join(' · ') || '—'],
-    ['Display', String(evidence?.displayId || '—')],
     ['Retrieved by', tools.length ? tools.join(', ') : '—'],
   ];
   const statistics = evidence?.statistics || {};
   const queryStatistics = statistics.query || statistics;
   const queryByTool = Array.isArray(statistics.queryByTool) ? statistics.queryByTool : [];
   const statLabels = {
-    count: 'Count', countType: 'Count type', searchedTrackCount: 'Tracks searched', entityCount: 'Entities',
+    status: 'Recognition status', count: 'Count', minimumCount: 'Minimum count',
+    countComplete: 'Count complete', coverageComplete: 'Search complete',
+    countType: 'Count type', searchedTrackCount: 'Tracks searched', candidateCount: 'Candidates', entityCount: 'Entities',
     minimumEntityCount: 'Minimum entities', maximumEntityCount: 'Maximum entities',
     inRegistryCount: 'In registry', unregisteredCount: 'Not in registry',
     uncertainCount: 'Uncertain', confirmedCount: 'Confirmed',
@@ -1403,7 +1404,7 @@ function renderEvidence(evidence) {
   for (const item of statsToShow) {
     const values = Object.entries(item.values)
       .filter(([key, value]) => statLabels[key] && value !== undefined && value !== null)
-      .map(([key, value]) => `${statLabels[key]}: ${key === 'countIsUpperBound' ? (value ? 'Yes' : 'No') : String(value)}`);
+      .map(([key, value]) => `${statLabels[key]}: ${['countIsUpperBound', 'countComplete', 'coverageComplete'].includes(key) ? (value ? 'Yes' : 'No') : String(value)}`);
     if (values.length) {
       facts.push([item.tool ? displayToolLabel(item.tool) : 'Query statistics', values.join(' · ')]);
     }

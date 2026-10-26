@@ -43,6 +43,9 @@ def _tool_calls(message: Any) -> list[dict[str, Any]]:
 
 # 1.5 将工具结果正文还原为结构化载荷
 def _parse_payload(value: Any) -> Any:
+    artifact = getattr(value, "artifact", None)
+    if isinstance(artifact, dict) and "full_result" in artifact:
+        return artifact["full_result"]
     content = _content(value)
     if not isinstance(content, str):
         return content

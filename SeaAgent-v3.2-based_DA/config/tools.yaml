@@ -5,8 +5,8 @@ tools:
     description: >-
       在轨迹记忆内部完成舷号、目标名称/别名、外观描述或图片检索。用户用名称指代目标（如“小红”）时填 hull_number；纯外观描述用 description。
       省略 time_range 表示全部监控时间；有时间段时只搜该范围。
-      工具内部分页、筛选关键帧并返回少量候选，不返回原始轨迹明细。confidence 为 confirmed、unconfirmed 或 mismatch；
-      scoreBand 为 match、uncertain 或 mismatch。舷号/别名未确认时返回 nextStep=match_registry_tracks；覆盖不完整时不得把无候选说成未出现。
+      返回 status、少量候选及 coverageComplete；候选含 scoreBand、分数、时间和证据 ID，不返回原始轨迹。
+      舷号/别名未确认时返回 nextStep=match_registry_tracks；覆盖不完整时不得把无候选说成未出现。
     arguments:
       hull_number: {type: string, required: false, target: hullNumber, description: 可选舷号或目标别名；纯外观描述请用 description。}
       description: {type: string, required: false, description: 可选外观描述，例如颜色、船型和固定结构。}
@@ -19,7 +19,7 @@ tools:
     method: matchRegistryTracks
     description: >-
       仅用于用户提供的舷号或目标名称/别名。工具内部查找对应先验库参考图，并与范围内轨迹关键帧做视觉 embedding 比对；
-      自动完成分页、取帧和覆盖统计，只返回少量轨迹候选、分数、confidence 和证据 ID。库中有记录不等于视频出现。
+      自动完成分页、视觉匹配和覆盖统计，只返回 status、少量候选和证据 ID。库中有记录不等于视频出现。
     arguments:
       hull_number: {type: string, required: true, target: hullNumber, description: 要比对的舷号或别名。}
       time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间；省略表示全部监控时间。}
@@ -31,7 +31,7 @@ tools:
     description: >-
       只判断两张图片是否为同一艘船。参考图传 reference_image 或先验库返回的 reference_registry_reference_id；
       候选图传 candidate_image 或轨迹结果中的 candidate_keyframe_id。用于核验不确定的图片/先验库候选，不搜索轨迹。
-      返回 match、mismatch 或 uncertain；证据不足或仅颜色相似时返回 uncertain。
+      返回 decision（match、mismatch 或 uncertain）和最多三条简短可见依据；证据不足或仅颜色相似时返回 uncertain。
     arguments:
       reference_image: {type: string, required: false, target: referenceImage, description: 用户提供的已知船舶图片路径；与 reference_registry_reference_id 二选一。}
       reference_registry_reference_id: {type: string, required: false, target: referenceRegistryReferenceId, description: 先验库识别结果中的参考图 ID；与 reference_image 二选一。}
@@ -42,8 +42,8 @@ tools:
     label: 实体总数统计
     method: countTotalEntities
     description: >-
-      在时间范围内读取全部轨迹，在工具内部按视觉相似度去重后统计实体总数；不把原始轨迹列表返回给模型。
-      省略 time_range 表示全部监控时间，结果包含稳定性、覆盖情况和少量证据 ID。
+      在时间范围内按视觉相似度去重并统计实体总数。返回 count、countComplete、countStability、不确定项和少量证据 ID；不返回其他类别计数或轨迹明细。
+      若去重范围不稳定，另返回 minimumCount。省略 time_range 表示全部监控时间。
     arguments:
       time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
 
@@ -51,9 +51,8 @@ tools:
     label: 在库实体统计
     method: countRegistryEntities
     description: >-
-      在时间范围内完成轨迹去重，并在工具内部将实体与先验库参考图做视觉匹配，直接返回在库实体数量及不确定项。
-      省略 time_range 表示全部监控时间。
-      不返回原始轨迹和参考图明细。
+      在时间范围内完成轨迹去重和先验库视觉匹配，只返回在库 count、完整性、不确定项和少量证据 ID。
+      省略 time_range 表示全部监控时间；不返回其他类别计数、轨迹或参考图明细。
     arguments:
       time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
 
@@ -61,8 +60,8 @@ tools:
     label: 不在库实体统计
     method: countUnregisteredEntities
     description: >-
-      在时间范围内完成轨迹去重和先验库视觉比对，直接返回确认不在库的实体数量；覆盖不足或证据不足的实体单列为 uncertain。
-      省略 time_range 表示全部监控时间；不返回原始轨迹列表。
+      在时间范围内完成轨迹去重和先验库视觉比对，只返回确认不在库的 count、完整性、不确定项和少量证据 ID。
+      省略 time_range 表示全部监控时间；不返回其他类别计数或原始轨迹。
     arguments:
       time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
 
@@ -70,8 +69,8 @@ tools:
     label: 证据与统计
     method: showEvidence
     description: >-
-      汇总本轮识别或统计产生的轨迹、关键帧、视频片段和先验库参考图，并生成前端证据统计载荷。
-      传入工具已返回的 track_ids、keyframe_ids 或 registry_reference_ids；工具内部生成片段并只返回 ID、数量和按轨迹摘要。
+      汇总本轮识别或统计产生的轨迹、关键帧、视频片段和先验库参考图。
+      传入已返回的证据 ID；工具内部生成片段，只返回展示 ID 列表和数量，不回传逐轨迹摘要。
     arguments:
       track_ids: {type: string_list, required: false, target: trackIds, description: 识别或统计结果中的轨迹 ID。}
       keyframe_ids: {type: string_list, required: false, target: keyframeIds, description: 识别或统计结果中的关键帧 ID。}
