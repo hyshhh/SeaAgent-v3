@@ -47,11 +47,11 @@ const STEP_KINDS = {
 const TOOL_LABELS = {
   recognize_tracks: 'Direct recognition', match_registry_tracks: 'Registry-assisted recognition',
   verify_vessel_images: 'VLM image check', count_total_entities: 'Total entity count',
-  count_registry_entities: 'Registered entity count', count_unregistered_entities: 'Unregistered entity count',
+  count_entities_by_registry: 'Registry match statistics',
   show_evidence: 'Evidence and statistics',
   '直接识别': 'Direct recognition', '先验库辅助识别': 'Registry-assisted recognition',
   'VLM 图像核验': 'VLM image check', '实体总数统计': 'Total entity count',
-  '在库实体统计': 'Registered entity count', '不在库实体统计': 'Unregistered entity count',
+  '在库实体匹配统计': 'Registry match statistics',
   '证据与统计': 'Evidence and statistics',
   '读取技能正文': 'Read skill file',
   '技能目录': 'Skill directory',
@@ -238,7 +238,7 @@ function renderSharedState(state) {
   const rendered = STATE_GROUPS.map((group) => {
     const rows = group.keys.filter((key) => Object.prototype.hasOwnProperty.call(state, key)).map((key) => {
       const value = formatSharedStateValue(state[key]);
-      return `<div class="qa-state-field"><dt>${escapeHtml(stateKeyLabel(key))}</dt><dd>${escapeHtml(value)}</dd></div>`;
+      return `<div class="qa-state-field" data-key="${escapeHtml(key)}"><dt>${escapeHtml(stateKeyLabel(key))}</dt><dd>${escapeHtml(value)}</dd></div>`;
     }).join('');
     return rows ? `<section class="qa-state-group" data-group="${group.id}"><h3>${escapeHtml(group.title)}</h3><dl>${rows}</dl></section>` : '';
   }).filter(Boolean).join('');
@@ -1345,22 +1345,22 @@ function renderEvidence(evidence) {
   const node = document.getElementById('evidenceGallery');
   if (!node) return;
   const groups = [
-    ['shownTrackIds', 'Tracks', (id) => `<span class="evidence-track-id">${escapeHtml(id)}</span>`],
-    ['shownKeyframeIds', 'Keyframes', (id) => `<a class="evidence-card" href="/api/evidence/keyframes/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/keyframes/${encodeURIComponent(id)}" alt="Keyframe ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
-    ['shownShipSegmentIds', 'Video clips', (id) => `<a class="evidence-card" href="/api/evidence/clips/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/clips/${encodeURIComponent(id)}/poster" alt="Video clip ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
-    ['shownRegistryReferenceIds', 'Registry references', (id) => `<a class="evidence-card" href="/api/evidence/registry/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/registry/${encodeURIComponent(id)}" alt="Registry reference ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
+    ['shownTrackIds', 'trackIds', 'Tracks', (id) => `<span class="evidence-track-id">${escapeHtml(id)}</span>`],
+    ['shownKeyframeIds', 'keyframeIds', 'Keyframes', (id) => `<a class="evidence-card" href="/api/evidence/keyframes/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/keyframes/${encodeURIComponent(id)}" alt="Keyframe ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
+    ['shownShipSegmentIds', 'shipSegmentIds', 'Video clips', (id) => `<a class="evidence-card" href="/api/evidence/clips/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/clips/${encodeURIComponent(id)}/poster" alt="Video clip ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
+    ['shownRegistryReferenceIds', 'registryReferenceIds', 'Registry references', (id) => `<a class="evidence-card" href="/api/evidence/registry/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/registry/${encodeURIComponent(id)}" alt="Registry reference ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
   ];
   const maxItems = Math.max(0, Number(document.getElementById('evidenceMaxItems')?.value || 0));
   let shown = 0;
-  const sections = groups.flatMap(([key, label, render]) => {
-    const sourceKey = key === 'shownTrackIds' && !Array.isArray(evidence?.[key]) ? 'trackIds' : key;
+  const sections = groups.flatMap(([key, fallbackKey, label, render]) => {
+    const sourceKey = Array.isArray(evidence?.[key]) ? key : fallbackKey;
     const source = Array.isArray(evidence?.[sourceKey]) ? evidence[sourceKey] : [];
     const ids = maxItems ? source.slice(0, Math.max(0, maxItems - shown)) : source;
     shown += ids.length;
     return ids.length ? [`<section class="evidence-group"><strong>${label}</strong><div class="evidence-group-grid">${ids.map((id) => render(String(id))).join('')}</div></section>`] : [];
   });
-  const total = groups.reduce((sum, [key]) => {
-    const sourceKey = key === 'shownTrackIds' && !Array.isArray(evidence?.[key]) ? 'trackIds' : key;
+  const total = groups.reduce((sum, [key, fallbackKey]) => {
+    const sourceKey = Array.isArray(evidence?.[key]) ? key : fallbackKey;
     return sum + (Array.isArray(evidence?.[sourceKey]) ? evidence[sourceKey].length : 0);
   }, 0);
   const count = document.getElementById('evidenceResultCount');
@@ -1377,26 +1377,41 @@ function renderEvidence(evidence) {
   // 不再把整段原始 JSON 摊在面板里：换成能一眼看懂的要点。
   // 论文插图里那堆花括号只会占地方，真正要交代的是"有几条、什么 ID、用什么取的"。
   const tools = Array.isArray(evidence?.tools) ? [...new Set(evidence.tools.filter(Boolean))] : [];
+  const matchRows = (Array.isArray(evidence?.displayGroups) ? evidence.displayGroups : [])
+    .filter((group) => group?.registryMatch)
+    .map((group) => {
+      const ids = Array.isArray(group.trackIds) && group.trackIds.length ? group.trackIds : [group.trackId];
+      const object = group.matchedObject && typeof group.matchedObject === 'object' ? group.matchedObject : {};
+      const decision = group.band === 'match' ? 'In registry' : 'Not in registry';
+      const hull = object.hullNumber ? ` · ${object.hullNumber}` : '';
+      const score = Number.isFinite(Number(group.score)) ? Number(group.score).toFixed(3) : 'No score';
+      return `<li><span>${escapeHtml(ids.filter(Boolean).join(', '))}</span><strong>${decision}${escapeHtml(hull)}</strong><em>${score}</em></li>`;
+    });
+  const matchSection = matchRows.length
+    ? `<section class="qa-registry-match-evidence"><strong>Registry match evidence</strong><ul>${matchRows.join('')}</ul></section>`
+    : '';
   const facts = [
     ['Items', `${shown}/${total}`],
-    ['Breakdown', groups.filter(([key]) => Array.isArray(evidence?.[key]) && evidence[key].length)
-      .map(([key, label]) => `${label} ${evidence[key].length}`).join(' · ') || '—'],
+    ['Breakdown', groups.filter(([key, fallbackKey]) => {
+      const source = Array.isArray(evidence?.[key]) ? evidence[key] : evidence?.[fallbackKey];
+      return Array.isArray(source) && source.length;
+    }).map(([key, fallbackKey, label]) => {
+      const source = Array.isArray(evidence?.[key]) ? evidence[key] : evidence?.[fallbackKey];
+      return `${label} ${source.length}`;
+    }).join(' · ') || '—'],
     ['Retrieved by', tools.length ? tools.join(', ') : '—'],
   ];
   const statistics = evidence?.statistics || {};
   const queryStatistics = statistics.query || statistics;
   const queryByTool = Array.isArray(statistics.queryByTool) ? statistics.queryByTool : [];
   const statLabels = {
-    status: 'Recognition status', count: 'Count', minimumCount: 'Minimum count',
-    countComplete: 'Count complete', coverageComplete: 'Search complete',
-    countType: 'Count type', searchedTrackCount: 'Tracks searched', candidateCount: 'Candidates', entityCount: 'Entities',
-    minimumEntityCount: 'Minimum entities', maximumEntityCount: 'Maximum entities',
+    status: 'Recognition status',
+    rawTrackCount: 'Raw tracks', highThresholdCount: 'High-threshold entities', lowThresholdCount: 'Low-threshold entities',
+    coverageComplete: 'Search complete',
+    searchedTrackCount: 'Tracks searched', unsearchableTrackCount: 'Unsearchable tracks',
+    candidateCount: 'Candidates', entityCount: 'Entities',
     inRegistryCount: 'In registry', unregisteredCount: 'Not in registry',
-    uncertainCount: 'Uncertain', confirmedCount: 'Confirmed',
-    unconfirmedCount: 'Unconfirmed', unsearchableTrackCount: 'Unsearchable tracks',
-    pendingMergeCount: 'Possible duplicate groups', countStability: 'Count stability',
-    countConfidence: 'Count confidence', countUncertain: 'Count uncertainty',
-    countIsUpperBound: 'Upper bound',
+    confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',
   };
   const statsToShow = queryByTool.length
     ? queryByTool.map((item) => ({ tool: item.tool, values: item.statistics || {} }))
@@ -1404,7 +1419,7 @@ function renderEvidence(evidence) {
   for (const item of statsToShow) {
     const values = Object.entries(item.values)
       .filter(([key, value]) => statLabels[key] && value !== undefined && value !== null)
-      .map(([key, value]) => `${statLabels[key]}: ${['countIsUpperBound', 'countComplete', 'coverageComplete'].includes(key) ? (value ? 'Yes' : 'No') : String(value)}`);
+      .map(([key, value]) => `${statLabels[key]}: ${key === 'coverageComplete' ? (value ? 'Yes' : 'No') : String(value)}`);
     if (values.length) {
       facts.push([item.tool ? displayToolLabel(item.tool) : 'Query statistics', values.join(' · ')]);
     }
@@ -1417,7 +1432,7 @@ function renderEvidence(evidence) {
     `<div><dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
   node.innerHTML = (sections.length
     ? sections.join('')
-    : '<div class="qa-inspector-empty">No evidence available.</div>') + meta;
+    : '<div class="qa-inspector-empty">No evidence available.</div>') + matchSection + meta;
 }
 
 async function loadAgentMemorySummary(showNotice = false) {

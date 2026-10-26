@@ -27,16 +27,12 @@ _MODEL_RESULT_FIELDS = {
         "ok", "decision", "facts", "registryReferenceId", "keyframeId",
     ),
     "count_total_entities": (
-        "ok", "count", "minimumCount", "countComplete", "coverageComplete",
-        "countStability", "uncertainCount", "pendingMergeCount",
+        "ok", "rawTrackCount", "highThresholdCount", "lowThresholdCount",
+        "coverageComplete",
     ),
-    "count_registry_entities": (
-        "ok", "count", "countComplete", "coverageComplete", "countStability",
-        "uncertainCount", "pendingMergeCount",
-    ),
-    "count_unregistered_entities": (
-        "ok", "count", "countComplete", "coverageComplete", "countStability",
-        "uncertainCount", "pendingMergeCount",
+    "count_entities_by_registry": (
+        "ok", "entityCount", "inRegistryCount", "unregisteredCount",
+        "coverageComplete",
     ),
     "show_evidence": (
         "ok", "shownKeyframeIds", "shownShipSegmentIds",
@@ -102,7 +98,7 @@ def _model_message(request: Any, response: Any, result: Any) -> Any:
         return response
     previous = getattr(response, "artifact", None)
     artifact = dict(previous) if isinstance(previous, dict) else {}
-    artifact["full_result"] = result
+    artifact["full_result"] = compact if name == "count_entities_by_registry" else result
     return _message(
         request,
         json.dumps(compact, ensure_ascii=False, default=str),
@@ -255,13 +251,26 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         failed = getattr(response, "status", "") == "error" or (
             isinstance(result, dict) and result.get("ok") is False
         )
-        self.state.finish_call(key, result, failed)
+        state_result = result
+        if name == "count_entities_by_registry" and not failed and isinstance(result, dict):
+            details = {
+                "matches": [
+                    *result.get("registeredMatches", []),
+                    *result.get("unregisteredMatches", []),
+                ]
+            }
+            try:
+                self.state.store_evidence_artifact(details)
+            except OSError:
+                pass
+            state_result = _model_result(name, result)
+        self.state.finish_call(key, state_result, failed)
         if name not in STATE_TOOLS and name != "read_file":
             self.state.record_tool_result(
                 self.scope,
                 name,
                 str(call.get("id") or ""),
-                result,
+                state_result,
                 "error" if failed else "completed",
             )
         self._save()

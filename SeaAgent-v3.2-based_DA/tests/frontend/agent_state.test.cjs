@@ -84,7 +84,6 @@ test('evidence statistics render even when the query returns no visual items', (
   } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /No evidence available/);
-  assert.match(html, /Count: 0/);
   assert.match(html, /Entities: 0/);
   assert.match(html, /Evidence display/);
 });
@@ -93,13 +92,32 @@ test('compact count result metadata remains visible in the evidence panel', () =
   const ui = page();
   ui.run(`renderEvidence({ statistics: { queryByTool: [{
     tool: 'count_total_entities',
-    statistics: { count: 12, minimumCount: 10, countComplete: false, countStability: 'sensitive', uncertainCount: 2 }
+    statistics: { rawTrackCount: 20, highThresholdCount: 12, lowThresholdCount: 10, coverageComplete: false }
   }] } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
-  assert.match(html, /Count: 12/);
-  assert.match(html, /Minimum count: 10/);
-  assert.match(html, /Count complete: No/);
-  assert.match(html, /Count stability: sensitive/);
+  assert.match(html, /Raw tracks: 20/);
+  assert.match(html, /High-threshold entities: 12/);
+  assert.match(html, /Low-threshold entities: 10/);
+  assert.match(html, /Search complete: No/);
+});
+
+test('registry match evidence displays external match score and object', () => {
+  const ui = page();
+  ui.run(`renderEvidence({ displayGroups: [{
+    trackId: 't-1', trackIds: ['t-1', 't-2'], score: 0.91, band: 'match', registryMatch: true,
+    matchedObject: { hullNumber: '0857' }, keyframeIds: ['kf-1'], registryReferenceIds: ['ref-1']
+  }] });`);
+  const html = ui.elements.get('evidenceGallery').innerHTML;
+  assert.match(html, /Registry match evidence/);
+  assert.match(html, /t-1, t-2/);
+  assert.match(html, /0857/);
+  assert.match(html, /0\.910/);
+});
+
+test('planner shared-state fields use fixed scrollable boxes', () => {
+  assert.match(styles, /qa-state-field\[data-key="plan"\] dd/);
+  assert.match(styles, /height: 120px/);
+  assert.match(styles, /overflow: auto/);
 });
 
 test('skill loading and reading events collapse into one summary row per agent and phase', () => {

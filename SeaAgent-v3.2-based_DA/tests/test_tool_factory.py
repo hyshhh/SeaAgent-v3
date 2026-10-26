@@ -16,8 +16,7 @@ def test_tools_are_config_driven():
         "match_registry_tracks",
         "verify_vessel_images",
         "count_total_entities",
-        "count_registry_entities",
-        "count_unregistered_entities",
+        "count_entities_by_registry",
         "show_evidence",
     ]
     result = tools[0].invoke({"time_range": [1.0, 2.0], "hull_number": "0857"})

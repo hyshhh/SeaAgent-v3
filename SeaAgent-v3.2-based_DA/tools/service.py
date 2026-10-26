@@ -34,8 +34,7 @@ class ToolService:
         "match_registry_tracks": IDENTIFICATION_TIMEOUT_SECONDS,
         "verify_vessel_images": IDENTIFICATION_TIMEOUT_SECONDS,
         "count_total_entities": STATISTICS_TIMEOUT_SECONDS,
-        "count_registry_entities": STATISTICS_TIMEOUT_SECONDS,
-        "count_unregistered_entities": STATISTICS_TIMEOUT_SECONDS,
+        "count_entities_by_registry": STATISTICS_TIMEOUT_SECONDS,
         "show_evidence": EVIDENCE_TIMEOUT_SECONDS,
     }
     MAX_RETURNED_MATCHES = 10
@@ -121,6 +120,7 @@ class ToolService:
     def _load_search_frames(
         self,
         tracks: list[dict[str, Any]],
+        max_frames: int | None = MAX_FRAMES_PER_TRACK,
     ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
         """Keep only a few searchable frames per track; full frame records stay inside the service."""
         grouped: dict[str, list[dict[str, Any]]] = {}
@@ -138,7 +138,9 @@ class ToolService:
                         float(item.get("retentionScore") or 0),
                     ),
                     reverse=True,
-                )[: self.MAX_FRAMES_PER_TRACK]
+                )
+                if max_frames is not None:
+                    frames = frames[:max_frames]
                 if not frames:
                     missing.append(track_id)
                     grouped[track_id] = []
@@ -514,152 +516,120 @@ class ToolService:
     # 五、实体统计                                                             #
     # ------------------------------------------------------------------ #
     # 5.1 去重与库比对后的实体分析
-    def _entity_analysis(self, time_range: tuple[str | float, str | float] | None = None, compare_registry: bool = True) -> dict[str, Any]:
+    def _entity_analysis(
+        self,
+        time_range: tuple[str | float, str | float] | None = None,
+        *,
+        all_keyframes: bool = False,
+    ) -> dict[str, Any]:
         scope, problem = self._validate_time_range(time_range)
         if problem:
             return {"ok": False, "error": "invalid_time_range", "hint": problem}
-        tracks, complete = self._scan_tracks(scope)
-        frames, missing = self._load_search_frames(tracks)
-        dedup = self._deduplicate_tracks(tracks, {track_id: {"keyframes": values} for track_id, values in frames.items()})
-        missing = list(dict.fromkeys(missing + dedup.get("unsearchableTrackIds", [])))
-        groups = dedup.get("highGroups") or [[str(track["trackId"])] for track in tracks]
-        low_groups = dedup.get("lowGroups") or groups
-        pending_merge_count = int(dedup.get("pendingMergeCount") or 0)
-        dedup_stable = str(dedup.get("countStability") or "stable") == "stable"
-        track_by_id = {str(track["trackId"]): track for track in tracks}
-        visual_matches: dict[str, dict[str, Any]] = {}
-        visual: dict[str, Any] = {}
-        registry_items = self.repository.list_registry() if compare_registry else []
-        references = [reference for item in registry_items for reference in item.get("references", []) if isinstance(reference, dict)]
-        if compare_registry and references and frames:
-            visual = self._match_images(
-                queryImages=references,
-                galleryImages=self._flatten_frames(frames),
-                registryItems=registry_items,
-            )
-            visual_matches = {str(item.get("matchedTrackId")): item for item in visual.get("matches", [])}
-        visual_coverage_complete = not compare_registry or not registry_items or bool(
-            references and visual.get("registryCoverageComplete")
+        tracks, scan_complete = self._scan_tracks(scope)
+        frames, missing = self._load_search_frames(
+            tracks,
+            max_frames=None if all_keyframes else self.MAX_FRAMES_PER_TRACK,
         )
-        visual_unscored = {
-            str(value) for value in (visual.get("unscoredTrackIds", []) if compare_registry else [])
-        }
-        registry_hulls = {
-            normalize_hull_number(value)
-            for item in registry_items
-            for value in [item.get("hullNumber"), *(item.get("aliases") or [])]
-            if normalize_hull_number(value)
-        } if compare_registry else set()
-        in_registry = unregistered = uncertain = 0
-        track_ids: list[str] = []
-        keyframe_ids: list[str] = []
-        reference_ids: list[str] = []
-        for group in groups:
-            statuses = []
-            for track_id in group:
-                track_id = str(track_id)
-                track_frames = frames.get(track_id, [])
-                track_ids.append(track_id)
-                keyframe_ids.extend(
-                    str(frame["keyframeId"])
-                    for frame in track_frames[:2]
-                    if frame.get("keyframeId")
-                )
-                if not compare_registry:
-                    continue
-                track = track_by_id.get(track_id, {})
-                hull = normalize_hull_number(track.get("finalHullNumber"))
-                match = visual_matches.get(track_id, {})
-                reference_ids.extend(
-                    str(value) for value in match.get("matchedRegistryReferenceIds", []) if value
-                )
-                hull_frame_match = any(
-                    normalize_hull_number(frame.get("vlmHullNumber")) in registry_hulls
-                    and float(frame.get("readabilityConfidence") or 0) >= 0.75
-                    for frame in track_frames
-                )
-                if hull in registry_hulls or hull_frame_match or match.get("scoreBand") == "match":
-                    statuses.append("in_registry")
-                elif hull or not registry_items or (
-                    visual_coverage_complete
-                    and track_id not in missing
-                    and track_id not in visual_unscored
-                ):
-                    statuses.append("unregistered")
-                else:
-                    statuses.append("uncertain")
-            if compare_registry:
-                if "in_registry" in statuses:
-                    in_registry += 1
-                elif statuses and all(status == "unregistered" for status in statuses):
-                    unregistered += 1
-                else:
-                    uncertain += 1
-        registry_incomplete = compare_registry and bool(registry_items) and (
-            not references or not visual_coverage_complete
-        )
-        count_incomplete = bool(
-            missing or not complete or not dedup_stable or pending_merge_count or registry_incomplete
+        dedup = self._deduplicate_tracks(
+            tracks,
+            {track_id: {"keyframes": values} for track_id, values in frames.items()},
         )
         return {
-            "ok": True,  # 调用成功
-            "entityCount": len(groups),  # 去重后的实体（船）数
-            "minimumEntityCount": len(low_groups),  # 低阈值合并出的最少实体数
-            "trackCount": len(tracks),  # 原始轨迹数
-            "inRegistryCount": in_registry,  # 库内实体数
-            "unregisteredCount": unregistered,  # 库外实体数
-            "uncertainCount": uncertain,  # 归属不确定的实体数
-            "countComplete": not count_incomplete,  # 计数是否完整
-            "countStability": dedup.get("countStability", "stable"),  # 去重稳定性 stable / sensitive / incomplete
-            "pendingMergeCount": pending_merge_count,  # 待确认合并的组数
-            "unsearchableTrackCount": len(missing),  # 缺帧或缺向量、无法检索的轨迹数
-            "trackIds": list(dict.fromkeys(track_ids))[: self.MAX_RETURNED_MATCHES],  # 实体覆盖的轨迹编号（截断）
-            "keyframeIds": list(dict.fromkeys(keyframe_ids))[: self.MAX_RETURNED_MATCHES * self.MAX_FRAMES_PER_TRACK],  # 代表关键帧编号（截断）
-            "registryReferenceIds": list(dict.fromkeys(reference_ids))[: self.MAX_RETURNED_MATCHES],  # 命中的库参考图编号（截断）
+            "ok": True,
+            "tracks": tracks,
+            "frames": frames,
+            "deduplication": dedup,
+            "coverageComplete": scan_complete and not missing,
         }
 
     # 5.2 统计全部实体
     def countTotalEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
-        return self._run_tool(
-            "count_total_entities",
-            lambda: self._entity_count(timeRange, False, "entityCount"),
-        )
+        def count() -> dict[str, Any]:
+            result = self._entity_analysis(timeRange)
+            if not result.get("ok"):
+                return result
+            dedup = result["deduplication"]
+            return {
+                "ok": True,
+                "rawTrackCount": dedup["rawTrackCount"],
+                "highThresholdCount": dedup["highThresholdCount"],
+                "lowThresholdCount": dedup["lowThresholdCount"],
+                "coverageComplete": result["coverageComplete"],
+            }
+
+        return self._run_tool("count_total_entities", count)
 
     # 5.3 统计库内实体
-    def countRegistryEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
-        return self._run_tool(
-            "count_registry_entities",
-            lambda: self._entity_count(timeRange, True, "inRegistryCount"),
-        )
-
     # 5.4 统计库外实体
-    def countUnregisteredEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
-        return self._run_tool(
-            "count_unregistered_entities",
-            lambda: self._entity_count(timeRange, True, "unregisteredCount"),
-        )
+    def countEntitiesByRegistry(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+        def count() -> dict[str, Any]:
+            result = self._entity_analysis(timeRange, all_keyframes=True)
+            if not result.get("ok"):
+                return result
+            frames = result["frames"]
+            groups = result["deduplication"]["lowGroups"]
+            registry_items = self.repository.list_registry()
+            references = [
+                reference
+                for item in registry_items
+                for reference in item.get("references", [])
+                if isinstance(reference, dict)
+            ]
+            visual = self._match_images(
+                queryImages=references,
+                galleryImages=self._flatten_frames(frames),
+                registryItems=registry_items,
+                best_by_max_score=True,
+            ) if references and frames else {}
+            by_track: dict[str, list[dict[str, Any]]] = {}
+            for match in visual.get("matches", []):
+                by_track.setdefault(str(match["matchedTrackId"]), []).append(match)
 
-    # 5.5 计数工具的公共封装
-    def _entity_count(self, time_range: Any, compare_registry: bool, field: str) -> dict[str, Any]:
-        result = self._entity_analysis(time_range, compare_registry)
-        if not result.get("ok"):
-            return result
-        compact = {
-            "ok": True,
-            "count": result[field],
-            "countComplete": result["countComplete"],
-            "countStability": result["countStability"],
-            "uncertainCount": result["uncertainCount"],
-            "pendingMergeCount": result["pendingMergeCount"],
-            "trackCount": result["trackCount"],
-            "unsearchableTrackCount": result["unsearchableTrackCount"],
-            "trackIds": result["trackIds"],
-            "keyframeIds": result["keyframeIds"],
-            "registryReferenceIds": result["registryReferenceIds"],
-        }
-        if field == "entityCount" and result["countStability"] != "stable":
-            compact["minimumCount"] = result["minimumEntityCount"]
-        return compact
+            in_registry = 0
+            registered_matches = []
+            unregistered_matches = []
+            threshold = float(self.settings["image_match"])
+            for group in groups:
+                candidates = [match for track_id in group for match in by_track.get(track_id, [])]
+                best = max(candidates, key=lambda item: float(item["maxEmbeddingScore"])) if candidates else None
+                score = float(best["maxEmbeddingScore"]) if best else None
+                registered = score is not None and score >= threshold
+                in_registry += registered
+                match_object = None
+                if best:
+                    registry_id = str(best["matchedRegistryId"])
+                    item = next((item for item in registry_items if str(item.get("registryId")) == registry_id), {})
+                    match_object = {
+                        "registryId": registry_id,
+                        "hullNumber": str(item.get("hullNumber") or ""),
+                        "registryReferenceId": best.get("bestMatchedRegistryReferenceId"),
+                        "keyframeId": best.get("bestMatchedKeyframeId"),
+                    }
+                detail = {
+                    "trackId": str(group[0]) if group else "",
+                    "trackIds": list(group),
+                    "score": round(score, 6) if score is not None else None,
+                    "matchedObject": match_object,
+                    "keyframeIds": best.get("matchedKeyframeIds", []) if best else [],
+                    "registryReferenceIds": best.get("matchedRegistryReferenceIds", []) if best else [],
+                    "scoreBand": "match" if registered else "mismatch",
+                }
+                (registered_matches if registered else unregistered_matches).append(detail)
+
+            registry_coverage = not result["tracks"] or not registry_items or bool(
+                references and visual.get("registryCoverageComplete")
+            )
+            return {
+                "ok": True,
+                "entityCount": len(groups),
+                "inRegistryCount": in_registry,
+                "unregisteredCount": len(groups) - in_registry,
+                "coverageComplete": result["coverageComplete"] and registry_coverage,
+                "registeredMatches": registered_matches,
+                "unregisteredMatches": unregistered_matches,
+            }
+
+        return self._run_tool("count_entities_by_registry", count)
 
     # epoch 秒的合理下限（2017 年）：早于此说明模型在编数字，而不是在描述监控录像
     MIN_PLAUSIBLE_EPOCH = datetime(2017, 1, 1, tzinfo=DEFAULT_TIMEZONE).timestamp()
@@ -936,6 +906,7 @@ class ToolService:
         galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None,
         topK: int | None = None,
         registryItems: list[dict[str, Any]] | dict[str, Any] | None = None,
+        best_by_max_score: bool = False,
     ) -> dict[str, Any]:
         queryImages = self._flatten_image_records(queryImages)
         galleryImages = self._flatten_image_records(galleryImages)
@@ -997,7 +968,13 @@ class ToolService:
         visual_registry_ids = {str(key) for key in refs_by_registry}
         all_registry_ids = declared_registry_ids or list(visual_registry_ids)
         total_registry_count = len(all_registry_ids)
+        score_key = "maxEmbeddingScore" if best_by_max_score else "embeddingScore"
 
+        registry_hulls = {
+            str(item.get("registryId")): str(item.get("hullNumber") or "")
+            for item in (registryItems if isinstance(registryItems, list) else [registryItems] if registryItems else [])
+            if isinstance(item, dict) and item.get("registryId") is not None
+        }
         best_by_track: dict[str, dict[str, Any]] = {}
         compared_by_track: dict[str, set[str]] = {str(track_id): set() for track_id in frames_by_track}
         for track_id, track_frames in frames_by_track.items():
@@ -1023,19 +1000,23 @@ class ToolService:
                 registry_text = str(registry_id)
                 compared_by_track[str(track_id)].add(registry_text)
                 score = float(np.mean([item[0] for item in top]))
+                max_score = float(top[0][0])
                 matched_keyframes = [item[1]["keyframeId"] for item in top]
                 matched_references = list(dict.fromkeys(
                     item[2]["referenceId"] for item in top if item[2].get("referenceId")
                 ))
                 candidate = {
                     "matchedTrackId": str(track_id),
+                    "matchedRegistryId": registry_text,
+                    "matchedHullNumber": registry_hulls.get(registry_text, ""),
                     "embeddingScore": round(score, 6), "scoreBand": self._band(score, "image"),
+                    "maxEmbeddingScore": round(max_score, 6),
+                    "bestMatchedKeyframeId": str(top[0][1].get("keyframeId") or ""),
+                    "bestMatchedRegistryReferenceId": str(top[0][2].get("referenceId") or ""),
                     "matchedKeyframeIds": matched_keyframes, "matchedRegistryReferenceIds": matched_references,
                 }
-                if (
-                    str(track_id) not in best_by_track
-                    or candidate["embeddingScore"] > best_by_track[str(track_id)]["embeddingScore"]
-                ):
+                previous = best_by_track.get(str(track_id))
+                if previous is None or candidate[score_key] > previous[score_key]:
                     best_by_track[str(track_id)] = candidate
 
         # 核心语义：每条轨迹先对所有库项比较，再只保留该轨迹的最高匹配分。
@@ -1047,7 +1028,10 @@ class ToolService:
                 and item["scoreBand"] == "mismatch"
             ):
                 item["scoreBand"] = "uncertain"
-        matches.sort(key=lambda item: item["embeddingScore"], reverse=True)
+        matches.sort(
+            key=lambda item: float(item["maxEmbeddingScore"] if best_by_max_score else item["embeddingScore"]),
+            reverse=True,
+        )
         if topK is not None:
             try:
                 match_limit = max(0, int(topK))
@@ -1158,7 +1142,7 @@ class ToolService:
         vectors = self._load_indexed_vectors(
             frames, vector_key="keyframeVectorId", index=self.vectors.keyframes
         )
-        selected, missing = {}, []
+        selected = {}
         for track_id, frames in candidates.items():
             available = [frame for frame in frames if frame["keyframeVectorId"] in vectors]
             selected[track_id] = sorted(
@@ -1166,8 +1150,6 @@ class ToolService:
                 key=lambda item: float(item.get("retentionScore") or 0.0),
                 reverse=True,
             )[:3]
-            if not selected[track_id]:
-                missing.append(track_id)
         pair_scores: dict[tuple[str, str], float] = {}
         track_ids = list(track_map)
         for index, left_id in enumerate(track_ids):
@@ -1189,20 +1171,12 @@ class ToolService:
         low_groups = self._complete_link(track_ids, track_map, pair_scores, low)
 
         # 高阈值只接受确定合并，因此对应保守（较大）船数；低阈值纳入待确认合并，对应最小船数。
-        pending_merge_count = 0
-        for low_group in low_groups:
-            low_group_ids = set(low_group)
-            high_group_count = sum(
-                set(high_group).issubset(low_group_ids) for high_group in high_groups
-            )
-            pending_merge_count += high_group_count > 1
-        status = "incomplete" if missing else "stable" if len(high_groups) == len(low_groups) else "sensitive"
         return {
             "highGroups": high_groups,
             "lowGroups": low_groups,
-            "pendingMergeCount": pending_merge_count,
-            "countStability": status,
-            "unsearchableTrackIds": missing,
+            "rawTrackCount": len(track_ids),
+            "highThresholdCount": len(high_groups),
+            "lowThresholdCount": len(low_groups),
         }
 
     # ------------------------------------------------------------------ #

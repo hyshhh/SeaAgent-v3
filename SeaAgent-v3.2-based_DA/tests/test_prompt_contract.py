@@ -16,8 +16,7 @@ def test_all_business_tools_are_exposed_as_compact_workflows():
         "match_registry_tracks",
         "verify_vessel_images",
         "count_total_entities",
-        "count_registry_entities",
-        "count_unregistered_entities",
+        "count_entities_by_registry",
         "show_evidence",
     }
     assert not names & {"get_track", "get_frames", "get_clip", "get_registry", "list_registry", "add_registry_vessel"}
@@ -63,13 +62,13 @@ def test_supplied_aliases_follow_the_registry_assistance_step():
 def test_count_skills_map_user_intent_to_configured_tools():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     agents = {item["name"]: item for item in role_config["agents"]}
-    expected = ("count_total_entities", "count_registry_entities", "count_unregistered_entities")
+    expected = ("count_total_entities", "count_entities_by_registry")
     planning = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
     assert all(name in planning for name in expected)
     assert all(name in statistics for name in expected)
-    assert "统计按用户要求的口径映射" in agents["planner"]["system_prompt"]
+    assert "count_entities_by_registry" in agents["planner"]["system_prompt"]
     assert "statistics 技能" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
 
@@ -88,5 +87,5 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
 
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
     tools = {item["name"]: item for item in load_config()["tools"]}
-    for name in ("recognize_tracks", "count_total_entities", "count_registry_entities", "count_unregistered_entities"):
+    for name in ("recognize_tracks", "count_total_entities", "count_entities_by_registry"):
         assert "省略 time_range 表示全部监控时间" in tools[name]["description"]

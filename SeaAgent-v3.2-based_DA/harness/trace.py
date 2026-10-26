@@ -43,6 +43,13 @@ def _tool_calls(message: Any) -> list[dict[str, Any]]:
 
 # 1.5 将工具结果正文还原为结构化载荷
 def _parse_payload(value: Any) -> Any:
+    if str(getattr(value, "name", "")) == "count_entities_by_registry":
+        content = _content(value)
+        if isinstance(content, str):
+            try:
+                return json.loads(content)
+            except (TypeError, ValueError):
+                return content
     artifact = getattr(value, "artifact", None)
     if isinstance(artifact, dict) and "full_result" in artifact:
         return artifact["full_result"]
@@ -391,6 +398,20 @@ class _Trace:
                 if item["callId"] not in seen
             ]
             records = restored + records
+        private_records = []
+        if self.shared_state is not None:
+            private_records = [
+                {
+                    "tool": "count_entities_by_registry",
+                    "status": "completed",
+                    "result": item,
+                }
+                for item in self.shared_state.evidence_artifact_results()
+                if isinstance(item, dict)
+            ]
+        enriched_evidence = build_evidence_payload([*records, *private_records])
+        if self.shared_state is not None:
+            self.shared_state.clear_evidence_artifacts()
         result = {
             "session_id": thread_id,
             answer_field: answer,
@@ -400,7 +421,7 @@ class _Trace:
             "tool_records": records,
             "rounds": self.rounds,
             "evidence": evidence,
-            enriched_field: build_evidence_payload(records),
+            enriched_field: enriched_evidence,
         }
         if self.shared_state is not None:
             result["shared_state"] = self.shared_state.view()

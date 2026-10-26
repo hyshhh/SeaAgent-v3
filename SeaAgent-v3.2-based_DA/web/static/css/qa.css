@@ -1376,6 +1376,26 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+#tab-agent-qa .qa-state-field[data-key="requirements"] dd,
+#tab-agent-qa .qa-state-field[data-key="plan"] dd,
+#tab-agent-qa .qa-state-field[data-key="next_action"] dd,
+#tab-agent-qa .qa-state-field[data-key="clarification"] dd {
+  box-sizing: border-box;
+  height: 120px;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--qa-line);
+  border-radius: 5px;
+  background: #fafbfc;
+  scrollbar-width: thin;
+}
+#tab-agent-qa .qa-registry-match-evidence { grid-column: 1 / -1; min-width: 0; }
+#tab-agent-qa .qa-registry-match-evidence > strong { display: block; margin-bottom: 5px; color: #82909d; font-size: 9px; }
+#tab-agent-qa .qa-registry-match-evidence ul { display: grid; gap: 4px; max-height: 220px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+#tab-agent-qa .qa-registry-match-evidence li { display: grid; grid-template-columns: minmax(40px, 1fr) auto auto; gap: 8px; align-items: center; padding: 4px 6px; color: var(--qa-muted); border: 1px solid var(--qa-line); border-radius: 4px; font-size: 9px; }
+#tab-agent-qa .qa-registry-match-evidence li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tab-agent-qa .qa-registry-match-evidence li strong { color: var(--qa-ink); font-size: 9px; font-weight: 600; }
+#tab-agent-qa .qa-registry-match-evidence li em { color: var(--qa-body); font: 9px Consolas, monospace; }
 
 /* Keep the conversation as one workspace; individual turns are separators, not cards. */
 #tab-agent-qa .qa-user-bubble,

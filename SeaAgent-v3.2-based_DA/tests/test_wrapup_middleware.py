@@ -6,7 +6,7 @@ from harness.wrapup import NUDGE_KEY, EvidenceWrapUpMiddleware
 
 
 def _middleware(max_nudges=1, decision="terminate"):
-    shared_state = SharedTaskState("问题", {"decision": decision})
+    shared_state = SharedTaskState("问题", {"decision": decision, "evidence_ids": ["kf-1"]})
     return EvidenceWrapUpMiddleware(evidence_tool="show_evidence", instruction="call show_evidence", max_nudges=max_nudges, shared_state=shared_state)
 
 
@@ -74,6 +74,16 @@ def test_second_final_answer_is_released_after_the_nudge_budget():
 
 def test_empty_model_output_is_not_a_final_answer():
     assert _middleware().after_model(_state(HumanMessage(content="问题"), AIMessage(content="   "))) is None
+
+
+def test_answer_without_shared_evidence_ids_does_not_call_empty_evidence_tool():
+    middleware = EvidenceWrapUpMiddleware(
+        evidence_tool="show_evidence",
+        instruction="call show_evidence",
+        shared_state=SharedTaskState("问题", {"decision": "terminate"}),
+    )
+    state = _state(HumanMessage(content="多少实体？"), AIMessage(content="共两艘。"))
+    assert middleware.after_model(state) is None
 
 
 def test_middleware_stands_down_when_the_evidence_tool_is_unset():

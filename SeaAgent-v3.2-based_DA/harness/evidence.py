@@ -21,14 +21,15 @@ REFERENCE_ID_KEYS = (
 )
 TOOL_STATISTIC_KEYS = (
     "status",
-    "count",
-    "minimumCount",
-    "countComplete",
+    "rawTrackCount",
+    "highThresholdCount",
+    "lowThresholdCount",
+    "entityCount",
+    "inRegistryCount",
+    "unregisteredCount",
     "coverageComplete",
-    "countStability",
-    "uncertainCount",
-    "pendingMergeCount",
-    "trackCount",
+    "searchedTrackCount",
+    "candidateCount",
     "unsearchableTrackCount",
 )
 NESTED_KEYS = ("keyframes", "keyframesByTrack", "matches", "registryItems", "registryReferences", "tracks")  # 需要下钻的嵌套容器：工具结果常把明细放在这些键下
@@ -135,11 +136,13 @@ def _display_groups(records: list[dict[str, Any]], limit: int) -> list[dict[str,
     def touch(track_id: str) -> dict[str, Any]:
         return groups.setdefault(track_id, {
             "trackId": track_id,
+            "trackIds": [track_id],
             "keyframeIds": [],
             "shipSegmentIds": [],
             "registryReferenceIds": [],
             "score": None,
             "band": "",
+            "matchedObject": None,
         })
 
     for record in records:
@@ -158,17 +161,23 @@ def _display_groups(records: list[dict[str, Any]], limit: int) -> list[dict[str,
             if not track_id:
                 continue
             group = touch(track_id)
+            if str(record.get("tool") or "") == "count_entities_by_registry":
+                group["registryMatch"] = True
+            group["trackIds"].extend(_collect_ids(candidate, TRACK_ID_KEYS))
             group["keyframeIds"].extend(_collect_ids(candidate, KEYFRAME_ID_KEYS))
             group["shipSegmentIds"].extend(_collect_ids(candidate, SEGMENT_ID_KEYS))
             group["registryReferenceIds"].extend(_collect_ids(candidate, REFERENCE_ID_KEYS))
             score = candidate.get("embeddingScore", candidate.get("score"))
             if isinstance(score, (int, float)) and (group["score"] is None or score > group["score"]):
                 group["score"] = float(score)
+                match_object = candidate.get("matchedObject")
+                group["matchedObject"] = match_object if isinstance(match_object, dict) else None
             band = str(candidate.get("scoreBand") or candidate.get("band") or "").strip()
             if band:
                 group["band"] = band
     ordered = sorted(groups.values(), key=lambda item: (item["score"] is None, -(item["score"] or 0.0)))
     for group in ordered:
+        group["trackIds"] = _dedup(group["trackIds"], limit)
         group["keyframeIds"] = _dedup(group["keyframeIds"], limit)
         group["shipSegmentIds"] = _dedup(group["shipSegmentIds"], limit)
         group["registryReferenceIds"] = _dedup(group["registryReferenceIds"], limit)

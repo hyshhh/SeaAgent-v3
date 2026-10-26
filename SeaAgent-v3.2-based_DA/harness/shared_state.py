@@ -386,6 +386,7 @@ class SharedTaskState:
 
     def _clear_turn_artifacts(self) -> None:  #会话开始时，清理上一轮的大工具结果文件
         self._cleanup_artifacts(self._external_refs(self._values.get("tool_results", [])))
+        self.clear_evidence_artifacts()
         if self._artifact_dir != self._artifact_root:
             shutil.rmtree(self._artifact_dir, ignore_errors=True)
 
@@ -593,6 +594,24 @@ class SharedTaskState:
                     path.unlink(missing_ok=True)
             except OSError:
                 continue
+
+    def store_evidence_artifact(self, result: Any) -> None:
+        """Write evidence-only details outside the shared state and model result."""
+        self._artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = self._artifact_dir / f"evidence-{uuid.uuid4().hex}.json"
+        path.write_text(json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8")
+
+    def evidence_artifact_results(self) -> list[Any]:
+        results = []
+        for path in sorted(self._artifact_dir.glob("evidence-*.json")):
+            try:
+                results.append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+        return results
+
+    def clear_evidence_artifacts(self) -> None:
+        self._cleanup_artifacts({str(path) for path in self._artifact_dir.glob("evidence-*.json")})
 
     # 2.1.13 递归收集轨迹、关键帧、片段与参考图 ID
     @staticmethod

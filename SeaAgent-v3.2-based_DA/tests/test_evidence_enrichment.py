@@ -70,25 +70,48 @@ def test_compact_count_fields_feed_frontend_statistics():
     payload = build_evidence_payload([
         _record("count_total_entities", {
             "ok": True,
-            "count": 12,
-            "minimumCount": 10,
-            "countComplete": False,
-            "countStability": "sensitive",
-            "uncertainCount": 2,
-            "pendingMergeCount": 1,
-            "trackIds": ["t-1"],
+            "rawTrackCount": 20,
+            "highThresholdCount": 12,
+            "lowThresholdCount": 10,
+            "coverageComplete": False,
         }),
     ])
 
     assert payload["statistics"]["queryByTool"] == [{
         "tool": "count_total_entities",
         "statistics": {
-            "count": 12,
-            "minimumCount": 10,
-            "countComplete": False,
-            "countStability": "sensitive",
-            "uncertainCount": 2,
-            "pendingMergeCount": 1,
+            "rawTrackCount": 20,
+            "highThresholdCount": 12,
+            "lowThresholdCount": 10,
+            "coverageComplete": False,
         },
     }]
-    assert payload["trackIds"] == ["t-1"]
+
+
+def test_external_registry_match_evidence_is_enriched_without_counting_as_model_result():
+    payload = build_evidence_payload([
+        _record("count_entities_by_registry", {
+            "entityCount": 1,
+            "inRegistryCount": 1,
+            "unregisteredCount": 0,
+            "coverageComplete": True,
+        }),
+        _record("count_entities_by_registry", {
+            "matches": [{
+                "trackId": "t-1",
+                "trackIds": ["t-1", "t-2"],
+                "score": 0.83,
+                "scoreBand": "match",
+                "matchedObject": {"hullNumber": "0857"},
+                "keyframeIds": ["kf-1"],
+                "registryReferenceIds": ["ref-1"],
+            }],
+        }),
+    ])
+
+    assert payload["statistics"]["queryByTool"][0]["statistics"]["entityCount"] == 1
+    assert payload["trackIds"] == ["t-1", "t-2"]
+    assert payload["keyframeIds"] == ["kf-1"]
+    assert payload["registryReferenceIds"] == ["ref-1"]
+    assert payload["displayGroups"][0]["score"] == 0.83
+    assert payload["displayGroups"][0]["matchedObject"]["hullNumber"] == "0857"

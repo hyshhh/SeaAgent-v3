@@ -42,26 +42,17 @@ tools:
     label: 实体总数统计
     method: countTotalEntities
     description: >-
-      在时间范围内按视觉相似度去重并统计实体总数。返回 count、countComplete、countStability、不确定项和少量证据 ID；不返回其他类别计数或轨迹明细。
-      若去重范围不稳定，另返回 minimumCount。省略 time_range 表示全部监控时间。
+      在时间范围内按视觉相似度去重，返回原始轨迹数、高阈值实体数和低阈值实体数。高阈值数为保守上界，低阈值数为合并后的下界；不返回分组或轨迹明细。
+      省略 time_range 表示全部监控时间。
     arguments:
       time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
 
-  - name: count_registry_entities
-    label: 在库实体统计
-    method: countRegistryEntities
+  - name: count_entities_by_registry
+    label: 在库实体匹配统计
+    method: countEntitiesByRegistry
     description: >-
-      在时间范围内完成轨迹去重和先验库视觉匹配，只返回在库 count、完整性、不确定项和少量证据 ID。
-      省略 time_range 表示全部监控时间；不返回其他类别计数、轨迹或参考图明细。
-    arguments:
-      time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
-
-  - name: count_unregistered_entities
-    label: 不在库实体统计
-    method: countUnregisteredEntities
-    description: >-
-      在时间范围内完成轨迹去重和先验库视觉比对，只返回确认不在库的 count、完整性、不确定项和少量证据 ID。
-      省略 time_range 表示全部监控时间；不返回其他类别计数或原始轨迹。
+      先按低阈值合并轨迹，再将每条轨迹的关键帧与先验库图片比较；任一图像分数达到阈值即计为在库。
+      只向模型返回实体总数、在库数和不在库数；匹配 ID、分数及对象留作运行证据。省略 time_range 表示全部监控时间。
     arguments:
       time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
 

@@ -102,6 +102,48 @@ def test_recognition_model_result_reads_counts_from_nested_statistics():
     assert model_result["unsearchableTrackCount"] == 3
 
 
+def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path):
+    state = SharedTaskState("count", artifact_dir=tmp_path, artifact_root=tmp_path)
+    guard = RepeatToolCallMiddleware(state=state, scope="executor")
+    full_result = {
+        "ok": True,
+        "entityCount": 2,
+        "inRegistryCount": 1,
+        "unregisteredCount": 1,
+        "coverageComplete": True,
+        "registeredMatches": [{"trackId": "t-1", "score": 0.91, "matchedObject": {"hullNumber": "0857"}}],
+        "unregisteredMatches": [{"trackId": "t-2", "score": 0.42, "matchedObject": {"hullNumber": "003"}}],
+    }
+    message = guard.wrap_tool_call(
+        _Request("count_entities_by_registry", {}),
+        lambda request: ToolMessage(
+            content=json.dumps(full_result),
+            name="count_entities_by_registry",
+            tool_call_id=request.tool_call["id"],
+        ),
+    )
+
+    assert json.loads(message.content) == {
+        "ok": True,
+        "entityCount": 2,
+        "inRegistryCount": 1,
+        "unregisteredCount": 1,
+        "coverageComplete": True,
+    }
+    assert message.artifact["full_result"] == json.loads(message.content)
+    assert state.snapshot()["tool_results"][0]["result"] == json.loads(message.content)
+    assert state.evidence_artifact_results() == [{
+        "matches": [*full_result["registeredMatches"], *full_result["unregisteredMatches"]]
+    }]
+    trace = _Trace(None, event_limit=4000, shared_state=state)
+    trace.consume({"messages": [message]}, agent_name="executor")
+    result = trace.result("thread", {"harness": {}})
+    assert result["tool_records"][0]["result"] == json.loads(message.content)
+    assert result["enrichedEvidence"]["trackIds"] == ["t-1", "t-2"]
+    assert result["enrichedEvidence"]["displayGroups"][0]["score"] == 0.91
+    assert state.evidence_artifact_results() == []
+
+
 def test_tool_error_keeps_error_type_for_model_debugging():
     guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
     message = guard.wrap_tool_call(

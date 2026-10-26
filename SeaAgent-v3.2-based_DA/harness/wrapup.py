@@ -39,11 +39,10 @@ class EvidenceWrapUpMiddleware(AgentMiddleware):
     def after_model(self, state: dict[str, Any], runtime: Any = None) -> dict[str, Any] | None:
         if not self.evidence_tool or self.max_nudges == 0:
             return None
-        if (
-            self.shared_state is None
-            or self.shared_state.is_closeout_required("reflector")
-            or self.shared_state.snapshot().get("decision") != "terminate"
-        ):
+        if self.shared_state is None or self.shared_state.is_closeout_required("reflector"):
+            return None
+        shared = self.shared_state.snapshot()
+        if shared.get("decision") != "terminate" or not shared.get("evidence_ids"):
             return None
         messages = list(state.get("messages") or [])
         last = messages[-1] if messages else None
