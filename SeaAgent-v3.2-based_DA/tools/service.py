@@ -1414,6 +1414,7 @@ class ToolService:
         return codec
 
     # 11.15 判断两个时间区间是否重叠（去重辅助）
+    @staticmethod
     def _overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return not (float(left["endTime"]) < float(right["startTime"]) or float(right["endTime"]) < float(left["startTime"]))
 

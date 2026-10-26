@@ -199,15 +199,14 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
         statistics = result.get("statistics")
         statistics = dict(statistics) if isinstance(statistics, dict) else {}
         statistics.update({key: result[key] for key in TOOL_STATISTIC_KEYS if key in result})
-        if isinstance(statistics, dict):
-            if str(record.get("tool") or "") == "show_evidence":
-                display_statistics = statistics
-            elif statistics:
-                query_statistics.update(statistics)
-                query_statistics_by_tool.append({
-                    "tool": str(record.get("tool") or ""),
-                    "statistics": statistics,
-                })
+        if str(record.get("tool") or "") == "show_evidence":
+            display_statistics = statistics
+        elif statistics:
+            query_statistics.update(statistics)
+            query_statistics_by_tool.append({
+                "tool": str(record.get("tool") or ""),
+                "statistics": statistics,
+            })
 
     evidence = {
         "keyframeIds": keyframes,

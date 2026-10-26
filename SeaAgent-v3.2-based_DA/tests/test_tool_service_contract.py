@@ -178,6 +178,25 @@ def test_count_tool_returns_only_requested_count_and_compact_quality_metadata():
     assert "unregisteredCount" not in result
 
 
+def test_track_deduplication_uses_instance_safe_overlap_check():
+    service = ToolService.__new__(ToolService)
+    service.settings = {"dedup_high": 0.9, "dedup_low": 0.8}
+    service.vectors = type("Vectors", (), {"keyframes": object()})()
+    service._load_indexed_vectors = lambda *_args, **_kwargs: {1: [1.0], 2: [1.0]}
+
+    result = service._deduplicate_tracks(
+        [_track("t-1"), _track("t-2")],
+        {
+            "t-1": {"keyframes": [{"keyframeVectorId": 1, "retentionScore": 1.0}]},
+            "t-2": {"keyframes": [{"keyframeVectorId": 2, "retentionScore": 1.0}]},
+        },
+    )
+
+    assert result["highGroups"] == [["t-1"], ["t-2"]]
+    assert result["lowGroups"] == [["t-1"], ["t-2"]]
+    assert result["countStability"] == "stable"
+
+
 def test_registered_entity_without_comparable_reference_is_uncertain():
     class Repository:
         def list_registry(self):

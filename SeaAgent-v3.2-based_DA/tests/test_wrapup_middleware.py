@@ -100,3 +100,13 @@ def test_wrapup_follows_live_decisions_and_the_next_stage_reset():
 def test_missing_shared_state_does_not_trigger_evidence_wrapup():
     state = {**_state(HumanMessage(content="问题"), AIMessage(content="回答")), "decision": "terminate"}
     assert EvidenceWrapUpMiddleware(evidence_tool="show_evidence").after_model(state) is None
+
+
+def test_default_wrapup_points_to_the_single_finalization_skill():
+    middleware = EvidenceWrapUpMiddleware(
+        evidence_tool="show_evidence",
+        shared_state=SharedTaskState("问题", {"decision": "terminate"}),
+    )
+
+    assert "/skills/answer/finalize/SKILL.md" in middleware.instruction
+    assert "update_reflection_state" in middleware.instruction
