@@ -9,8 +9,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 NUDGE_KEY = "evidence_wrapup_nudge"
 DEFAULT_INSTRUCTION = (
-    "Before finishing, follow `/skills/answer/finalize/SKILL.md`, then read shared state and save "
-    "the conclusion through `update_reflection_state`."
+    "Follow `/skills/answer/finalize/SKILL.md`, then write `assessment.final_answer` with "
+    "`update_reflection_state` before finishing."
 )
 
 
