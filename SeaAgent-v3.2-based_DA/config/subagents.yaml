@@ -33,13 +33,13 @@ agents:
       - count_total_entities
       - count_registry_entities
       - count_unregistered_entities
-    skills: [recognition, statistics, answer]
+    skills: [recognition, statistics]
     task_prompt: |
       用户问题：{question}
     skill_reminder:
       max_per_run: 2
       message: |
-        先读 /skills/recognition/SKILL.md 或 /skills/statistics/SKILL.md；需要统一回答口径时再读 /skills/answer/response/SKILL.md。
+        按当前计划读取 /skills/recognition/SKILL.md 或 /skills/statistics/SKILL.md；混合任务只读实际涉及的技能。
     system_prompt: |
       你是 Executor Agent：严格执行当前 plan，只维护 evidence_ids、step_status、execution_status。
       业务工具已在服务层完成分页、取帧、匹配、去重和统计；不要自行读取轨迹文件、先验库目录或旧版工具。

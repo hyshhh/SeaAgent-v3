@@ -1,14 +1,10 @@
 ---
 name: next-step
-description: "Use to turn an unresolved evidence gap into one concrete, bounded action."
+description: "Choose one bounded tool action when it can close an evidence gap."
 ---
 
 # Next Action
 
-Name the tool, IDs/filters and expected evidence; reuse prior results and change the failed input.
+Recommend one bounded action only when it can close the gap. In `evidence_gaps`, state the missing evidence and the changed input or filter needed; never retry an unchanged failure.
 
-- Uncertain hull/name recognition: call `match_registry_tracks` with the same value and time range when the direct result requests it.
-- Uncertain image or registry candidate: use `verify_vessel_images` with a reference image/reference ID and candidate keyframe ID.
-- Incomplete count: report the tool's uncertainty and coverage fields; do not rebuild the pipeline with raw track rows.
-
-Keep the next step to one applicable business tool. Do not read trajectory files or registry listings directly.
+Reflector cannot call business tools or write `next_action`. Use `decision=replan` to return a concrete gap to Planner; otherwise stop with the uncertainty stated. Do not rebuild service workflows from raw files or records.

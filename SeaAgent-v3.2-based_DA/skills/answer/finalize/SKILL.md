@@ -1,10 +1,10 @@
 ---
 name: finalize
-description: "Use before the final answer to display this turn's visual evidence."
+description: "Display this turn's visual evidence before finalizing the answer."
 ---
 
 # Finalize
 
-1. Call `show_evidence` once with returned track, keyframe and registry-reference IDs; if none, call without IDs.
-2. Use only current-turn IDs. Report evidence IDs, not the panel's `displayId`.
-3. Answer in Chinese: conclusion, evidence IDs, then limitations. Stop when the claim is established or the remaining gap is clear.
+1. Call `show_evidence` once with current-turn track, keyframe and registry-reference IDs; omit missing ID types. The tool creates any clips internally.
+2. Cite evidence IDs, never the panel's `displayId`.
+3. Give the supported conclusion and material limits in Chinese unless requested otherwise. Stop when the claim is established or its remaining gap is clear.

@@ -1,13 +1,13 @@
 ---
 name: acceptance
-description: "Use to define the evidence required for each user requirement."
+description: "Map each requirement to the tool result that can verify it."
 ---
 
 # Plan Acceptance
 
-Put each verifiable claim in `requirements`; make `plan` steps name needed tools/evidence in `content` and `required_evidence` (string array). Do not add unsupported fields such as `how_to_check`.
+Put each verifiable claim in `requirements`. Every plan step needs `id`, `content` and a string-array `required_evidence`; do not add unsupported fields.
 
-- Recognition: `recognize_tracks`; for a supplied hull/name with `nextStep=match_registry_tracks` or an uncertain result, add `match_registry_tracks`.
-- Uncertain image or registry candidate: compare its reference and candidate images with `verify_vessel_images`.
-- Total, registered or unregistered count: use exactly the corresponding `count_*` tool; it handles scope, deduplication and matching internally.
-- Visual evidence: use `show_evidence` with IDs returned by the business tools.
+- Start recognition with `recognize_tracks`; add `match_registry_tracks` only after its result requests that next step.
+- For uncertain image candidates, use `verify_vessel_images` with one reference and one candidate image.
+- For counts, choose exactly the corresponding `count_*` tool; it handles scope, deduplication and registry matching.
+- Add `show_evidence` only when visual evidence must be displayed, using IDs returned by business tools.

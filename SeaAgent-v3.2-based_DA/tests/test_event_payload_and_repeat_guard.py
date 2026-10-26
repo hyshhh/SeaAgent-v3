@@ -79,6 +79,29 @@ def test_tool_result_is_compact_for_model_but_full_for_trace_and_state():
     assert trace.records[0]["result"] == full_result
 
 
+def test_recognition_model_result_reads_counts_from_nested_statistics():
+    guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
+    result = {
+        "ok": True,
+        "status": "unconfirmed",
+        "matches": [],
+        "coverageComplete": False,
+        "statistics": {"searchedTrackCount": 12, "unsearchableTrackCount": 3},
+    }
+    message = guard.wrap_tool_call(
+        _Request("recognize_tracks", {"hull_number": "0857"}),
+        lambda request: ToolMessage(
+            content=json.dumps(result),
+            name="recognize_tracks",
+            tool_call_id=request.tool_call["id"],
+        ),
+    )
+
+    model_result = json.loads(message.content)
+    assert model_result["searchedTrackCount"] == 12
+    assert model_result["unsearchableTrackCount"] == 3
+
+
 def test_tool_error_keeps_error_type_for_model_debugging():
     guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
     message = guard.wrap_tool_call(

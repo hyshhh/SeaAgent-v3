@@ -75,8 +75,11 @@ def _model_result(name: str, result: Any) -> Any:
             if isinstance(values, list) and values:
                 compact[key] = values[:limit]
     elif name == "recognize_tracks":
-        compact["searchedTrackCount"] = result.get("searchedTrackCount", 0)
-        compact["unsearchableTrackCount"] = result.get("unsearchableTrackCount", 0)
+        statistics = result.get("statistics")
+        statistics = statistics if isinstance(statistics, dict) else {}
+        for key in ("searchedTrackCount", "unsearchableTrackCount"):
+            if key in statistics:
+                compact[key] = statistics[key]
     matches = compact.get("matches")
     if isinstance(matches, list):
         compact["matches"] = [

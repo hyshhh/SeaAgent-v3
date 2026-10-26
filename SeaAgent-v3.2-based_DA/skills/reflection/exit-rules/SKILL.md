@@ -1,10 +1,11 @@
 ---
 name: exit-rules
-description: "Use to decide whether evidence supports termination for this question type."
+description: "Decide whether this question's evidence supports a conclusion or needs follow-up."
 ---
 
 # Exit Rules
 
-- **Recognition:** use `status`, candidate `scoreBand` and `coverageComplete`; `unconfirmed` or incomplete coverage cannot support an absolute absence claim.
-- **Registry-assisted recognition:** use it only for a hull/alias supplied by the user; separate a catalogue hit from video evidence.
-- **Counts:** use the matching count tool. Qualify the count when `countComplete=false`, stability is not `stable`, or uncertain items remain.
+- **Recognition:** use `status`, candidate `scoreBand` and `coverageComplete`. Absence requires a complete search with no matching candidate; `unconfirmed` or incomplete coverage is not proof.
+- **Registry-assisted recognition:** a catalogue hit alone is not evidence that the vessel appears in video.
+- **Counts:** use the selected count tool's `countComplete`, `countStability`, `uncertainCount` and `pendingMergeCount`; qualify any incomplete or uncertain result.
+- Stop when the claim is supported or the remaining gap is explicit. Replan only when one distinct tool call can address it.

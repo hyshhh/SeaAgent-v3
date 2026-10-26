@@ -1,8 +1,10 @@
 ---
 name: conflict-uncertain
-description: "Use when results conflict, remain ambiguous or make no progress."
+description: "Resolve conflicting evidence and stop unproductive retries."
 ---
 
 # Conflict and Uncertainty
 
-Declare conflict only for strong, incompatible evidence about the same target. Use uncertain when two rounds add no evidence, the budget is nearly spent without progress, or the remaining gap is not worth another step; name the gap. Do not use uncertainty to request another round. Never settle a turn with no successful result.
+Declare conflict only for strong, incompatible evidence about the same target. If evidence remains weak, state the uncertainty and exact gap.
+
+Do not repeat an unchanged failed call. Continue only when one distinct, bounded action is likely to add evidence; otherwise mark the task unresolved or failed and stop. Never claim a substantive result from tool errors.

@@ -1,12 +1,12 @@
 ---
 name: intent
-description: "Use to identify the target, operation and data scope before planning."
+description: "Identify the requested operation, target and evidence scope before planning."
 ---
 
 # Identify Intent
 
-- Classify the task: recognition, total count, registered count, unregistered count, time or explanation.
-- Separate each target. Preserve hull-number prefixes; use the tool's normalized form only for lookup.
-- Resolve follow-ups from QA history, carrying forward the referenced time range and IDs.
-- Preserve whether the user asks for video presence, identity or registry membership; a catalogue entry alone never proves video presence.
-- Write into supported `requirements` and evidence-backed `plan` steps, not `restated_question`.
+- Classify the operation as recognition, total count, registered count, unregistered count or explanation; treat time as scope, not a separate operation.
+- Keep targets separate and preserve the user's hull number, leading zeros and prefix exactly; tools normalize lookup values.
+- Resolve a follow-up from the QA history only when its target, IDs or time range are clear; otherwise ask a focused question.
+- Distinguish video presence, vessel identity and registry membership. A registry entry alone does not prove video presence.
+- Write supported `requirements` and evidence-backed `plan` steps; do not invent fields such as `restated_question`.

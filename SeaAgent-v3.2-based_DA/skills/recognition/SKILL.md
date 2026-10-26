@@ -1,12 +1,12 @@
 ---
 name: recognition
-description: "Use the compact recognition tools for track, registry-assisted and two-image identification."
+description: "Choose direct track search, registry-assisted matching, or a two-image vessel check."
 ---
 
 # Recognition
 
-- Use `recognize_tracks.hull_number` for a supplied hull number or target name/alias (for example, “小红”); use `description` for appearance and `image_path` for an image. Omit `time_range` unless the user supplied a range.
-- If the result sets `nextStep=match_registry_tracks`, or a hull/alias query returns `unconfirmed` or `mismatch`, call `match_registry_tracks` once with the same value and time range.
-- Use `verify_vessel_images` for uncertain visual candidates: pass the user's image as `reference_image` or a returned `reference_registry_reference_id`, then a candidate image path or `candidate_keyframe_id`.
-- Treat `status` (`confirmed`, `unconfirmed`, `mismatch`) and each match's `scoreBand` as distinct evidence levels. `mismatch` with `coverageComplete=false` cannot prove absence.
-- Keep returned IDs from `matches` for `show_evidence`. Do not request raw track pages or registry listings.
+- Search by hull number or target name/alias (for example, “小红”) with `recognize_tracks.hull_number`; use `description` for appearance and `image_path` for a user image. Omit `time_range` to search all stored monitoring time.
+- Call `match_registry_tracks` once only when the direct result sets `nextStep=match_registry_tracks`; reuse the same value and range.
+- `verify_vessel_images` compares exactly two images: one reference (`reference_image` or `reference_registry_reference_id`) and one candidate (`candidate_image` or `candidate_keyframe_id`). It does not search tracks.
+- Read `status` and each match's `scoreBand` separately. Incomplete coverage or `unconfirmed` results cannot establish absence.
+- Pass returned evidence IDs to `show_evidence` when visual display is needed. Never read raw track files or registry listings.

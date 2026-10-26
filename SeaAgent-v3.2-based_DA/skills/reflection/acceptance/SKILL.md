@@ -1,11 +1,10 @@
 ---
 name: acceptance
-description: "Use to audit each requirement against returned evidence before stopping."
+description: "Audit each requirement against successful tool evidence before deciding."
 ---
 
 # Evidence Audit
 
-- Mark each requirement met, unmet or unverifiable; a tool call alone is not proof—cite its returned record/ID.
-- Keep confirmed, possible and unsearchable results distinct.
-- An incomplete search, unsearchable tracks or `unconfirmed` result does not prove absence.
-- For two-image identity, use the VLM verdict. Report evidence IDs produced this turn.
+- Mark every requirement met, unmet or unverifiable from successful tool results; a call alone is not evidence.
+- Keep confirmed, possible and unconfirmed findings distinct. Incomplete coverage or unresolved items cannot prove absence.
+- For two-image identity, use `verify_vessel_images.decision`. Report only current-turn evidence IDs.
