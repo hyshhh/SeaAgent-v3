@@ -328,16 +328,19 @@ def test_planner_clarification_stops_and_user_reply_continues_same_qa(agent, mon
 
     monkeypatch.setattr(controller_module, "SeaVideoHarness", _ClarifyingRuntime)
     first = agent.answer("查询目标船舶")
+    pending = agent.repository.get_session(first["sessionId"])["turns"][-1]
     completed = agent.answer("2025-10-21 14:00 到 14:10", first["sessionId"])
 
     turns = agent.repository.get_session(first["sessionId"])["turns"]
     assert first["state"] == "awaiting_input"
+    assert pending["runtimeId"] == _ClarifyingRuntime.threads[0]
     assert completed["state"] == "completed"
     assert completed["question"] == "查询目标船舶"
     assert len(turns) == 1
+    assert "runtimeId" not in turns[0]
     assert turns[0]["answer"] == "已按补充范围查到 2 条轨迹。"
     assert turns[0]["clarificationResponse"] == "2025-10-21 14:00 到 14:10"
-    assert len(set(_ClarifyingRuntime.threads)) == 2
+    assert len(set(_ClarifyingRuntime.threads)) == 1
 
 
 def test_old_transcripts_drop_saved_tool_history_on_migration(tmp_path):

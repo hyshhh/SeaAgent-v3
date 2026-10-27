@@ -5,10 +5,12 @@
 """
 
 import threading
+from datetime import datetime, timedelta
 
 from langchain_core.messages import AIMessage, ToolMessage
 
 from config import load_config
+from harness import runtime as runtime_module
 from harness.runtime import SeaVideoHarness, _Trace
 from harness.shared_state import SharedStateStore, SharedTaskState
 
@@ -346,6 +348,65 @@ def test_agent_input_uses_checkpoint_for_reconnect_without_repeating_prompt():
     payload = runtime._agent_input_for_attempt("executor", "问题", "thread-x:executor")
 
     assert payload is None
+
+
+def test_planner_system_prompt_uses_the_shared_fixed_time_anchor():
+    runtime = _runtime_with_agent(_FakeAgent())
+    runtime.agent_specs["planner"] = {
+        "system_prompt": "当前时间锚点：{time_anchor}\n只规划。"
+    }
+    runtime.shared_state = SharedTaskState(
+        "昨天有几艘船？", time_anchor="2026-10-27T09:00:00+08:00"
+    )
+
+    prompt = runtime._agent_system_prompt("planner", runtime.shared_state)
+
+    assert prompt == "当前时间锚点：2026-10-27T09:00:00+08:00\n只规划。"
+
+
+def test_time_anchor_uses_the_planning_default_timezone():
+    anchor = datetime.fromisoformat(runtime_module._current_time_anchor())
+
+    assert anchor.utcoffset() == timedelta(hours=8)
+
+
+def test_runtime_creates_one_time_anchor_per_new_turn_and_keeps_it_on_resume(
+    tmp_path, monkeypatch
+):
+    anchors = iter(
+        (
+            "2026-10-27T09:00:00+08:00",
+            "2026-10-28T09:00:00+08:00",
+        )
+    )
+    monkeypatch.setattr(runtime_module, "_current_time_anchor", lambda: next(anchors))
+    runtime = SeaVideoHarness.__new__(SeaVideoHarness)
+    runtime.config = {"harness": {}}
+    runtime.state_store = SharedStateStore(tmp_path / "state.sqlite")
+    runtime.agent_specs = {"planner": {}}
+    runtime._build_agents = lambda: None
+
+    runtime._initialize_state("thread-1", "昨天有几艘船？")
+    first_anchor = runtime.shared_state.snapshot()["time_anchor"]
+    runtime._initialize_state("thread-1", "昨天有几艘船？")
+    assert runtime.shared_state.snapshot()["time_anchor"] == first_anchor
+
+    runtime.shared_state.runtime_update(
+        {"task_status": "awaiting_confirmation", "pending_agent": "planner"}
+    )
+    runtime.state_store.save("thread-1", runtime.shared_state)
+    runtime._initialize_state("thread-1", resume=True)
+    assert runtime.shared_state.snapshot()["time_anchor"] == first_anchor
+
+    runtime.shared_state.runtime_update({"task_status": "completed"})
+    runtime.state_store.save("thread-1", runtime.shared_state)
+    runtime._initialize_state("thread-1", "今天有几艘船？")
+    assert runtime.shared_state.snapshot()["time_anchor"] == "2026-10-28T09:00:00+08:00"
+
+    runtime.shared_state.runtime_update({"task_status": "awaiting_input"})
+    runtime.state_store.save("thread-1", runtime.shared_state)
+    runtime._initialize_state("thread-1", "今天有几艘船？\n用户补充信息：具体范围")
+    assert runtime.shared_state.snapshot()["time_anchor"] == "2026-10-28T09:00:00+08:00"
 
 
 def test_agent_input_resumes_human_interrupt_and_only_prompts_for_fresh_state():

@@ -9,6 +9,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Iterator
+from datetime import datetime, timedelta, timezone
 from types import TracebackType
 from typing import Any, Self
 
@@ -29,6 +30,11 @@ from .tools import build_tools
 from .trace import _Trace
 
 logger = logging.getLogger(__name__)
+_QA_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def _current_time_anchor() -> str:
+    return datetime.now(_QA_TIMEZONE).isoformat(timespec="seconds")
 
 
 # ------------------------------------------------------------------ #
@@ -168,8 +174,17 @@ def _load_subagents(
         description = str(spec.get("description") or "").strip()
         system_prompt = str(spec.get("system_prompt") or "").strip()
         task_prompt = str(spec.get("task_prompt") or "").strip()
-        if not description or not system_prompt or task_prompt.count("{question}") != 1:
-            raise ValueError(f"Agent {name} 必须显式配置 description、system_prompt 和含一个 {{question}} 的 task_prompt")
+        anchor_count = system_prompt.count("{time_anchor}")
+        if (
+            not description
+            or not system_prompt
+            or task_prompt.count("{question}") != 1
+            or (name == "planner" and anchor_count != 1)
+            or (name != "planner" and anchor_count)
+        ):
+            raise ValueError(
+                f"Agent {name} 必须显式配置 description、system_prompt 和有效的 task_prompt"
+            )
         model_request_budget = spec.get("model_request_budget")
         closeout_request_budget = spec.get("closeout_request_budget")
         if type(model_request_budget) is not int or model_request_budget < 1:
@@ -352,7 +367,7 @@ class SeaVideoHarness:
         return create_deep_agent(
             model=self.model,
             tools=selected,
-            system_prompt=str(spec["system_prompt"]),
+            system_prompt=self._agent_system_prompt(name, state),
             skills=sources or None,
             backend=FilesystemBackend(root_dir=project_root()),  #agent文件系统后端，模型调用，让read_file 时，真正去磁盘读文件的就是它。
             permissions=spec["permissions"],  #文件权限规则，（读写）
@@ -454,6 +469,16 @@ class SeaVideoHarness:
     # 3.1.11 生成角色开工消息，要求先读取共享状态
     def _agent_prompt(self, role: str, question: str) -> str:
         return str(self.agent_specs[role]["task_prompt"]).replace("{question}", question)
+
+    def _agent_system_prompt(self, role: str, state: SharedTaskState) -> str:
+        prompt = str(self.agent_specs[role]["system_prompt"])
+        if "{time_anchor}" in prompt:
+            anchor = str(state.snapshot().get("time_anchor") or "")
+            if not anchor:
+                anchor = _current_time_anchor()
+                state.runtime_update({"time_anchor": anchor})
+            prompt = prompt.replace("{time_anchor}", anchor)
+        return prompt
 
     # 3.1.11.1 统一选择新输入、检查点续接或人工确认恢复载荷
     def _agent_input_for_attempt(
@@ -804,8 +829,15 @@ class SeaVideoHarness:
             "stalled",
             "awaiting_input",
         }:
-            self.shared_state.start_turn(question)
+            anchor = (
+                current.get("time_anchor")
+                if current["task_status"] == "awaiting_input"
+                else _current_time_anchor()
+            )
+            self.shared_state.start_turn(question, time_anchor=anchor)
             starting_new_turn = True
+        if not self.shared_state.snapshot().get("time_anchor"):
+            self.shared_state.runtime_update({"time_anchor": _current_time_anchor()})
         self._stale_checkpoint_roles = (
             set(self.agent_specs) if starting_new_turn else set()
         )

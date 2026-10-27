@@ -326,7 +326,7 @@ class MemoryRepository:
         created_at: str,
         runtime_id: str = "",
     ) -> dict[str, Any]:
-        """存可见 QA 内容；运行信息只在人工确认期间临时保留。"""
+        """存可见 QA 内容；运行标识只在等待用户操作期间临时保留。"""
         turn = {
             "question": question,
             "answer": str(result.get("answerText") or result.get("conclusion") or ""),
@@ -334,9 +334,10 @@ class MemoryRepository:
             "partial": bool(result.get("partial", False)),
             "createdAt": created_at,
         }
+        if turn["state"] in {"awaiting_confirmation", "awaiting_input"}:
+            turn["runtimeId"] = runtime_id
         if turn["state"] == "awaiting_confirmation":
             turn["confirmation"] = result.get("confirmation") or {}
-            turn["runtimeId"] = runtime_id
         if result.get("clarificationResponse"):
             turn["clarificationResponse"] = str(result["clarificationResponse"])
         if result.get("clarificationQuestion"):
@@ -354,9 +355,10 @@ class MemoryRepository:
             "partial": bool(turn.get("partial", False)),
             "createdAt": str(turn.get("createdAt") or ""),
         }
+        if normalized["state"] in {"awaiting_confirmation", "awaiting_input"}:
+            normalized["runtimeId"] = str(turn.get("runtimeId") or fallback_runtime_id)
         if normalized["state"] == "awaiting_confirmation":
             normalized["confirmation"] = turn.get("confirmation") or {}
-            normalized["runtimeId"] = str(turn.get("runtimeId") or fallback_runtime_id)
         if turn.get("clarificationResponse"):
             normalized["clarificationResponse"] = str(turn["clarificationResponse"])
         if turn.get("clarificationQuestion"):

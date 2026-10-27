@@ -37,6 +37,7 @@ class AgentController:
     ) -> dict[str, Any]:
         session_id = str(session_id or "").strip() or f"session-{uuid.uuid4().hex[:12]}"
         session = self.repository.get_session(session_id)
+        pending_turn = None
         if session is None:
             self.repository.create_session(session_id, question)
             original_question = question
@@ -48,6 +49,7 @@ class AgentController:
             original_question = question
             clarification = ""
             if turns and turns[-1].get("state") == "awaiting_input":
+                pending_turn = turns[-1]
                 original_question = str(turns[-1].get("question") or question)
                 clarification = str(turns[-1].get("answer") or "")
                 clarification_response = question
@@ -60,7 +62,7 @@ class AgentController:
             runtime_question += f"\n\n用户附带了一张图片，识别时可将此路径传给 recognize_tracks.image_path：{image_path}"
             stored_question += "\n\n[附带图片]"
         display_question = original_question + ("\n\n[附带图片]" if image_path else "")
-        runtime_id = f"qa-{uuid.uuid4().hex}"
+        runtime_id = str((pending_turn or {}).get("runtimeId") or f"qa-{uuid.uuid4().hex}")
         runtime: SeaVideoHarness | None = None
         result: dict[str, Any] = {}
         try:
@@ -73,7 +75,7 @@ class AgentController:
         finally:
             if runtime is not None:
                 runtime.close()
-                if result.get("state") != "awaiting_confirmation":
+                if result.get("state") not in {"awaiting_confirmation", "awaiting_input"}:
                     self._discard_run(runtime, runtime_id)
         if clarification:
             result["clarificationQuestion"] = str(result.get("clarification") or clarification)

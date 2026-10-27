@@ -96,6 +96,17 @@ def test_state_update_prompts_require_current_plan_ids_and_nested_reflection_pat
     assert "patch 对象内" in agents["reflector"]["system_prompt"]
 
 
+def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
+    role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
+    planner = next(item for item in role_config["agents"] if item["name"] == "planner")
+    time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
+
+    assert "{time_anchor}" in planner["system_prompt"]
+    assert "固定时间锚点" in planner["system_prompt"]
+    assert "相对时间条件" in planner["skill_reminder"]["message"]
+    assert "fixed system-context time anchor" in time_scope
+
+
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
     tools = {item["name"]: item for item in load_config()["tools"]}
     for name in ("recognize_tracks", "dedup_tracks", "match_entities"):

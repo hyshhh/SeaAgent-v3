@@ -181,6 +181,22 @@ def test_state_store_survives_reload(tmp_path):
     assert loaded.snapshot()["requirements"] == ["r1"]
     assert loaded.snapshot()["version"] == 2
 
+
+def test_time_anchor_is_persisted_but_hidden_from_other_agents(tmp_path):
+    store = SharedStateStore(tmp_path / "state.sqlite")
+    state = store.load(
+        "thread-1", "昨天有几艘船？", time_anchor="2026-10-27T09:00:00+08:00"
+    )
+    store.save("thread-1", state)
+
+    resumed = store.load("thread-1", "昨天有几艘船？", time_anchor="2026-10-28T09:00:00+08:00")
+    assert resumed.snapshot()["time_anchor"] == "2026-10-27T09:00:00+08:00"
+    assert "time_anchor" not in resumed.view()
+
+    resumed.start_turn("今天有几艘船？", time_anchor="2026-10-28T09:00:00+08:00")
+    assert resumed.snapshot()["time_anchor"] == "2026-10-28T09:00:00+08:00"
+
+
 def test_reflector_writes_the_answer_through_shared_state():
     state = SharedTaskState("问题")
     state.update("reflector", {"decision": "terminate", "assessment": {"final_answer": "已确认"}})

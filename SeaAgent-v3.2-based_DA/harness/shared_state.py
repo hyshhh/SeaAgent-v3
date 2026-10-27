@@ -21,7 +21,7 @@ OWNER_FIELDS = {
     "planner": {"requirements", "plan", "next_action", "clarification"},
     "executor": {"evidence_ids", "step_status", "execution_status"},
     "reflector": {"assessment", "evidence_gaps", "conflicts", "decision"},
-    "runtime": {"question", "task_status", "iteration", "pending_agent"},
+    "runtime": {"question", "task_status", "iteration", "pending_agent", "time_anchor"},
 }
 ROLE_UPDATE_TOOLS = {
     "planner": "update_planner_state",
@@ -169,6 +169,7 @@ class SharedTaskState:
         values: dict[str, Any] | None = None,
         artifact_dir: str | Path | None = None,
         artifact_root: str | Path | None = None,
+        time_anchor: str | None = None,
     ):
         self._lock = threading.RLock()
         self._saved_version: int | None = None
@@ -177,6 +178,7 @@ class SharedTaskState:
         self._artifact_dir = Path(artifact_dir or self._artifact_root).resolve()
         self._values = {
             "question": str(question or ""),
+            "time_anchor": str(time_anchor or ""),
             "requirements": [],
             "plan": [],
             "next_action": None,
@@ -236,6 +238,7 @@ class SharedTaskState:
                     "closeout_reminder_sent",
                     "closeout_repair_used",
                     "tool_calls",
+                    "time_anchor",
                     "role_write_counts", "agent_start_write_counts",
                 }
             }
@@ -337,6 +340,10 @@ class SharedTaskState:
 
     # 2.1.6 校验类型、枚举、步骤 ID 与可序列化性
     def _validate(self, patch: dict[str, Any]) -> None:
+        if "time_anchor" in patch and (
+            not isinstance(patch["time_anchor"], str) or not patch["time_anchor"]
+        ):
+            raise ValueError("time_anchor must be non-empty text")
         for key in {"requirements", "evidence_ids", "evidence_gaps", "conflicts"} & patch.keys():
             if not isinstance(patch[key], list) or any(
                 not isinstance(item, str) for item in patch[key]
@@ -408,13 +415,16 @@ class SharedTaskState:
         return self.update("runtime", patch)
 
     # 2.1.8 开始新问答，重置本轮调用数并递增版本
-    def start_turn(self, question: str) -> None:
+    def start_turn(self, question: str, time_anchor: str | None = None) -> None:
         """新问答清空任务字段和调用统计。"""
         with self._lock:
             self._clear_turn_artifacts()
             version = self._values["version"]
             self._values = SharedTaskState(
-                question, artifact_dir=self._artifact_dir, artifact_root=self._artifact_root
+                question,
+                artifact_dir=self._artifact_dir,
+                artifact_root=self._artifact_root,
+                time_anchor=time_anchor,
             ).snapshot()#新建一个实例，所有字段回到初始值 #新实例继续用同一个外置结果目录，不会丢配置
             self._values.update(version=version + 1)
 
@@ -746,7 +756,9 @@ class SharedStateStore:
         shutil.rmtree(state._artifact_dir, ignore_errors=True)
 
     # 3.1.4 加载状态及其存储修订号
-    def load(self, thread_id: str, question: str = "") -> SharedTaskState:
+    def load(
+        self, thread_id: str, question: str = "", time_anchor: str | None = None
+    ) -> SharedTaskState:
         with closing(sqlite3.connect(self.path, timeout=30)) as connection:
             row = connection.execute(
                 "SELECT version, payload FROM task_states WHERE thread_id = ?", (thread_id,)
@@ -756,6 +768,7 @@ class SharedStateStore:
             json.loads(row[1]) if row else None,
             _session_artifact_dir(self.artifact_root, thread_id),
             self.artifact_root,
+            time_anchor,
         )
         state._saved_version = row[0] if row else None
         return state
