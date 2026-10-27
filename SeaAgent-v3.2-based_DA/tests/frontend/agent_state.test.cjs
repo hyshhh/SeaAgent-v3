@@ -149,26 +149,28 @@ test('registry count metadata distinguishes matched tracks from raw tracks', () 
   assert.match(html, /Tracks not in registry: 18/);
 });
 
-test('track evidence is one table with compact clips and optional registry result', () => {
+test('track evidence is one table with one keyframe per track and optional registry result', () => {
   const ui = page();
   ui.run(`renderEvidence({ registryMatchUsed: true, tools: ['match_entities'], trackRows: [
     { trackId: 't-1', startTimeText: '2026-10-25 10:00:00', endTimeText: '2026-10-25 10:00:05',
       startTime: 1792893600, endTime: 1792893605,
-      shipSegmentId: 'segment-1',
+      keyframeId: 'kf-1',
       registryMatch: { status: 'In registry', score: 0.91, matchedObject: { hullNumber: '0857' } } },
     { trackId: 't-2', startTimeText: '2026-10-25 10:02:00', endTimeText: '2026-10-25 10:02:05',
+      keyframeIds: ['kf-2-first', 'kf-2-second'],
       registryMatch: { status: 'Not in registry', score: 0.42, matchedObject: null } }
   ] });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /<table class="qa-evidence-table">/);
-  assert.match(html, /<th>Track ID<\/th><th>Appearance time<\/th><th>Clip<\/th><th>Registry match<\/th>/);
-  assert.match(html, /autoplay muted loop playsinline preload="none"/);
-  assert.match(html, /data-src="\/api\/evidence\/clips\/segment-1"/);
-  assert.match(html, /data-src="\/api\/evidence\/tracks\/t-2\/clip\?/);
+  assert.match(html, /<th>Track ID<\/th><th>Appearance time<\/th><th>Keyframe<\/th><th>Registry match<\/th>/);
+  assert.match(html, /src="\/api\/evidence\/keyframes\/kf-1\?scale=0.5"/);
+  assert.match(html, /src="\/api\/evidence\/keyframes\/kf-2-first\?scale=0.5"/);
+  assert.equal((html.match(/<img /g) || []).length, 2);
+  assert.doesNotMatch(html, /kf-2-second|<video|autoplay|\/api\/evidence\/clips/);
   assert.match(html, /0857/);
   assert.match(html, /In registry/);
   assert.match(html, /Not in registry/);
-  assert.doesNotMatch(html, /Keyframes|Registry references/);
+  assert.doesNotMatch(html, /Registry references/);
 });
 
 test('non-match evidence leaves the registry column empty', () => {
@@ -300,8 +302,8 @@ test('confirmation card is mounted in the visible chat or trace view', () => {
 
   assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
   assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
-  assert.match(template, /qa\.css\?v=20/);
-  assert.match(template, /agent\.js\?v=91/);
+  assert.match(template, /qa\.css\?v=21/);
+  assert.match(template, /agent\.js\?v=92/);
   const ui = page();
   ui.run(`currentSessionId = 't'; qaView = 'chat';
     renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);

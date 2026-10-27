@@ -124,15 +124,18 @@ class ToolService:
         max_frames: int | None = MAX_FRAMES_PER_TRACK,
         *,
         require_complete: bool = False,
-    ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
-        """Keep only a few searchable frames per track; full frame records stay inside the service."""
+    ) -> tuple[dict[str, list[dict[str, Any]]], list[str], dict[str, str]]:
+        """Return searchable frames, incomplete tracks and each track's first keyframe."""
         grouped: dict[str, list[dict[str, Any]]] = {}
         missing: list[str] = []
+        first_keyframes: dict[str, str] = {}
         track_ids = [str(track["trackId"]) for track in tracks]
         for offset in range(0, len(track_ids), 40):
             batch = track_ids[offset : offset + 40]
             raw = self.repository.get_keyframes(batch, embedded_only=False)
             for track_id in batch:
+                if keyframe_id := self._first_keyframe_id(raw.get(track_id, [])):
+                    first_keyframes[track_id] = keyframe_id
                 frames = sorted(
                     raw.get(track_id, []),
                     key=lambda item: (
@@ -159,7 +162,26 @@ class ToolService:
                 grouped[track_id] = searchable
                 if not searchable or (require_complete and len(searchable) != len(frames)):
                     missing.append(track_id)
-        return grouped, missing
+        return grouped, missing, first_keyframes
+
+    @staticmethod
+    def _first_keyframe_id(frames: Iterable[dict[str, Any]]) -> str:
+        candidates = [
+            (index, frame)
+            for index, frame in enumerate(frames)
+            if isinstance(frame, dict) and frame.get("keyframeId")
+        ]
+        if not candidates:
+            return ""
+
+        def sort_key(item: tuple[int, dict[str, Any]]) -> tuple[float, int]:
+            try:
+                timestamp = float(item[1].get("timestamp"))
+            except (TypeError, ValueError):
+                timestamp = float("inf")
+            return timestamp, item[0]
+
+        return str(min(candidates, key=sort_key)[1]["keyframeId"])
 
     # 2.3 把按轨迹分组的帧拍平
     @staticmethod
@@ -308,7 +330,7 @@ class ToolService:
             return {"ok": False, "error": "recognition_query_required", "hint": "至少提供 hull_number、description 或 image_path。"}
 
         tracks, search_complete = self._scan_tracks(scope)
-        frames, missing = self._load_search_frames(tracks)
+        frames, missing, first_keyframes = self._load_search_frames(tracks)
         keyframe_hull_matches: dict[str, list[dict[str, Any]]] = {}
         if hull:
             track_ids = [str(track["trackId"]) for track in tracks]
@@ -368,6 +390,9 @@ class ToolService:
         candidates = [item for item in candidates if item["scoreBand"] != "mismatch"]
         candidates.sort(key=lambda item: (item["scoreBand"] != "match", -(item["score"] or -1)))
         selected = candidates[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
+        for item in selected:
+            if keyframe_id := first_keyframes.get(item["trackId"]):
+                item["keyframeId"] = keyframe_id
         search_complete = search_complete and not missing
         status = "confirmed" if any(item["scoreBand"] == "match" for item in selected) else "unconfirmed" if selected or not search_complete else "mismatch"
         result = {
@@ -416,7 +441,7 @@ class ToolService:
             if isinstance(reference, dict)
         ]
         tracks, complete = self._scan_tracks(scope)
-        frames, missing = self._load_search_frames(tracks)
+        frames, missing, first_keyframes = self._load_search_frames(tracks)
         if not registry_items or not references:
             coverage_complete = complete and not missing and bool(registry_items and references)
             return {  # 库里查不到该舷号或没有参考图：只能返回未确认
@@ -453,6 +478,9 @@ class ToolService:
             ))
         matches.sort(key=lambda item: (item["scoreBand"] != "match", -(item.get("score") or -1)))
         matches = matches[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
+        for item in matches:
+            if keyframe_id := first_keyframes.get(item["trackId"]):
+                item["keyframeId"] = keyframe_id
         missing = list(dict.fromkeys(missing + [str(value) for value in result.get("unscoredTrackIds", [])]))
         visual_complete = bool(result.get("registryCoverageComplete")) and complete and not missing
         status = "confirmed" if any(item["scoreBand"] == "match" for item in matches) else "unconfirmed" if matches or not visual_complete else "mismatch"
@@ -539,7 +567,7 @@ class ToolService:
         if problem:
             return {"ok": False, "error": "invalid_time_range", "hint": problem}
         tracks, scan_complete = self._scan_tracks(scope)
-        frames, missing = self._load_search_frames(tracks)
+        frames, missing, first_keyframes = self._load_search_frames(tracks)
         dedup = self._deduplicate_tracks(
             tracks,
             {track_id: {"keyframes": values} for track_id, values in frames.items()},
@@ -547,7 +575,7 @@ class ToolService:
         return {
             "ok": True,
             "tracks": tracks,
-            "frames": frames,
+            "firstKeyframes": first_keyframes,
             **dedup,
             "coverageComplete": scan_complete and not missing,
         }
@@ -558,6 +586,15 @@ class ToolService:
             result = self._dedup_track_analysis(time_range)
             if not result.get("ok"):
                 return result
+            tracks = result.get("tracks", [])
+            display_tracks = tracks[: self.MAX_EVIDENCE_TRACKS]
+            first_keyframes = result.get("firstKeyframes", {})
+            track_rows = []
+            for track in display_tracks:
+                row = self._track_match_summary(track, [])
+                if keyframe_id := first_keyframes.get(str(track["trackId"])):
+                    row["keyframeId"] = keyframe_id
+                track_rows.append(row)
             return {
                 key: result[key]
                 for key in (
@@ -568,11 +605,8 @@ class ToolService:
                     "coverageComplete",
                 )
             } | {
-                "trackRows": [
-                    self._track_match_summary(track, [])
-                    for track in result.get("tracks", [])[: self.MAX_EVIDENCE_TRACKS]
-                ],
-                "trackRowsTruncated": len(result.get("tracks", [])) > self.MAX_EVIDENCE_TRACKS,
+                "trackRows": track_rows,
+                "trackRowsTruncated": len(tracks) > len(display_tracks),
             }
 
         return self._run_tool("dedup_tracks", dedup)
@@ -585,7 +619,7 @@ class ToolService:
             if problem:
                 return {"ok": False, "error": "invalid_time_range", "hint": problem}
             tracks, scan_complete = self._scan_tracks(scope)
-            frames, missing = self._load_search_frames(
+            frames, missing, first_keyframes = self._load_search_frames(
                 tracks, max_frames=None, require_complete=True
             )
             registry_items = self.repository.list_registry()
@@ -632,6 +666,8 @@ class ToolService:
                     band="match" if registered else "mismatch",
                     reference_ids=best.get("matchedRegistryReferenceIds", []) if best else [],
                 )
+                if keyframe_id := first_keyframes.get(track_id):
+                    detail["keyframeId"] = keyframe_id
                 detail["matchedObject"] = match_object
                 detail["trackIds"] = [track_id]
                 matches.append(detail)
@@ -1083,8 +1119,6 @@ class ToolService:
     def _show_evidence(
         self,
         track_ids: list[str] | None = None,
-        keyframe_ids: list[str] | None = None,
-        registry_reference_ids: list[str] | None = None,
         time_range: tuple[str | float, str | float] | None = None,
         max_items: int | None = None,
     ) -> dict[str, Any]:
@@ -1093,26 +1127,19 @@ class ToolService:
             return {"ok": False, "error": "invalid_time_range", "hint": problem}
         limit = max(1, min(20, int(max_items or self.MAX_RETURNED_MATCHES)))
         track_ids = list(dict.fromkeys(str(value) for value in (track_ids or []) if value))[:limit]
-        keyframe_ids = list(dict.fromkeys(str(value) for value in (keyframe_ids or []) if value))
-        registry_reference_ids = list(dict.fromkeys(str(value) for value in (registry_reference_ids or []) if value))
-        generated_segments: list[str] = []
-        shown_keyframes = list(keyframe_ids)
+        frame_groups = self.repository.get_keyframes(track_ids, embedded_only=False)
+        first_keyframes = {
+            track_id: keyframe_id
+            for track_id, frames in frame_groups.items()
+            if (keyframe_id := self._first_keyframe_id(frames))
+        }
         track_rows: list[dict[str, Any]] = []
         for track_id in track_ids:
             track = self.repository.get_track(track_id)
-            frames = self._build_frames([track_id]).get("keyframes", [])
-            if frames:
-                selected = frames[: self.MAX_FRAMES_PER_TRACK]
-                # 该轨迹展示的关键帧
-                shown_keyframes.extend(str(frame["keyframeId"]) for frame in selected)
-            # 该轨迹生成的视频片段
-            clip = self._build_clip(track_id, scope, scale=0.25)
-            if clip.get("ok") and clip.get("found") and clip.get("shipSegmentId"):
-                generated_segments.append(str(clip["shipSegmentId"]))
             if not track:
                 continue
-            start = max(float(track["startTime"]), scope[0]) if track and scope else (track.get("startTime") if track else None)
-            end = min(float(track["endTime"]), scope[1]) if track and scope else (track.get("endTime") if track else None)
+            start = max(float(track["startTime"]), scope[0]) if scope else track.get("startTime")
+            end = min(float(track["endTime"]), scope[1]) if scope else track.get("endTime")
             if start is None or end is None or start > end:
                 continue
             row = {
@@ -1122,24 +1149,15 @@ class ToolService:
                 "startTimeText": format_monitor_time(start) if start is not None else "",
                 "endTimeText": format_monitor_time(end) if end is not None else "",
             }
-            if clip.get("ok") and clip.get("found") and clip.get("shipSegmentId"):
-                row["shipSegmentId"] = str(clip["shipSegmentId"])
+            if keyframe_id := first_keyframes.get(track_id):
+                row["keyframeId"] = keyframe_id
             track_rows.append(row)
-        shown_keyframes = list(dict.fromkeys(shown_keyframes))[:limit * self.MAX_FRAMES_PER_TRACK]
-        shown_segments = list(dict.fromkeys(generated_segments))[:limit]
-        shown_references = self._representative_registry_reference_ids(registry_reference_ids)[:limit]
         return {
             "ok": True,  # 调用成功
-            "shownKeyframeIds": shown_keyframes,  # 展示的关键帧编号
-            "shownShipSegmentIds": shown_segments,  # 展示的视频片段编号
-            "shownRegistryReferenceIds": shown_references,  # 展示的库参考图编号
             "trackIds": track_ids,  # 汇总的轨迹编号
             "trackRows": track_rows,  # 前端按轨迹渲染的统一证据行
             "statistics": {  # 展示数量统计
                 "trackCount": len(track_ids),  # 轨迹数
-                "keyframeCount": len(shown_keyframes),  # 关键帧数
-                "clipCount": len(shown_segments),  # 片段数
-                "registryReferenceCount": len(shown_references),  # 参考图数
             },
         }
 
@@ -1147,14 +1165,12 @@ class ToolService:
     def show_evidence(
         self,
         track_ids: list[str] | None = None,
-        keyframe_ids: list[str] | None = None,
-        registry_reference_ids: list[str] | None = None,
         time_range: tuple[str | float, str | float] | None = None,
         max_items: int | None = None,
     ) -> dict[str, Any]:
         return self._run_tool(
             "show_evidence",
-            lambda: self._show_evidence(track_ids, keyframe_ids, registry_reference_ids, time_range, max_items),
+            lambda: self._show_evidence(track_ids, time_range, max_items),
         )
 
     # ------------------------------------------------------------------ #

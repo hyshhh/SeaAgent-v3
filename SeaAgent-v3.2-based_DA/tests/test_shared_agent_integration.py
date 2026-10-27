@@ -81,7 +81,7 @@ class _ScriptedModel(ChatOpenAI):
                             },
                         }
                 elif not state["evidence"]:
-                    name, args = "show_evidence", {"keyframe_ids": ["kf1"]}
+                    name, args = "show_evidence", {"track_ids": ["t1"]}
                 else:
                     name = "update_reflection_state"
                     args["patch"] = {

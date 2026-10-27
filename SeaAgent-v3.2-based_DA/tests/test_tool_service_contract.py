@@ -19,7 +19,9 @@ def test_direct_recognition_returns_scored_candidates_not_all_tracks():
     service = ToolService.__new__(ToolService)
     service._validate_time_range = lambda _value: (None, "")
     service._scan_tracks = lambda _scope: (tracks, True)
-    service._load_search_frames = lambda items: ({item["trackId"]: [] for item in items}, [])
+    service._load_search_frames = lambda items: (
+        {item["trackId"]: [] for item in items}, [], {"t-7": "kf-7"}
+    )
     service._track_text_scores = lambda *_args: {
         "t-7": {
             "embeddingScore": 0.91,
@@ -29,7 +31,6 @@ def test_direct_recognition_returns_scored_candidates_not_all_tracks():
     }
     service._track_image_scores = lambda *_args: {}
     service._band = lambda *_args: "match"
-
     result = service._recognize_tracks(description="yellow vessel")
 
     assert result["status"] == "confirmed"
@@ -40,6 +41,7 @@ def test_direct_recognition_returns_scored_candidates_not_all_tracks():
     assert "confidence" not in result
     assert "confirmedMatches" not in result
     assert "tracks" not in result
+    assert result["matches"][0]["keyframeId"] == "kf-7"
 
 
 def test_hull_number_in_keyframe_counts_as_a_hit():
@@ -58,12 +60,13 @@ def test_hull_number_in_keyframe_counts_as_a_hit():
     service.repository = Repository()
     service._validate_time_range = lambda _value: (None, "")
     service._scan_tracks = lambda _scope: ([_track("t-1")], True)
-    service._load_search_frames = lambda _items: ({"t-1": []}, [])
+    service._load_search_frames = lambda _items: ({"t-1": []}, [], {"t-1": "kf-0857"})
 
     result = service._recognize_tracks(hull_number="0857")
 
     assert result["status"] == "confirmed"
     assert result["matches"][0]["keyframeIds"] == ["kf-0857"]
+    assert result["matches"][0]["keyframeId"] == "kf-0857"
 
 
 def test_unmatched_supplied_alias_requests_registry_assistance():
@@ -75,7 +78,7 @@ def test_unmatched_supplied_alias_requests_registry_assistance():
     service.repository = Repository()
     service._validate_time_range = lambda _value: (None, "")
     service._scan_tracks = lambda _scope: ([], True)
-    service._load_search_frames = lambda _items: ({}, [])
+    service._load_search_frames = lambda _items: ({}, [], {})
 
     result = service._recognize_tracks(hull_number="小红")
 
@@ -128,7 +131,7 @@ def test_registry_assisted_search_without_reference_images_is_unconfirmed():
     service.repository = Repository()
     service._validate_time_range = lambda _value: (None, "")
     service._scan_tracks = lambda _scope: ([_track("t-1")], True)
-    service._load_search_frames = lambda _tracks: ({"t-1": []}, [])
+    service._load_search_frames = lambda _tracks: ({"t-1": []}, [], {})
 
     result = service._match_registry_tracks("0857")
 
@@ -149,6 +152,7 @@ def test_dedup_tool_returns_counts_and_bounded_display_rows():
         "highThresholdShipCount": 2,
         "lowThresholdShipCount": 1,
         "tracks": [_track("t-1")],
+        "firstKeyframes": {"t-1": "kf-first"},
     }
 
     result = service.dedup_tracks()
@@ -164,9 +168,43 @@ def test_dedup_tool_returns_counts_and_bounded_display_rows():
             "scoreBand": "mismatch",
             "startTime": 1.0,
             "endTime": 2.0,
+            "keyframeId": "kf-first",
         }],
         "trackRowsTruncated": False,
     }
+
+
+def test_show_evidence_selects_one_first_keyframe_without_embedding_requirement():
+    class Repository:
+        def get_keyframes(self, track_ids, embedded_only=False):
+            assert track_ids == ["t-1"]
+            assert embedded_only is False
+            return {"t-1": [
+                {"keyframeId": "kf-second", "timestamp": 2.0, "keyframeVectorId": None},
+                {"keyframeId": "kf-first", "timestamp": 1.0, "keyframeVectorId": None},
+            ]}
+
+        def get_track(self, track_id):
+            assert track_id == "t-1"
+            return _track(track_id)
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service._validate_time_range = lambda _value: (None, "")
+
+    result = service._show_evidence(["t-1"])
+
+    assert result["trackRows"][0]["keyframeId"] == "kf-first"
+    assert "shipSegmentId" not in result["trackRows"][0]
+
+
+def test_first_keyframe_is_selected_by_time_without_requiring_an_embedding():
+    frames = [
+        {"keyframeId": "kf-later", "timestamp": 20.0, "keyframeVectorId": None},
+        {"keyframeId": "kf-first", "timestamp": 10.0, "keyframeVectorId": None},
+    ]
+
+    assert ToolService._first_keyframe_id(frames) == "kf-first"
 
 
 def test_track_deduplication_uses_instance_safe_overlap_check():
@@ -211,7 +249,7 @@ def test_registry_count_matches_each_track_without_deduplication():
         assert items == tracks
         assert max_frames is None
         assert require_complete is True
-        return frames, []
+        return frames, [], {"t-1": "kf-1", "t-2": "kf-2"}
 
     service._load_search_frames = load_frames
     service._deduplicate_tracks = lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -236,7 +274,6 @@ def test_registry_count_matches_each_track_without_deduplication():
         }
 
     service._match_images = match_images
-
     result = service.match_entities()
 
     assert result["trackCount"] == 2
@@ -252,6 +289,7 @@ def test_registry_count_matches_each_track_without_deduplication():
         "keyframeId": "kf-1",
     }
     assert result["matches"][0]["scoreBand"] == "match"
+    assert result["matches"][0]["keyframeId"] == "kf-1"
 
 
 def test_registry_count_requires_vectors_for_every_selected_keyframe():
@@ -271,12 +309,13 @@ def test_registry_count_requires_vectors_for_every_selected_keyframe():
     service.repository = Repository()
     service.vectors = type("Vectors", (), {"keyframes": Index()})()
 
-    frames, incomplete = service._load_search_frames(
+    frames, incomplete, first_keyframes = service._load_search_frames(
         [_track("t-1")], max_frames=None, require_complete=True
     )
 
     assert [frame["keyframeId"] for frame in frames["t-1"]] == ["kf-1"]
     assert incomplete == ["t-1"]
+    assert first_keyframes == {"t-1": "kf-1"}
 
 
 def test_registry_count_marks_unsearchable_track_as_incomplete():
@@ -291,7 +330,7 @@ def test_registry_count_marks_unsearchable_track_as_incomplete():
     service._validate_time_range = lambda _value: (None, "")
     service._scan_tracks = lambda _scope: (tracks, True)
     service._load_search_frames = lambda _items, max_frames, *, require_complete: (
-        {"t-1": []}, ["t-1"]
+        {"t-1": []}, ["t-1"], {}
     )
 
     result = service.match_entities()

@@ -51,6 +51,7 @@ def test_tool_result_is_compact_for_model_but_full_for_trace_and_state():
                 "trackId": "t-1",
                 "score": 0.92,
                 "scoreBand": "match",
+                "keyframeId": "kf-first",
                 "keyframeIds": ["kf-1"],
                 "description": "yellow vessel",
             }
@@ -69,6 +70,8 @@ def test_tool_result_is_compact_for_model_but_full_for_trace_and_state():
     assert model_result["status"] == "confirmed"
     assert model_result["matches"][0]["trackId"] == "t-1"
     assert model_result["matches"][0]["scoreBand"] == "match"
+    assert model_result["matches"][0]["keyframeId"] == "kf-first"
+    assert "keyframeIds" not in model_result["matches"][0]
     assert "confidence" not in model_result
     assert "task" not in model_result
     assert message.artifact["full_result"] == full_result

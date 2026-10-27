@@ -54,10 +54,8 @@ tools:
   - name: show_evidence
     label: 证据与统计
     description: >-
-      按轨迹汇总本轮证据并生成压缩片段。界面每条轨迹一行显示 ID、出现时间和片段；仅在调用 match_entities 后显示先验库匹配结果。
+      按轨迹汇总本轮证据。界面每条轨迹一行显示 ID、出现时间和该轨迹的第一张关键帧；仅在调用 match_entities 后显示先验库匹配结果。
     arguments:
       track_ids: {type: string_list, required: false, description: 识别结果中的轨迹 ID。}
-      keyframe_ids: {type: string_list, required: false, description: "可选来源 ID，仅用于内部关联，不单独展示。"}
-      registry_reference_ids: {type: string_list, required: false, description: "可选来源 ID，仅用于内部关联，不单独展示。"}
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]。"}
-      max_items: {type: integer, required: false, default: 6, description: 最多生成片段的轨迹数。}
+      max_items: {type: integer, required: false, default: 6, description: 最多展示的轨迹数。}

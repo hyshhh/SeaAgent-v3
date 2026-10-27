@@ -37,8 +37,8 @@ _MODEL_RESULT_FIELDS = {
     "show_evidence": ("ok", "trackIds"),
 }
 _MATCH_FIELDS = (
-    "trackId", "startTimeText", "endTimeText", "hullNumber", "description",
-        "scoreBand", "keyframeIds", "registryReferenceIds",
+    "trackId", "startTimeText", "endTimeText", "keyframeId", "hullNumber", "description",
+    "scoreBand", "registryReferenceIds",
 )
 
 
@@ -252,7 +252,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                 rows = [
                     {
                         field: item[field]
-                        for field in ("trackId", "startTime", "endTime", "startTimeText", "endTimeText", "score", "scoreBand", "matchedObject")
+                        for field in ("trackId", "startTime", "endTime", "startTimeText", "endTimeText", "keyframeId", "score", "scoreBand", "matchedObject")
                         if field in item
                     }
                     for item in result.get("matches", [])[:60]

@@ -186,8 +186,8 @@ def _display_groups(records: list[dict[str, Any]], limit: int) -> list[dict[str,
 def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     """Build one compact evidence row per track for the QA table.
 
-    Keyframes remain internal provenance.  The UI receives only the track time,
-    generated clip and (when registry matching ran) its compact match summary.
+    The UI receives one keyframe, the track time and, when registry matching ran,
+    its compact match summary.
     """
     rows: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -202,10 +202,17 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             order.append(value)
         return rows[value]
 
-    def copy_time(row: dict[str, Any], source: dict[str, Any]) -> None:
+    def copy_track_evidence(row: dict[str, Any], source: dict[str, Any]) -> None:
         for key in ("startTime", "endTime", "startTimeText", "endTimeText"):
             if source.get(key) not in (None, ""):
                 row[key] = source[key]
+        keyframe_id = source.get("keyframeId")
+        if keyframe_id:
+            row["keyframeId"] = str(keyframe_id)
+        elif not row.get("keyframeId"):
+            keyframe_ids = source.get("keyframeIds")
+            if isinstance(keyframe_ids, list) and keyframe_ids:
+                row["keyframeId"] = str(keyframe_ids[0])
 
     for record in records:
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
@@ -216,9 +223,7 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             row = touch(item.get("trackId"))
             if row is None:
                 continue
-            copy_time(row, item)
-            if item.get("shipSegmentId"):
-                row["shipSegmentId"] = str(item["shipSegmentId"])
+            copy_track_evidence(row, item)
 
         candidates = [item for item in (result.get("matches") or []) if isinstance(item, dict)]
         if isinstance(result.get("tracks"), list):
@@ -228,7 +233,7 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             row = touch(track_id)
             if row is None:
                 continue
-            copy_time(row, candidate)
+            copy_track_evidence(row, candidate)
             if tool != "match_entities" or not registry_matching:
                 continue
             score = candidate.get("score", candidate.get("embeddingScore"))

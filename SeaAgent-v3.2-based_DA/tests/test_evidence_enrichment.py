@@ -117,7 +117,7 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
     assert payload["displayGroups"][0]["matchedObject"]["hullNumber"] == "0857"
 
 
-def test_evidence_rows_keep_track_time_clip_and_only_explicit_registry_statistics():
+def test_evidence_rows_keep_one_keyframe_track_time_and_explicit_registry_match():
     payload = build_evidence_payload([
         _record("dedup_tracks", {
             "trackCount": 2,
@@ -132,13 +132,14 @@ def test_evidence_rows_keep_track_time_clip_and_only_explicit_registry_statistic
                 "score": 0.91,
                 "scoreBand": "match",
                 "matchedObject": {"hullNumber": "0857"},
-                "keyframeIds": ["kf-hidden"],
+                "keyframeIds": ["kf-first", "kf-second"],
             }],
         }),
     ])
 
     assert payload["trackRows"] == [{
         "trackId": "t-1",
+        "keyframeId": "kf-first",
         "registryMatch": {
             "status": "In registry",
             "score": 0.91,
@@ -149,3 +150,19 @@ def test_evidence_rows_keep_track_time_clip_and_only_explicit_registry_statistic
     }]
     assert payload["registryMatchUsed"] is True
     assert payload["trackRowsTruncated"] is True
+
+
+def test_explicit_track_keyframe_wins_over_a_match_frame():
+    payload = build_evidence_payload([
+        _record("recognize_tracks", {
+            "matches": [{"trackId": "t-1", "keyframeIds": ["kf-match"]}],
+        }),
+        _record("show_evidence", {
+            "trackRows": [{"trackId": "t-1", "keyframeId": "kf-first"}],
+        }),
+        _record("match_registry_tracks", {
+            "matches": [{"trackId": "t-1", "keyframeIds": ["kf-registry-match"]}],
+        }),
+    ])
+
+    assert payload["trackRows"][0]["keyframeId"] == "kf-first"

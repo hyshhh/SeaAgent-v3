@@ -1373,15 +1373,13 @@ function renderEvidence(evidence) {
     const start = String(row?.startTimeText || '');
     const end = String(row?.endTimeText || '');
     const time = start && end ? `${start} – ${end}` : start || end || '—';
-    const query = new URLSearchParams({scale: '0.25'});
-    if (Number.isFinite(Number(row?.startTime))) query.set('startTime', String(row.startTime));
-    if (Number.isFinite(Number(row?.endTime))) query.set('endTime', String(row.endTime));
-    const segmentId = String(row?.shipSegmentId || '');
-    const clipUrl = segmentId
-      ? `/api/evidence/clips/${encodeURIComponent(segmentId)}`
-      : `/api/evidence/tracks/${encodeURIComponent(trackId)}/clip?${query}`;
-    const clip = trackId
-      ? `<video class="qa-evidence-clip" data-src="${escapeHtml(clipUrl)}" aria-label="Track ${escapeHtml(trackId)} clip" autoplay muted loop playsinline preload="none"></video>`
+    const keyframeId = String(
+      row?.keyframeId
+      || (Array.isArray(row?.keyframeIds) ? row.keyframeIds[0] : '')
+      || ''
+    );
+    const keyframe = keyframeId
+      ? `<img class="qa-evidence-frame" src="/api/evidence/keyframes/${encodeURIComponent(keyframeId)}?scale=0.5" alt="Track ${escapeHtml(trackId)} keyframe" loading="lazy" decoding="async">`
       : '<span class="qa-evidence-empty">—</span>';
     const match = row?.registryMatch;
     let matchCell = '';
@@ -1392,10 +1390,10 @@ function renderEvidence(evidence) {
       const status = match?.status || 'Not in registry';
       matchCell = `<span class="qa-registry-status ${status === 'In registry' ? 'is-registered' : 'is-unregistered'}">${escapeHtml(status)}</span>${name ? `<span class="qa-registry-object">${escapeHtml(name)}${escapeHtml(score)}</span>` : ''}`;
     }
-    return `<tr><td class="qa-evidence-track-id">${escapeHtml(trackId)}</td><td>${escapeHtml(time)}</td><td class="qa-evidence-clip-cell">${clip}</td><td class="qa-evidence-registry-cell">${matchCell}</td></tr>`;
+    return `<tr><td class="qa-evidence-track-id">${escapeHtml(trackId)}</td><td>${escapeHtml(time)}</td><td class="qa-evidence-frame-cell">${keyframe}</td><td class="qa-evidence-registry-cell">${matchCell}</td></tr>`;
   });
   const table = tableRows.length
-    ? `<div class="qa-evidence-table-scroll"><table class="qa-evidence-table"><thead><tr><th>Track ID</th><th>Appearance time</th><th>Clip</th><th>Registry match</th></tr></thead><tbody>${tableRows.join('')}</tbody></table></div>`
+    ? `<div class="qa-evidence-table-scroll"><table class="qa-evidence-table"><thead><tr><th>Track ID</th><th>Appearance time</th><th>Keyframe</th><th>Registry match</th></tr></thead><tbody>${tableRows.join('')}</tbody></table></div>`
     : '<div class="qa-inspector-empty">No track evidence available.</div>';
   // 不再把整段原始 JSON 摊在面板里：换成能一眼看懂的要点。
   // 论文插图里那堆花括号只会占地方，真正要交代的是"有几条、什么 ID、用什么取的"。
@@ -1430,37 +1428,6 @@ function renderEvidence(evidence) {
     `<div><dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
   const truncated = evidence?.trackRowsTruncated || evidence?.statistics?.truncated;
   node.innerHTML = table + (truncated ? '<p class="qa-evidence-truncated">Showing the first 60 tracks.</p>' : '') + meta;
-  observeEvidenceClips(node);
-}
-
-function observeEvidenceClips(root) {
-  const videos = [...(root.querySelectorAll?.('video[data-src]') || [])];
-  if (!videos.length) return;
-  const activate = (video) => {
-    if (!video.dataset.src || video.src) return;
-    video.src = video.dataset.src;
-    video.addEventListener('error', () => {
-      const empty = document.createElement('span');
-      empty.className = 'qa-evidence-empty';
-      empty.textContent = 'Clip unavailable';
-      video.replaceWith(empty);
-    }, {once: true});
-    video.load();
-    const playback = video.play?.();
-    playback?.catch?.(() => {});
-  };
-  if (typeof IntersectionObserver === 'undefined') {
-    videos.forEach(activate);
-    return;
-  }
-  const observer = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      activate(entry.target);
-      observer.unobserve(entry.target);
-    }
-  }, {rootMargin: '160px'});
-  videos.forEach((video) => observer.observe(video));
 }
 
 async function loadAgentMemorySummary(showNotice = false) {
