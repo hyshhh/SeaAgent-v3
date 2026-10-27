@@ -23,5 +23,5 @@ def test_time_range_accepts_native_json_and_iso8601_values():
 
 def test_statistics_tools_accept_optional_time_scope():
     tools = {tool.name: tool for tool in build_tools(load_config(), Service())}
-    for name in ("count_total_entities", "count_entities_by_registry"):
+    for name in ("dedup_tracks", "match_entities"):
         assert tools[name].invoke({})["kwargs"] == {}

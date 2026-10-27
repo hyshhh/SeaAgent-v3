@@ -111,14 +111,16 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
         "inRegistryCount": 1,
         "unregisteredCount": 1,
         "coverageComplete": True,
-        "registeredMatches": [{"trackId": "t-1", "score": 0.91, "matchedObject": {"hullNumber": "0857"}}],
-        "unregisteredMatches": [{"trackId": "t-2", "score": 0.42, "matchedObject": {"hullNumber": "003"}}],
+        "matches": [
+            {"trackId": "t-1", "score": 0.91, "scoreBand": "match", "matchedObject": {"hullNumber": "0857"}},
+            {"trackId": "t-2", "score": 0.42, "scoreBand": "mismatch", "matchedObject": {"hullNumber": "003"}},
+        ],
     }
     message = guard.wrap_tool_call(
-        _Request("count_entities_by_registry", {}),
+        _Request("match_entities", {}),
         lambda request: ToolMessage(
             content=json.dumps(full_result),
-            name="count_entities_by_registry",
+            name="match_entities",
             tool_call_id=request.tool_call["id"],
         ),
     )
@@ -132,9 +134,7 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
     }
     assert message.artifact["full_result"] == json.loads(message.content)
     assert state.snapshot()["tool_results"][0]["result"] == json.loads(message.content)
-    assert state.evidence_artifact_results() == [{
-        "matches": [*full_result["registeredMatches"], *full_result["unregisteredMatches"]]
-    }]
+    assert state.evidence_artifact_results() == [{"matches": full_result["matches"]}]
     trace = _Trace(None, event_limit=4000, shared_state=state)
     trace.consume({"messages": [message]}, agent_name="executor")
     result = trace.result("thread", {"harness": {}})
@@ -147,10 +147,10 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
 def test_tool_error_keeps_error_type_for_model_debugging():
     guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
     message = guard.wrap_tool_call(
-        _Request("count_total_entities", {"time_range": [1, 2]}),
+        _Request("dedup_tracks", {"time_range": [1, 2]}),
         lambda _request: ToolMessage(
             content=json.dumps({"ok": False, "error": "tool_timeout", "errorType": "TimeoutError", "hint": "timed out"}),
-            name="count_total_entities",
+            name="dedup_tracks",
             status="error",
             tool_call_id="c1",
         ),

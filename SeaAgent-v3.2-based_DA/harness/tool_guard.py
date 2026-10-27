@@ -26,11 +26,11 @@ _MODEL_RESULT_FIELDS = {
     "verify_vessel_images": (
         "ok", "decision", "facts", "registryReferenceId", "keyframeId",
     ),
-    "count_total_entities": (
-        "ok", "rawTrackCount", "highThresholdCount", "lowThresholdCount",
+    "dedup_tracks": (
+        "ok", "trackCount", "highThresholdShipCount", "lowThresholdShipCount",
         "coverageComplete",
     ),
-    "count_entities_by_registry": (
+    "match_entities": (
         "ok", "entityCount", "inRegistryCount", "unregisteredCount",
         "coverageComplete",
     ),
@@ -65,12 +65,7 @@ def _model_result(name: str, result: Any) -> Any:
             compact["hint"] = str(compact["hint"])[:400]
         return compact
     compact = {key: result[key] for key in _MODEL_RESULT_FIELDS[name] if key in result}
-    if name.startswith("count_"):
-        for key, limit in (("trackIds", 3), ("keyframeIds", 6), ("registryReferenceIds", 3)):
-            values = result.get(key)
-            if isinstance(values, list) and values:
-                compact[key] = values[:limit]
-    elif name == "recognize_tracks":
+    if name == "recognize_tracks":
         statistics = result.get("statistics")
         statistics = statistics if isinstance(statistics, dict) else {}
         for key in ("searchedTrackCount", "unsearchableTrackCount"):
@@ -98,7 +93,7 @@ def _model_message(request: Any, response: Any, result: Any) -> Any:
         return response
     previous = getattr(response, "artifact", None)
     artifact = dict(previous) if isinstance(previous, dict) else {}
-    artifact["full_result"] = compact if name == "count_entities_by_registry" else result
+    artifact["full_result"] = compact if name == "match_entities" else result
     return _message(
         request,
         json.dumps(compact, ensure_ascii=False, default=str),
@@ -252,17 +247,13 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             isinstance(result, dict) and result.get("ok") is False
         )
         state_result = result
-        if name == "count_entities_by_registry" and not failed and isinstance(result, dict):
-            details = {
-                "matches": [
-                    *result.get("registeredMatches", []),
-                    *result.get("unregisteredMatches", []),
-                ]
-            }
+        if name == "match_entities" and not failed and isinstance(result, dict):
             try:
-                self.state.store_evidence_artifact(details)
+                self.state.store_evidence_artifact({"matches": result.get("matches", [])})
             except OSError:
                 pass
+            state_result = _model_result(name, result)
+        elif name == "dedup_tracks" and not failed:
             state_result = _model_result(name, result)
         self.state.finish_call(key, state_result, failed)
         if name not in STATE_TOOLS and name != "read_file":

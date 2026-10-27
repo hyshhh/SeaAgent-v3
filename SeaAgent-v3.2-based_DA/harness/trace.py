@@ -43,7 +43,7 @@ def _tool_calls(message: Any) -> list[dict[str, Any]]:
 
 # 1.5 将工具结果正文还原为结构化载荷
 def _parse_payload(value: Any) -> Any:
-    if str(getattr(value, "name", "")) == "count_entities_by_registry":
+    if str(getattr(value, "name", "")) == "match_entities":
         content = _content(value)
         if isinstance(content, str):
             try:
@@ -402,7 +402,7 @@ class _Trace:
         if self.shared_state is not None:
             private_records = [
                 {
-                    "tool": "count_entities_by_registry",
+                    "tool": "match_entities",
                     "status": "completed",
                     "result": item,
                 }

@@ -79,20 +79,20 @@ test('shared state renders escaped fields and its snapshot version', () => {
 test('evidence statistics render even when the query returns no visual items', () => {
   const ui = page();
   ui.run(`renderEvidence({ statistics: {
-    queryByTool: [{ tool: 'count_total_entities', statistics: { count: 0, entityCount: 0, countConfidence: 'confirmed' } }],
+    queryByTool: [{ tool: 'dedup_tracks', statistics: { trackCount: 0, highThresholdShipCount: 0, lowThresholdShipCount: 0 } }],
     display: { trackCount: 0, keyframeCount: 0, clipCount: 0, registryReferenceCount: 0 }
   } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /No evidence available/);
-  assert.match(html, /Entities: 0/);
+  assert.match(html, /High-threshold entities: 0/);
   assert.match(html, /Evidence display/);
 });
 
 test('compact count result metadata remains visible in the evidence panel', () => {
   const ui = page();
   ui.run(`renderEvidence({ statistics: { queryByTool: [{
-    tool: 'count_total_entities',
-    statistics: { rawTrackCount: 20, highThresholdCount: 12, lowThresholdCount: 10, coverageComplete: false }
+    tool: 'dedup_tracks',
+    statistics: { trackCount: 20, highThresholdShipCount: 12, lowThresholdShipCount: 10, coverageComplete: false }
   }] } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /Raw tracks: 20/);

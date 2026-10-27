@@ -23,7 +23,7 @@ def test_failed_records_contribute_nothing():
     """失败的工具结果不算证据：否则面板会出现根本没取到的 ID。"""
     records = [
         _record("recognize_tracks", {"ok": False, "error": "track_not_found", "keyframeIds": ["ghost"]}, status="error"),
-        _record("count_total_entities", {"ok": True, "trackIds": ["t-1"]}),
+        _record("dedup_tracks", {"ok": True, "trackIds": ["t-1"]}),
     ]
     payload = build_evidence_payload(records)
     assert payload["keyframeIds"] == []
@@ -52,7 +52,7 @@ def test_display_groups_bind_keyframes_to_a_track_and_rank_by_score():
 def test_a_track_appearing_in_several_results_is_merged_into_one_group():
     records = [
         _record("recognize_tracks", {"ok": True, "keyframesByTrack": {"t-9": {"keyframeIds": ["kf-9"]}}}),
-        _record("count_total_entities", {"ok": True, "tracks": [{"trackId": "t-9", "startTime": 1, "endTime": 2}]}),
+        _record("dedup_tracks", {"ok": True, "tracks": [{"trackId": "t-9", "startTime": 1, "endTime": 2}]}),
     ]
     payload = build_evidence_payload(records)
     assert [group["trackId"] for group in payload["displayGroups"]] == ["t-9"]
@@ -68,21 +68,21 @@ def test_long_id_lists_are_capped_and_empty_input_is_safe():
 
 def test_compact_count_fields_feed_frontend_statistics():
     payload = build_evidence_payload([
-        _record("count_total_entities", {
+        _record("dedup_tracks", {
             "ok": True,
-            "rawTrackCount": 20,
-            "highThresholdCount": 12,
-            "lowThresholdCount": 10,
+            "trackCount": 20,
+            "highThresholdShipCount": 12,
+            "lowThresholdShipCount": 10,
             "coverageComplete": False,
         }),
     ])
 
     assert payload["statistics"]["queryByTool"] == [{
-        "tool": "count_total_entities",
+        "tool": "dedup_tracks",
         "statistics": {
-            "rawTrackCount": 20,
-            "highThresholdCount": 12,
-            "lowThresholdCount": 10,
+            "trackCount": 20,
+            "highThresholdShipCount": 12,
+            "lowThresholdShipCount": 10,
             "coverageComplete": False,
         },
     }]
@@ -90,13 +90,13 @@ def test_compact_count_fields_feed_frontend_statistics():
 
 def test_external_registry_match_evidence_is_enriched_without_counting_as_model_result():
     payload = build_evidence_payload([
-        _record("count_entities_by_registry", {
+        _record("match_entities", {
             "entityCount": 1,
             "inRegistryCount": 1,
             "unregisteredCount": 0,
             "coverageComplete": True,
         }),
-        _record("count_entities_by_registry", {
+        _record("match_entities", {
             "matches": [{
                 "trackId": "t-1",
                 "trackIds": ["t-1", "t-2"],

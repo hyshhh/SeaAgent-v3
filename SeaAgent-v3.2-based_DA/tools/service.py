@@ -33,8 +33,8 @@ class ToolService:
         "recognize_tracks": IDENTIFICATION_TIMEOUT_SECONDS,
         "match_registry_tracks": IDENTIFICATION_TIMEOUT_SECONDS,
         "verify_vessel_images": IDENTIFICATION_TIMEOUT_SECONDS,
-        "count_total_entities": STATISTICS_TIMEOUT_SECONDS,
-        "count_entities_by_registry": STATISTICS_TIMEOUT_SECONDS,
+        "dedup_tracks": STATISTICS_TIMEOUT_SECONDS,
+        "match_entities": STATISTICS_TIMEOUT_SECONDS,
         "show_evidence": EVIDENCE_TIMEOUT_SECONDS,
     }
     MAX_RETURNED_MATCHES = 10
@@ -516,7 +516,7 @@ class ToolService:
     # 五、实体统计                                                             #
     # ------------------------------------------------------------------ #
     # 5.1 去重与库比对后的实体分析
-    def _entity_analysis(
+    def _dedup_track_analysis(
         self,
         time_range: tuple[str | float, str | float] | None = None,
         *,
@@ -538,36 +538,38 @@ class ToolService:
             "ok": True,
             "tracks": tracks,
             "frames": frames,
-            "deduplication": dedup,
+            **dedup,
             "coverageComplete": scan_complete and not missing,
         }
 
     # 5.2 统计全部实体
-    def countTotalEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
-        def count() -> dict[str, Any]:
-            result = self._entity_analysis(timeRange)
+    def dedupTracks(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+        def dedup() -> dict[str, Any]:
+            result = self._dedup_track_analysis(timeRange)
             if not result.get("ok"):
                 return result
-            dedup = result["deduplication"]
             return {
-                "ok": True,
-                "rawTrackCount": dedup["rawTrackCount"],
-                "highThresholdCount": dedup["highThresholdCount"],
-                "lowThresholdCount": dedup["lowThresholdCount"],
-                "coverageComplete": result["coverageComplete"],
+                key: result[key]
+                for key in (
+                    "ok",
+                    "trackCount",
+                    "highThresholdShipCount",
+                    "lowThresholdShipCount",
+                    "coverageComplete",
+                )
             }
 
-        return self._run_tool("count_total_entities", count)
+        return self._run_tool("dedup_tracks", dedup)
 
     # 5.3 统计库内实体
     # 5.4 统计库外实体
-    def countEntitiesByRegistry(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+    def matchEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
         def count() -> dict[str, Any]:
-            result = self._entity_analysis(timeRange, all_keyframes=True)
+            result = self._dedup_track_analysis(timeRange, all_keyframes=True)
             if not result.get("ok"):
                 return result
             frames = result["frames"]
-            groups = result["deduplication"]["lowGroups"]
+            groups = result["lowGroups"]
             registry_items = self.repository.list_registry()
             references = [
                 reference
@@ -586,8 +588,7 @@ class ToolService:
                 by_track.setdefault(str(match["matchedTrackId"]), []).append(match)
 
             in_registry = 0
-            registered_matches = []
-            unregistered_matches = []
+            matches = []
             threshold = float(self.settings["image_match"])
             for group in groups:
                 candidates = [match for track_id in group for match in by_track.get(track_id, [])]
@@ -614,22 +615,23 @@ class ToolService:
                     "registryReferenceIds": best.get("matchedRegistryReferenceIds", []) if best else [],
                     "scoreBand": "match" if registered else "mismatch",
                 }
-                (registered_matches if registered else unregistered_matches).append(detail)
+                matches.append(detail)
 
-            registry_coverage = not result["tracks"] or not registry_items or bool(
-                references and visual.get("registryCoverageComplete")
+            registry_coverage = (
+                not result["tracks"]
+                or not registry_items
+                or bool(references and visual.get("registryCoverageComplete"))
             )
             return {
                 "ok": True,
                 "entityCount": len(groups),
                 "inRegistryCount": in_registry,
                 "unregisteredCount": len(groups) - in_registry,
-                "coverageComplete": result["coverageComplete"] and registry_coverage,
-                "registeredMatches": registered_matches,
-                "unregisteredMatches": unregistered_matches,
+                "coverageComplete": result.get("coverageComplete", False) and registry_coverage,
+                "matches": matches,
             }
 
-        return self._run_tool("count_entities_by_registry", count)
+        return self._run_tool("match_entities", count)
 
     # epoch 秒的合理下限（2017 年）：早于此说明模型在编数字，而不是在描述监控录像
     MIN_PLAUSIBLE_EPOCH = datetime(2017, 1, 1, tzinfo=DEFAULT_TIMEZONE).timestamp()
@@ -1169,14 +1171,13 @@ class ToolService:
         low = float(self.settings["dedup_low"])
         high_groups = self._complete_link(track_ids, track_map, pair_scores, high)
         low_groups = self._complete_link(track_ids, track_map, pair_scores, low)
-
         # 高阈值只接受确定合并，因此对应保守（较大）船数；低阈值纳入待确认合并，对应最小船数。
         return {
+            "trackCount": len(tracks),
+            "highThresholdShipCount": len(high_groups),
+            "lowThresholdShipCount": len(low_groups),
             "highGroups": high_groups,
             "lowGroups": low_groups,
-            "rawTrackCount": len(track_ids),
-            "highThresholdCount": len(high_groups),
-            "lowThresholdCount": len(low_groups),
         }
 
     # ------------------------------------------------------------------ #

@@ -21,9 +21,9 @@ REFERENCE_ID_KEYS = (
 )
 TOOL_STATISTIC_KEYS = (
     "status",
-    "rawTrackCount",
-    "highThresholdCount",
-    "lowThresholdCount",
+    "trackCount",
+    "highThresholdShipCount",
+    "lowThresholdShipCount",
     "entityCount",
     "inRegistryCount",
     "unregisteredCount",
@@ -161,7 +161,7 @@ def _display_groups(records: list[dict[str, Any]], limit: int) -> list[dict[str,
             if not track_id:
                 continue
             group = touch(track_id)
-            if str(record.get("tool") or "") == "count_entities_by_registry":
+            if str(record.get("tool") or "") == "match_entities":
                 group["registryMatch"] = True
             group["trackIds"].extend(_collect_ids(candidate, TRACK_ID_KEYS))
             group["keyframeIds"].extend(_collect_ids(candidate, KEYFRAME_ID_KEYS))

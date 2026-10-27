@@ -15,8 +15,8 @@ def test_tools_are_config_driven():
         "recognize_tracks",
         "match_registry_tracks",
         "verify_vessel_images",
-        "count_total_entities",
-        "count_entities_by_registry",
+        "dedup_tracks",
+        "match_entities",
         "show_evidence",
     ]
     result = tools[0].invoke({"time_range": [1.0, 2.0], "hull_number": "0857"})
@@ -38,6 +38,6 @@ def test_vlm_schema_accepts_registry_reference_or_local_reference():
 
 
 def test_json_time_range_is_decoded_before_service_call():
-    tool = {tool.name: tool for tool in build_tools(load_config(), Service())}["count_total_entities"]
+    tool = {tool.name: tool for tool in build_tools(load_config(), Service())}["dedup_tracks"]
     result = tool.invoke({"time_range": json.dumps([1, 2])})
     assert result["kwargs"] == {"timeRange": (1.0, 2.0)}

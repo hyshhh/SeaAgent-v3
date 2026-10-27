@@ -15,8 +15,8 @@ def test_all_business_tools_are_exposed_as_compact_workflows():
         "recognize_tracks",
         "match_registry_tracks",
         "verify_vessel_images",
-        "count_total_entities",
-        "count_entities_by_registry",
+        "dedup_tracks",
+        "match_entities",
         "show_evidence",
     }
     assert not names & {"get_track", "get_frames", "get_clip", "get_registry", "list_registry", "add_registry_vessel"}
@@ -62,13 +62,14 @@ def test_supplied_aliases_follow_the_registry_assistance_step():
 def test_count_skills_map_user_intent_to_configured_tools():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     agents = {item["name"]: item for item in role_config["agents"]}
-    expected = ("count_total_entities", "count_entities_by_registry")
+    expected = ("dedup_tracks", "match_entities")
     planning = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
     assert all(name in planning for name in expected)
     assert all(name in statistics for name in expected)
-    assert "count_entities_by_registry" in agents["planner"]["system_prompt"]
+    assert "match_entities" in agents["planner"]["system_prompt"]
+    assert "同时返回去重后实体总数" in agents["planner"]["system_prompt"]
     assert "statistics 技能" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
 
@@ -79,7 +80,7 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     acceptance = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
     time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
 
-    assert "统计任务只规划对应 count_* 工具，不得加入 recognize_tracks" in planner["system_prompt"]
+    assert "统计任务只规划 dedup_tracks 或 match_entities，不得加入 recognize_tracks" in planner["system_prompt"]
     assert "Count-only plans must contain only the requested count tools, never `recognize_tracks`" in acceptance
     assert "including “所有时间”" in time_scope
     assert "Time scope is not a separate plan step" in time_scope
@@ -87,5 +88,5 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
 
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
     tools = {item["name"]: item for item in load_config()["tools"]}
-    for name in ("recognize_tracks", "count_total_entities", "count_entities_by_registry"):
+    for name in ("recognize_tracks", "dedup_tracks", "match_entities"):
         assert "省略 time_range 表示全部监控时间" in tools[name]["description"]

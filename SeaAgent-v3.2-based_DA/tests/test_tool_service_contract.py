@@ -138,27 +138,25 @@ def test_registry_assisted_search_without_reference_images_is_unconfirmed():
     assert result["coverageComplete"] is False
 
 
-def test_total_entity_count_returns_only_deduplication_counts():
+def test_dedup_tool_returns_only_counts():
     service = ToolService.__new__(ToolService)
-    service._entity_analysis = lambda *_args, **_kwargs: {
+    service._dedup_track_analysis = lambda *_args, **_kwargs: {
         "ok": True,
         "coverageComplete": False,
-        "deduplication": {
-            "highGroups": [["t-1"], ["t-2"]],
-            "lowGroups": [["t-1", "t-2"]],
-            "rawTrackCount": 2,
-            "highThresholdCount": 2,
-            "lowThresholdCount": 1,
-        },
+        "highGroups": [["t-1"], ["t-2"]],
+        "lowGroups": [["t-1", "t-2"]],
+        "trackCount": 2,
+        "highThresholdShipCount": 2,
+        "lowThresholdShipCount": 1,
     }
 
-    result = service.countTotalEntities()
+    result = service.dedupTracks()
 
     assert result == {
         "ok": True,
-        "rawTrackCount": 2,
-        "highThresholdCount": 2,
-        "lowThresholdCount": 1,
+        "trackCount": 2,
+        "highThresholdShipCount": 2,
+        "lowThresholdShipCount": 1,
         "coverageComplete": False,
     }
 
@@ -176,15 +174,16 @@ def test_registry_entity_analysis_reads_all_frames_once_and_preserves_coverage()
         return frames, ["t-1"]
 
     service._load_search_frames = load_search_frames
-    service._deduplicate_tracks = lambda _tracks, grouped: {
+    service._deduplicate_tracks = lambda _tracks, grouped, **_kwargs: {
         "lowGroups": [["t-1"]],
+        "coverageComplete": False,
         "receivedAllFrames": grouped == {"t-1": {"keyframes": frames["t-1"]}},
     }
 
-    result = service._entity_analysis(all_keyframes=True)
+    result = service._dedup_track_analysis(all_keyframes=True)
 
     assert calls == [None]
-    assert result["deduplication"]["receivedAllFrames"] is True
+    assert result["receivedAllFrames"] is True
     assert result["coverageComplete"] is False
 
 
@@ -205,11 +204,11 @@ def test_track_deduplication_uses_instance_safe_overlap_check():
     assert result["highGroups"] == [["t-1"], ["t-2"]]
     assert result["lowGroups"] == [["t-1"], ["t-2"]]
     assert result == {
+        "trackCount": 2,
         "highGroups": [["t-1"], ["t-2"]],
         "lowGroups": [["t-1"], ["t-2"]],
-        "rawTrackCount": 2,
-        "highThresholdCount": 2,
-        "lowThresholdCount": 2,
+        "highThresholdShipCount": 2,
+        "lowThresholdShipCount": 2,
     }
 
 
@@ -221,15 +220,13 @@ def test_registry_count_combines_categories_and_uses_low_threshold_groups():
     service = ToolService.__new__(ToolService)
     service.repository = Repository()
     service.settings = {"image_match": 0.72}
-    service._entity_analysis = lambda *_args, **_kwargs: {
+    service._dedup_track_analysis = lambda *_args, **_kwargs: {
         "ok": True,
-        "coverageComplete": True,
         "tracks": [_track("t-1"), _track("t-2")],
         "frames": {"t-1": [{"keyframeId": "kf-1"}], "t-2": [{"keyframeId": "kf-2"}]},
-        "deduplication": {
-            "lowGroups": [["t-1", "t-2"]],
-            "highGroups": [["t-1"], ["t-2"]],
-        },
+        "coverageComplete": True,
+        "lowGroups": [["t-1", "t-2"]],
+        "highGroups": [["t-1"], ["t-2"]],
     }
     def match_images(**kwargs):
         assert kwargs["best_by_max_score"] is True
@@ -249,20 +246,20 @@ def test_registry_count_combines_categories_and_uses_low_threshold_groups():
 
     service._match_images = match_images
 
-    result = service.countEntitiesByRegistry()
+    result = service.matchEntities()
 
     assert result["entityCount"] == 1
     assert result["inRegistryCount"] == 1
     assert result["unregisteredCount"] == 0
     assert result["coverageComplete"] is True
-    assert result["registeredMatches"][0]["score"] == 0.73
-    assert result["registeredMatches"][0]["matchedObject"] == {
+    assert result["matches"][0]["score"] == 0.73
+    assert result["matches"][0]["matchedObject"] == {
         "registryId": "r-1",
         "hullNumber": "A01",
         "registryReferenceId": "ref-1",
         "keyframeId": "kf-1",
     }
-    assert result["unregisteredMatches"] == []
+    assert result["matches"][0]["scoreBand"] == "match"
 
 
 def test_image_match_can_select_a_registry_by_its_best_single_frame_score():
@@ -351,8 +348,8 @@ def test_each_business_tool_has_its_own_timeout_budget():
         "recognize_tracks": 60,
         "match_registry_tracks": 60,
         "verify_vessel_images": 60,
-        "count_total_entities": 120,
-        "count_entities_by_registry": 120,
+        "dedup_tracks": 120,
+        "match_entities": 120,
         "show_evidence": 120,
     }
 
