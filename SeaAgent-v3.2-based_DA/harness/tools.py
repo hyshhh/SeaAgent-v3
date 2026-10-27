@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Annotated, Any
 
 from pydantic import BeforeValidator
@@ -37,19 +38,23 @@ def _coerce_string_list(value: Any) -> list[str]:
 def _coerce_time_pair(value: Any) -> tuple[str | float, str | float]:
     if isinstance(value, str):
         candidate = value.strip()
-        if candidate.startswith("["):
+        if candidate.startswith(("[", "{")):
             try:
                 value = json.loads(candidate)
             except json.JSONDecodeError as error:
-                raise ValueError("expected two ISO-8601 timestamps") from error
+                raise ValueError("expected a JSON time range") from error
         elif "," in candidate:
             value = [part.strip() for part in candidate.split(",", maxsplit=1)]
         else:
             raise ValueError("expected a pair of ISO-8601 timestamps")
+    if isinstance(value, dict):
+        if set(value) != {"start", "end"}:
+            raise ValueError("expected an object with start and end timestamps")
+        value = [value["start"], value["end"]]
     if not isinstance(value, (list, tuple)) or len(value) != 2:
         raise ValueError("expected exactly two timestamps")
     normalized = []
-    for part in value:
+    for index, part in enumerate(value):
         if isinstance(part, bool) or not isinstance(part, (str, int, float)):
             raise TypeError("timestamps must be ISO-8601 strings or epoch seconds")
         if isinstance(part, str):
@@ -59,7 +64,13 @@ def _coerce_time_pair(value: Any) -> tuple[str | float, str | float]:
             try:
                 part = float(part)
             except ValueError:
-                pass
+                try:
+                    date.fromisoformat(part)
+                except ValueError:
+                    pass
+                else:
+                    boundary = "T00:00:00" if index == 0 else "T23:59:59.999999"
+                    part = f"{part}{boundary}"
         normalized.append(part)
     return normalized[0], normalized[1]
 

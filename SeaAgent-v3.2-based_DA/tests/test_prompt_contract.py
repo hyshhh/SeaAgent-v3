@@ -127,6 +127,9 @@ def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
     assert "固定时间锚点" in planner["system_prompt"]
     assert "相对时间条件" in planner["skill_reminder"]["message"]
     assert "fixed system-context time anchor" in time_scope
+    assert "“前天” is anchor date minus two days" in time_scope
+    assert "two-element array of ISO-8601 timestamps" in time_scope
+    assert "23:59:59.999999" in time_scope
 
 
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():

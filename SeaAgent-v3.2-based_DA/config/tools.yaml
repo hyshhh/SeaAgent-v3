@@ -10,7 +10,7 @@ tools:
       hull_number: {type: string, required: false, description: 可选舷号或目标别名；纯外观描述请用 description。}
       description: {type: string, required: false, description: 可选外观描述，例如颜色、船型和固定结构。}
       image_path: {type: string, required: false, description: 可选本地图片路径，只用于图像相似检索。}
-      time_range: {type: time_range, required: false, description: 可选起止时间；省略表示全部监控时间。}
+      time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天；省略表示全部监控时间。"}
       top_k: {type: integer, required: false, default: 6, description: 返回候选上限，工具会再次限制。}
 
   - name: match_registry_tracks
@@ -20,7 +20,7 @@ tools:
       自动完成分页、视觉匹配和覆盖统计，只返回 status、少量候选和证据 ID。库中有记录不等于视频出现。
     arguments:
       hull_number: {type: string, required: true, description: 要比对的舷号或别名。}
-      time_range: {type: time_range, required: false, description: 可选起止时间；省略表示全部监控时间。}
+      time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天；省略表示全部监控时间。"}
       top_k: {type: integer, required: false, default: 6, description: 返回候选上限。}
 
   - name: verify_vessel_images
@@ -41,7 +41,7 @@ tools:
       在时间范围内按视觉相似度去重，只返回原始轨迹数、高阈值实体数和低阈值实体数。高阈值数为保守上界，低阈值数为合并后的下界。
       省略 time_range 表示全部监控时间。
     arguments:
-      time_range: {type: time_range, required: false, description: 可选起止时间。}
+      time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
 
   - name: match_entities
     label: 实体先验库匹配统计
@@ -49,7 +49,7 @@ tools:
       将时间范围内的每条轨迹分别与先验库图片匹配，不做轨迹去重；任一关键帧分数达到阈值即计为在库。
       只向模型返回轨迹总数、在库数和不在库数；匹配 ID、分数及对象留作运行证据。省略 time_range 表示全部监控时间。
     arguments:
-      time_range: {type: time_range, required: false, description: 可选起止时间。}
+      time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
 
   - name: show_evidence
     label: 证据与统计
@@ -60,5 +60,5 @@ tools:
       track_ids: {type: string_list, required: false, description: 识别或统计结果中的轨迹 ID。}
       keyframe_ids: {type: string_list, required: false, description: 识别或统计结果中的关键帧 ID。}
       registry_reference_ids: {type: string_list, required: false, description: 识别结果中的先验库参考图 ID。}
-      time_range: {type: time_range, required: false, description: 可选证据时间范围。}
+      time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]。"}
       max_items: {type: integer, required: false, default: 6, description: 每类证据上限。}

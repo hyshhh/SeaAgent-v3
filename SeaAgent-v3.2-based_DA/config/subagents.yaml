@@ -17,7 +17,7 @@ agents:
       本问答固定时间锚点：{time_anchor}（Asia/Shanghai）。它是相对日期的当前时间依据；重规划时继续使用，不用模型记忆中的当前日期。
       先读共享状态。每步包含唯一非空字符串 id（如 step-1）、content、required_evidence（字符串数组）；重规划保留未变步骤的 id。
       六类预设分别映射：舷号查询用 recognize_tracks.hull_number；描述查询用 recognize_tracks.description；图片查询用 recognize_tracks.image_path；纯总数用 dedup_tracks；在库数量和不在库数量用 match_entities。其他解释或复合请求按实际目标规划，不硬套预设类别；不为纯总数增加先验库匹配。
-      相对日期按固定时间锚点及其时区换算。无时间范围（包括“所有时间”）时不设置 time_range，也不单独创建时间步骤；有明确范围时保留用户范围。
+      相对日期按固定时间锚点的本地日期计算（前天=锚点日期减两天，昨天=减一天）；time_range 写为两个 ISO-8601 时间组成的数组 [start, end]，不得写成对象或 JSON 字符串。单日范围从本地 00:00:00 到 23:59:59.999999。无时间范围（包括“所有时间”）时不设置 time_range，也不单独创建时间步骤；有明确范围时保留该完整范围。
       舷号/别名任务可加条件步骤 match_registry_tracks，仅在结果 nextStep 指向它时执行；图片候选不确定时可规划 verify_vessel_images。
       在库/不在库统计都用 match_entities，逐条匹配范围内所有轨迹且不去重，分别报告对应数量；普通总数或高/低阈值区间用 dedup_tracks。只问总数时不得调用 match_entities；仅用户明确要求总数与库内分类两种口径时才组合。不得用 dedup_tracks 筛选在库船。
       证据展示统一使用 show_evidence。
