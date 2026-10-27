@@ -261,6 +261,23 @@ class SharedTaskState:
         with self._lock:  #python上下文管理器，进入加锁，离开解锁
             version = self._values["version"]
             patch = deepcopy(patch)
+            mapped_step_ids = {}
+            if role == "executor" and isinstance(patch.get("step_status"), dict):
+                plan_ids = {step["id"] for step in self._values["plan"]}
+                aliases: dict[str, list[str]] = {}
+                for step in self._values["plan"]:
+                    for evidence in step.get("required_evidence", []):
+                        aliases.setdefault(evidence, []).append(step["id"])
+                normalized = {}
+                for key, status in patch["step_status"].items():
+                    targets = aliases.get(key, [])
+                    target = targets[0] if key not in plan_ids and len(targets) == 1 else key
+                    if target != key and target not in patch["step_status"] and target not in normalized:
+                        mapped_step_ids[key] = target
+                    else:
+                        target = key
+                    normalized[target] = status
+                patch["step_status"] = normalized
             self._validate(patch)
             if "plan" in patch:
                 patch["plan"] = _bounded_plan(patch["plan"])
@@ -301,16 +318,22 @@ class SharedTaskState:
             counts = self._values["role_write_counts"]
             counts[role] = counts.get(role, 0) + 1
             if not changed:
-                return {
+                result = {
                     "ok": True,
                     "unchanged": True,
                     "version": version,
                     "message": "状态已是最新值，无需重复修改。",
                 }
+                if mapped_step_ids:
+                    result["mapped_step_ids"] = mapped_step_ids
+                return result
             self._values.update(patch)
             self._invalidate_state_reads()
             self._changed()
-            return {"ok": True, "version": self._values["version"]}
+            result = {"ok": True, "version": self._values["version"]}
+            if mapped_step_ids:
+                result["mapped_step_ids"] = mapped_step_ids
+            return result
 
     # 2.1.6 校验类型、枚举、步骤 ID 与可序列化性
     def _validate(self, patch: dict[str, Any]) -> None:
@@ -348,11 +371,22 @@ class SharedTaskState:
         if "step_status" in patch:
             statuses = patch["step_status"]
             ids = {step["id"] for step in self._values["plan"]}
-            if not isinstance(statuses, dict) or any(
-                key not in ids or not isinstance(value, str) or value not in STEP_STATUSES
-                for key, value in statuses.items()
+            if not isinstance(statuses, dict):
+                raise ValueError("step_status must be an object keyed by current plan IDs")
+            invalid_ids = sorted(set(statuses) - ids)
+            if invalid_ids:
+                current_ids = ", ".join(sorted(ids)) or "none; the current plan is empty"
+                raise ValueError(
+                    f"step_status keys {invalid_ids!r} are not current plan IDs; "
+                    f"use plan[].id exactly. Current IDs: {current_ids}."
+                )
+            if any(
+                not isinstance(value, str) or value not in STEP_STATUSES
+                for value in statuses.values()
             ):
-                raise ValueError("step_status must refer to current plan ids and valid statuses")
+                raise ValueError(
+                    "step_status values must be pending, in_progress, completed or failed"
+                )
         if "iteration" in patch and (type(patch["iteration"]) is not int or patch["iteration"] < 0):
             raise ValueError("iteration must be a non-negative integer")
         if (

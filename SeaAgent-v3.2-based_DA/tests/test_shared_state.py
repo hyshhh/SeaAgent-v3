@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from harness.shared_state import SharedStateStore, SharedTaskState
@@ -91,6 +92,84 @@ def test_executor_can_update_progress_without_repassing_runtime_evidence():
     assert result["ok"] is True
     assert state.snapshot()["evidence_ids"] == ["t-1"]
     assert state.snapshot()["step_status"] == {"scan": "completed"}
+
+
+def test_numeric_plan_ids_are_normalized_before_execution_status_updates():
+    state = SharedTaskState("问题")
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+
+    planned = tools["update_planner_state"].invoke(
+        {"patch": {"plan": [{"id": 1, "content": "扫描轨迹"}]}}
+    )
+    updated = tools["update_execution_state"].invoke(
+        {"patch": {"step_status": {"1": "completed"}}}
+    )
+
+    assert planned["ok"] is True
+    assert state.snapshot()["plan"][0]["id"] == "1"
+    assert updated["ok"] is True
+    assert state.snapshot()["step_status"] == {"1": "completed"}
+
+
+def test_reflection_update_accepts_json_patch_and_sibling_fields():
+    state = SharedTaskState("问题")
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+
+    result = tools["update_reflection_state"].invoke(
+        {
+            "patch": json.dumps({"assessment": {"final_answer": "已完成"}}),
+            "decision": "terminate",
+        }
+    )
+
+    assert result["ok"] is True
+    assert state.snapshot()["assessment"]["final_answer"] == "已完成"
+    assert state.snapshot()["decision"] == "terminate"
+
+
+def test_executor_maps_unambiguous_evidence_name_to_plan_id():
+    state = SharedTaskState("问题")
+    state.update(
+        "planner",
+        {
+            "plan": [
+                {
+                    "id": "step-1",
+                    "content": "比对先验库",
+                    "required_evidence": ["match_registry_tracks"],
+                }
+            ]
+        },
+    )
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+
+    result = tools["update_execution_state"].invoke(
+        {"patch": {"step_status": {"match_registry_tracks": "completed"}}}
+    )
+
+    assert result["ok"] is True
+    assert result["mapped_step_ids"] == {"match_registry_tracks": "step-1"}
+    assert state.snapshot()["step_status"] == {"step-1": "completed"}
+
+
+def test_unknown_step_status_reports_current_plan_ids_without_partial_write():
+    state = SharedTaskState("问题")
+    state.update("planner", {"plan": [{"id": "step-1", "content": "搜索轨迹"}]})
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+
+    result = tools["update_execution_state"].invoke(
+        {
+            "patch": {
+                "execution_status": "running",
+                "step_status": {"unknown_tool": "completed"},
+            }
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "invalid_state_patch"
+    assert "Current IDs: step-1" in result["message"]
+    assert state.snapshot()["execution_status"] == "idle"
 
 def test_state_store_survives_reload(tmp_path):
     store = SharedStateStore(tmp_path / "state.json")

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .shared_state import OWNER_FIELDS
 
@@ -21,12 +22,27 @@ class _PlanStep(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    id: str | None = None
+    id: str = Field(
+        description="唯一字符串步骤 ID，如 step-1；执行时用此 ID 更新 step_status。",
+    )
     content: str
     required_evidence: list[str] = Field(
         default_factory=list,
         description="所需证据类型，字符串数组。",
     )
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _normalize_id(cls, value: Any) -> Any:
+        if isinstance(value, bool) or value is None:
+            raise ValueError("plan step id must be non-empty text or an integer")
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            value = value.strip()
+            if value:
+                return value
+        raise ValueError("plan step id must be non-empty text or an integer")
 
     @field_validator("required_evidence", mode="before")
     @classmethod
@@ -53,7 +69,10 @@ class _ExecutionPatch(_StatePatch):
         ),
     )
     execution_status: Literal["idle", "running", "success", "failed"] | None = None
-    step_status: dict[str, Literal["pending", "in_progress", "completed", "failed"]] | None = None
+    step_status: dict[str, Literal["pending", "in_progress", "completed", "failed"]] | None = Field(
+        default=None,
+        description="键必须是当前共享状态 plan[].id 的原值，不是工具名；先读取共享状态确认步骤 ID。",
+    )
 
 
 class _ReflectionPatch(_StatePatch):
@@ -70,6 +89,52 @@ class _ReflectionPatch(_StatePatch):
             text = value.strip()
             return {"final_answer": text} if text else {}
         return value
+
+
+def _decode_patch(value: Any) -> dict[str, Any]:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(exclude_unset=True)
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError("patch must be a JSON object") from error
+    if not isinstance(value, dict):
+        raise ValueError("patch must be an object")  # noqa: TRY004 - Pydantic validators require ValueError.
+    return value
+
+
+class _UpdateArguments(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    patch: _StatePatch
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_arguments(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as error:
+                raise ValueError("state update must be a JSON object") from error
+        if not isinstance(value, dict):
+            raise ValueError("state update must be an object")  # noqa: TRY004 - Pydantic validators require ValueError.
+
+        nested = _decode_patch(value["patch"]) if "patch" in value else value
+        extra_fields = {key: item for key, item in value.items() if key != "patch"}
+        return {"patch": {**nested, **extra_fields}}
+
+
+class _PlannerUpdateArguments(_UpdateArguments):
+    patch: _PlannerPatch
+
+
+class _ExecutionUpdateArguments(_UpdateArguments):
+    patch: _ExecutionPatch
+
+
+class _ReflectionUpdateArguments(_UpdateArguments):
+    patch: _ReflectionPatch
 
 
 # ------------------------------------------------------------------ #
@@ -100,16 +165,20 @@ def build_state_tools(state: Any) -> list[Any]:
         StructuredTool.from_function(
             planner_update,
             name="update_planner_state",
+            args_schema=_PlannerUpdateArguments,
             description=(
-                "Planner 专用；至少更新一个自有字段：requirements、plan（id/content/required_evidence）、"
+                "Planner 专用；在 patch 对象中传至少一个自有字段：requirements、plan（id/content/required_evidence）、"
                 "next_action、clarification。不要提交 decision、step_status 或 task_status。"
             ),
         ),
         StructuredTool.from_function(
             executor_update,
             name="update_execution_state",
+            args_schema=_ExecutionUpdateArguments,
             description=(
-                "Executor 专用；只更新 evidence_ids、execution_status、step_status（step ID→pending/in_progress/completed/failed）。"
+                "Executor 专用；在 patch 对象中传 evidence_ids、execution_status、step_status（当前 plan[].id→pending/in_progress/completed/failed）。"
+                "step_status 的键必须使用共享状态 plan[].id；不要使用工具名，先读取共享状态确认 ID。"
+                "若误传了唯一匹配某计划步骤 required_evidence 的证据名，运行时会映射到该步骤并返回 mapped_step_ids。"
                 "运行时自动记录成功工具结果中的证据 ID，通常省略 evidence_ids；若填写，只传 trackId、keyframeId、"
                 "shipSegmentId、registryReferenceId 等实体 ID，不能传 tool_call_id；无效 ID 会忽略并返回提示，其余进度照常保存。"
             ),
@@ -117,8 +186,9 @@ def build_state_tools(state: Any) -> list[Any]:
         StructuredTool.from_function(
             reflector_update,
             name="update_reflection_state",
+            args_schema=_ReflectionUpdateArguments,
             description=(
-                "Reflector 专用；只更新 assessment、evidence_gaps、conflicts、decision（terminate/replan/continue/failed）。"
+                "Reflector 专用；在 patch 对象中传 assessment、evidence_gaps、conflicts、decision（terminate/replan/continue/failed）。"
                 "assessment 必须是对象，如 {'final_answer': '结论'}。"
             ),
         ),

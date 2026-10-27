@@ -86,6 +86,16 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     assert "Time scope is not a separate plan step" in time_scope
 
 
+def test_state_update_prompts_require_current_plan_ids_and_nested_reflection_patch():
+    role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
+    agents = {item["name"]: item for item in role_config["agents"]}
+
+    assert "唯一非空字符串 id" in agents["planner"]["system_prompt"]
+    assert "plan[].id" in agents["executor"]["system_prompt"]
+    assert "按提示中的有效 ID 修正" in agents["executor"]["system_prompt"]
+    assert "patch 对象内" in agents["reflector"]["system_prompt"]
+
+
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
     tools = {item["name"]: item for item in load_config()["tools"]}
     for name in ("recognize_tracks", "dedup_tracks", "match_entities"):

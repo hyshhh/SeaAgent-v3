@@ -126,6 +126,8 @@ def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     )
     step_ref = next(item["$ref"] for item in plan_schema["items"]["anyOf"] if "$ref" in item)
     step_schema = schema["$defs"][step_ref.rsplit("/", 1)[-1]]
+    assert step_schema["properties"]["id"]["type"] == "string"
+    assert "id" in step_schema["required"]
     evidence_schema = step_schema["properties"]["required_evidence"]
     assert evidence_schema["type"] == "array"
     assert evidence_schema["items"]["type"] == "string"

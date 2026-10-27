@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage
 from .shared_state import OWNER_FIELDS, ROLE_UPDATE_TOOLS
 
 STATE_WRITE_REMINDER = (
-    "状态收尾（{role}）：调用 {tool}，至少提交一个你负责的字段：{fields}。"
+    "状态收尾（{role}）：调用 {tool}，在 patch 对象中至少提交一个你负责的字段：{fields}。"
     "不要提交其他角色字段；结合当前状态和已有结果写入，无需重复读取刚读过的状态。"
     "不得把未验证步骤标为完成。"
 )
