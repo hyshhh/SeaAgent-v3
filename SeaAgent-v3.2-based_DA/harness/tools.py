@@ -109,14 +109,13 @@ def build_tools(config: dict[str, Any], service: Any) -> list[Any]:
 
     result = []
     for spec in config.get("tools", []):
-        name, method_name = str(spec["name"]), str(spec["method"])    # 用下标而非 .get：缺字段是配置写错了，应当立刻抛错
-        method = getattr(service, method_name, None)
+        name = str(spec["name"])    # 用下标而非 .get：缺字段是配置写错了，应当立刻抛错
+        method = getattr(service, name, None)
         if not callable(method):  # 配置写错要在启动时炸掉，否则会伪装成运行期工具失败
-            raise TypeError(f"Configured tool method does not exist: {method_name}")
+            raise TypeError(f"Configured tool method does not exist: {name}")
         arguments = spec.get("arguments") or {}  # or {} 兜住 yaml 里写成空值的情况
         schema = _build_schema(name, arguments)  # 既生成发给模型的 JSON Schema，也在调用边界做校验与归一
-        targets = {arg: str((value or {}).get("target", arg)) for arg, value in arguments.items()}  # yaml 蛇形 -> ToolService 驼峰，未声明 target 时同名直传
-        def invoke(_method=method, _targets=targets, **kwargs: Any) -> Any:  # 默认参数绑定当前值：闭包捕获变量，循环结束后会全指到最后一次
-            return _method(**{_targets[key]: value for key, value in kwargs.items() if value is not None})  # 过滤 None：可选项没传时 LangChain 会填 None
+        def invoke(_method=method, **kwargs: Any) -> Any:  # 默认参数绑定当前值：闭包捕获变量，循环结束后会全指到最后一次
+            return _method(**{key: value for key, value in kwargs.items() if value is not None})  # 过滤 None：可选项没传时 LangChain 会填 None
         result.append(StructuredTool.from_function(invoke, name=name, description=str(spec.get("description", "")), args_schema=schema))  # description 就是喂给模型的工具说明
     return result

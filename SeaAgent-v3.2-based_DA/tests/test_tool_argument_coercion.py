@@ -18,7 +18,7 @@ def test_time_range_accepts_native_json_and_iso8601_values():
     )
     for value, expected in values:
         result = tool.invoke({"time_range": value, "description": "yellow vessel"})
-        assert result["kwargs"]["timeRange"] == expected
+        assert result["kwargs"]["time_range"] == expected
 
 
 def test_statistics_tools_accept_optional_time_scope():

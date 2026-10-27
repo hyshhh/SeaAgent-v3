@@ -108,9 +108,9 @@ def test_vlm_can_resolve_a_registry_reference_id_and_track_keyframe(tmp_path):
     service.repository = Repository()
     service.llm = VLM()
 
-    result = service.verifyVesselImages(
-        referenceRegistryReferenceId="ref-1",
-        candidateKeyframeId="kf-1",
+    result = service.verify_vessel_images(
+        reference_registry_reference_id="ref-1",
+        candidate_keyframe_id="kf-1",
     )
 
     assert result["ok"] is True
@@ -150,7 +150,7 @@ def test_dedup_tool_returns_only_counts():
         "lowThresholdShipCount": 1,
     }
 
-    result = service.dedupTracks()
+    result = service.dedup_tracks()
 
     assert result == {
         "ok": True,
@@ -246,7 +246,7 @@ def test_registry_count_combines_categories_and_uses_low_threshold_groups():
 
     service._match_images = match_images
 
-    result = service.matchEntities()
+    result = service.match_entities()
 
     assert result["entityCount"] == 1
     assert result["inRegistryCount"] == 1

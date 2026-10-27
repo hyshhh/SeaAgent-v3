@@ -371,10 +371,10 @@ class ToolService:
         return result
 
     # 2.9 轨迹识别工具的入口
-    def recognizeTracks(self, hullNumber: str | None = None, description: str | None = None, imagePath: str | None = None, timeRange: tuple[str | float, str | float] | None = None, topK: int | None = None) -> dict[str, Any]:
+    def recognize_tracks(self, hull_number: str | None = None, description: str | None = None, image_path: str | None = None, time_range: tuple[str | float, str | float] | None = None, top_k: int | None = None) -> dict[str, Any]:
         return self._run_tool(
             "recognize_tracks",
-            lambda: self._recognize_tracks(hullNumber, description, imagePath, timeRange, topK),
+            lambda: self._recognize_tracks(hull_number, description, image_path, time_range, top_k),
         )
 
     # ------------------------------------------------------------------ #
@@ -455,28 +455,28 @@ class ToolService:
         }
 
     # 3.2 先验库匹配工具的入口
-    def matchRegistryTracks(self, hullNumber: str, timeRange: tuple[str | float, str | float] | None = None, topK: int | None = None) -> dict[str, Any]:
+    def match_registry_tracks(self, hull_number: str, time_range: tuple[str | float, str | float] | None = None, top_k: int | None = None) -> dict[str, Any]:
         return self._run_tool(
             "match_registry_tracks",
-            lambda: self._match_registry_tracks(hullNumber, timeRange, topK),
+            lambda: self._match_registry_tracks(hull_number, time_range, top_k),
         )
 
     # ------------------------------------------------------------------ #
     # 四、视觉核验                                                             #
     # ------------------------------------------------------------------ #
     # 4.1 用视觉模型核验船舶图像
-    def verifyVesselImages(
+    def verify_vessel_images(
         self,
-        referenceImage: str | None = None,
-        referenceRegistryReferenceId: str | None = None,
-        candidateImage: str | None = None,
-        candidateKeyframeId: str | None = None,
+        reference_image: str | None = None,
+        reference_registry_reference_id: str | None = None,
+        candidate_image: str | None = None,
+        candidate_keyframe_id: str | None = None,
     ) -> dict[str, Any]:
         def verify() -> dict[str, Any]:
-            reference = str(referenceImage or "").strip()
-            reference_id = str(referenceRegistryReferenceId or "").strip()
-            candidate = str(candidateImage or "").strip()
-            keyframe_id = str(candidateKeyframeId or "").strip()
+            reference = str(reference_image or "").strip()
+            reference_id = str(reference_registry_reference_id or "").strip()
+            candidate = str(candidate_image or "").strip()
+            keyframe_id = str(candidate_keyframe_id or "").strip()
             if bool(reference) == bool(reference_id) or bool(candidate) == bool(keyframe_id):
                 return {"ok": False, "error": "two_images_required", "decision": "uncertain"}  # 参考图与候选图必须各给且只给一张
             if reference_id:
@@ -543,9 +543,9 @@ class ToolService:
         }
 
     # 5.2 统计全部实体
-    def dedupTracks(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+    def dedup_tracks(self, time_range: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
         def dedup() -> dict[str, Any]:
-            result = self._dedup_track_analysis(timeRange)
+            result = self._dedup_track_analysis(time_range)
             if not result.get("ok"):
                 return result
             return {
@@ -563,9 +563,9 @@ class ToolService:
 
     # 5.3 统计库内实体
     # 5.4 统计库外实体
-    def matchEntities(self, timeRange: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+    def match_entities(self, time_range: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
         def count() -> dict[str, Any]:
-            result = self._dedup_track_analysis(timeRange, all_keyframes=True)
+            result = self._dedup_track_analysis(time_range, all_keyframes=True)
             if not result.get("ok"):
                 return result
             frames = result["frames"]
@@ -1101,17 +1101,17 @@ class ToolService:
         }
 
     # 9.2 证据汇总工具的入口
-    def showEvidence(
+    def show_evidence(
         self,
-        trackIds: list[str] | None = None,
-        keyframeIds: list[str] | None = None,
-        registryReferenceIds: list[str] | None = None,
-        timeRange: tuple[str | float, str | float] | None = None,
-        maxItems: int | None = None,
+        track_ids: list[str] | None = None,
+        keyframe_ids: list[str] | None = None,
+        registry_reference_ids: list[str] | None = None,
+        time_range: tuple[str | float, str | float] | None = None,
+        max_items: int | None = None,
     ) -> dict[str, Any]:
         return self._run_tool(
             "show_evidence",
-            lambda: self._show_evidence(trackIds, keyframeIds, registryReferenceIds, timeRange, maxItems),
+            lambda: self._show_evidence(track_ids, keyframe_ids, registry_reference_ids, time_range, max_items),
         )
 
     # ------------------------------------------------------------------ #

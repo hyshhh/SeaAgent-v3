@@ -1,7 +1,9 @@
 import json
+from inspect import signature
 
 from config import load_config
 from harness.tools import build_tools
+from tools.service import ToolService
 
 
 class Service:
@@ -20,7 +22,7 @@ def test_tools_are_config_driven():
         "show_evidence",
     ]
     result = tools[0].invoke({"time_range": [1.0, 2.0], "hull_number": "0857"})
-    assert result["kwargs"] == {"timeRange": (1.0, 2.0), "hullNumber": "0857", "topK": 6}
+    assert result["kwargs"] == {"time_range": (1.0, 2.0), "hull_number": "0857", "top_k": 6}
 
 
 def test_recognition_schema_keeps_query_inputs_compact():
@@ -28,6 +30,15 @@ def test_recognition_schema_keeps_query_inputs_compact():
     schema = tool.args_schema.model_json_schema()
     assert set(schema["properties"]) >= {"hull_number", "description", "image_path", "time_range"}
     assert "time_range" not in schema.get("required", [])
+
+
+def test_tool_names_and_arguments_match_service_methods():
+    config = load_config()
+    for spec in config["tools"]:
+        assert "method" not in spec
+        assert all("target" not in argument for argument in (spec.get("arguments") or {}).values())
+        method = getattr(ToolService, spec["name"])
+        assert set(signature(method).parameters) - {"self"} == set(spec.get("arguments") or {})
 
 
 def test_vlm_schema_accepts_registry_reference_or_local_reference():
@@ -40,4 +51,4 @@ def test_vlm_schema_accepts_registry_reference_or_local_reference():
 def test_json_time_range_is_decoded_before_service_call():
     tool = {tool.name: tool for tool in build_tools(load_config(), Service())}["dedup_tracks"]
     result = tool.invoke({"time_range": json.dumps([1, 2])})
-    assert result["kwargs"] == {"timeRange": (1.0, 2.0)}
+    assert result["kwargs"] == {"time_range": (1.0, 2.0)}

@@ -81,8 +81,8 @@ def test_the_tool_surfaces_the_rejection_to_the_model():
         def __init__(self):
             self.service = ToolService.__new__(ToolService)
 
-        def recognizeTracks(self, **kwargs):
-            return ToolService.recognizeTracks(self.service, **kwargs)
+        def recognize_tracks(self, **kwargs):
+            return ToolService.recognize_tracks(self.service, **kwargs)
 
         def __getattr__(self, name):
             return lambda **kwargs: {"ok": True}

@@ -1,70 +1,64 @@
 tools:
   - name: recognize_tracks
     label: 直接识别
-    method: recognizeTracks
     description: >-
       在轨迹记忆内部完成舷号、目标名称/别名、外观描述或图片检索。用户用名称指代目标（如“小红”）时填 hull_number；纯外观描述用 description。
       省略 time_range 表示全部监控时间；有时间段时只搜该范围。
       返回 status、少量候选及 coverageComplete；候选含 scoreBand、分数、时间和证据 ID，不返回原始轨迹。
       舷号/别名未确认时返回 nextStep=match_registry_tracks；覆盖不完整时不得把无候选说成未出现。
     arguments:
-      hull_number: {type: string, required: false, target: hullNumber, description: 可选舷号或目标别名；纯外观描述请用 description。}
+      hull_number: {type: string, required: false, description: 可选舷号或目标别名；纯外观描述请用 description。}
       description: {type: string, required: false, description: 可选外观描述，例如颜色、船型和固定结构。}
-      image_path: {type: string, required: false, target: imagePath, description: 可选本地图片路径，只用于图像相似检索。}
-      time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间；省略表示全部监控时间。}
-      top_k: {type: integer, required: false, target: topK, default: 6, description: 返回候选上限，工具会再次限制。}
+      image_path: {type: string, required: false, description: 可选本地图片路径，只用于图像相似检索。}
+      time_range: {type: time_range, required: false, description: 可选起止时间；省略表示全部监控时间。}
+      top_k: {type: integer, required: false, default: 6, description: 返回候选上限，工具会再次限制。}
 
   - name: match_registry_tracks
     label: 先验库辅助识别
-    method: matchRegistryTracks
     description: >-
       仅用于用户提供的舷号或目标名称/别名。工具内部查找对应先验库参考图，并与范围内轨迹关键帧做视觉 embedding 比对；
       自动完成分页、视觉匹配和覆盖统计，只返回 status、少量候选和证据 ID。库中有记录不等于视频出现。
     arguments:
-      hull_number: {type: string, required: true, target: hullNumber, description: 要比对的舷号或别名。}
-      time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间；省略表示全部监控时间。}
-      top_k: {type: integer, required: false, target: topK, default: 6, description: 返回候选上限。}
+      hull_number: {type: string, required: true, description: 要比对的舷号或别名。}
+      time_range: {type: time_range, required: false, description: 可选起止时间；省略表示全部监控时间。}
+      top_k: {type: integer, required: false, default: 6, description: 返回候选上限。}
 
   - name: verify_vessel_images
     label: VLM 图像核验
-    method: verifyVesselImages
     description: >-
       只判断两张图片是否为同一艘船。参考图传 reference_image 或先验库返回的 reference_registry_reference_id；
       候选图传 candidate_image 或轨迹结果中的 candidate_keyframe_id。用于核验不确定的图片/先验库候选，不搜索轨迹。
       返回 decision（match、mismatch 或 uncertain）和最多三条简短可见依据；证据不足或仅颜色相似时返回 uncertain。
     arguments:
-      reference_image: {type: string, required: false, target: referenceImage, description: 用户提供的已知船舶图片路径；与 reference_registry_reference_id 二选一。}
-      reference_registry_reference_id: {type: string, required: false, target: referenceRegistryReferenceId, description: 先验库识别结果中的参考图 ID；与 reference_image 二选一。}
-      candidate_image: {type: string, required: false, target: candidateImage, description: 待核验图片的本地路径；与 candidate_keyframe_id 二选一。}
-      candidate_keyframe_id: {type: string, required: false, target: candidateKeyframeId, description: 待核验轨迹关键帧 ID；与 candidate_image 二选一。}
+      reference_image: {type: string, required: false, description: 用户提供的已知船舶图片路径；与 reference_registry_reference_id 二选一。}
+      reference_registry_reference_id: {type: string, required: false, description: 先验库识别结果中的参考图 ID；与 reference_image 二选一。}
+      candidate_image: {type: string, required: false, description: 待核验图片的本地路径；与 candidate_keyframe_id 二选一。}
+      candidate_keyframe_id: {type: string, required: false, description: 待核验轨迹关键帧 ID；与 candidate_image 二选一。}
 
   - name: dedup_tracks
     label: 轨迹去重统计
-    method: dedupTracks
     description: >-
       在时间范围内按视觉相似度去重，只返回原始轨迹数、高阈值实体数和低阈值实体数。高阈值数为保守上界，低阈值数为合并后的下界。
       省略 time_range 表示全部监控时间。
     arguments:
-      time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
+      time_range: {type: time_range, required: false, description: 可选起止时间。}
 
   - name: match_entities
     label: 实体先验库匹配统计
-    method: matchEntities
     description: >-
       依赖 dedup_tracks 的去重逻辑，按低阈值分组，再将每条轨迹的关键帧与先验库图片比较；任一图像分数达到阈值即计为在库。
       只向模型返回实体总数、在库数和不在库数；匹配 ID、分数及对象留作运行证据。省略 time_range 表示全部监控时间。
     arguments:
-      time_range: {type: time_range, required: false, target: timeRange, description: 可选起止时间。}
+      time_range: {type: time_range, required: false, description: 可选起止时间。}
 
   - name: show_evidence
     label: 证据与统计
-    method: showEvidence
     description: >-
       汇总本轮识别或统计产生的轨迹、关键帧、视频片段和先验库参考图。
       传入已返回的证据 ID；工具内部生成片段，只返回展示 ID 列表和数量，不回传逐轨迹摘要。
     arguments:
-      track_ids: {type: string_list, required: false, target: trackIds, description: 识别或统计结果中的轨迹 ID。}
-      keyframe_ids: {type: string_list, required: false, target: keyframeIds, description: 识别或统计结果中的关键帧 ID。}
-      registry_reference_ids: {type: string_list, required: false, target: registryReferenceIds, description: 识别结果中的先验库参考图 ID。}
-      time_range: {type: time_range, required: false, target: timeRange, description: 可选证据时间范围。}
-      max_items: {type: integer, required: false, target: maxItems, default: 6, description: 每类证据上限。}
+      track_ids: {type: string_list, required: false, description: 识别或统计结果中的轨迹 ID。}
+      keyframe_ids: {type: string_list, required: false, description: 识别或统计结果中的关键帧 ID。}
+      registry_reference_ids: {type: string_list, required: false, description: 识别结果中的先验库参考图 ID。}
+      time_range: {type: time_range, required: false, description: 可选证据时间范围。}
+      max_items: {type: integer, required: false, default: 6, description: 每类证据上限。}

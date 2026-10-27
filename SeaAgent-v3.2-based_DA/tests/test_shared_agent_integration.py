@@ -103,7 +103,7 @@ class _Service:
 
     def __getattr__(self, name):
         def invoke(**kwargs):
-            if name == "recognizeTracks":
+            if name == "recognize_tracks":
                 with self._lock:
                     self.queries += 1
                     self.active_queries += 1
@@ -115,7 +115,7 @@ class _Service:
                 finally:
                     with self._lock:
                         self.active_queries -= 1
-            if name == "showEvidence":
+            if name == "show_evidence":
                 return {"ok": True, "shownKeyframeIds": ["kf1"]}
             return {"ok": True, "trackIds": ["t1"], "keyframeIds": ["kf1"]}
 
