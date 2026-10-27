@@ -141,6 +141,19 @@ function useQuestion(text) {
   }
 }
 
+function useImageQuestion() {
+  useQuestion('视频中是否出现过与我上传图片相同的船？');
+  document.getElementById('agentImageInput')?.click();
+}
+
+function useAgentPreset(select) {
+  const option = select?.selectedOptions?.[0];
+  if (!option?.value) return;
+  useQuestion(option.value);
+  if (option.dataset.attachImage === 'true') document.getElementById('agentImageInput')?.click();
+  select.selectedIndex = 0;
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 }

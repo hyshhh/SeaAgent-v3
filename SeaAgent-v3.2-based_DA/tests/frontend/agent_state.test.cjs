@@ -68,6 +68,29 @@ test('shared plans render progress, escape content and clear when switching sess
   assert.equal(ui.elements.get('agentConfirmPanel').hidden, true);
 });
 
+test('image presets fill the query and open the attachment picker', () => {
+  const ui = page();
+  const imageInput = {clickCount: 0, click() { this.clickCount += 1; }};
+  const question = {value: '', focus() {}, style: {setProperty() {}}};
+  ui.elements.set('agentImageInput', imageInput);
+  ui.elements.set('agentQuestion', question);
+  ui.run('useImageQuestion()');
+  assert.equal(question.value, '视频中是否出现过与我上传图片相同的船？');
+  assert.equal(imageInput.clickCount, 1);
+
+  const result = ui.run(`(() => {
+    const select = {
+      selectedIndex: 3,
+      selectedOptions: [{value: '根据我上传的图片查找视频中的船。', dataset: {attachImage: 'true'}}],
+    };
+    useAgentPreset(select);
+    return {selectedIndex: select.selectedIndex, question: document.getElementById('agentQuestion').value};
+  })()`);
+  assert.equal(result.question, '根据我上传的图片查找视频中的船。');
+  assert.equal(result.selectedIndex, 0);
+  assert.equal(imageInput.clickCount, 2);
+});
+
 test('shared state renders escaped fields and its snapshot version', () => {
   const ui = page();
   ui.run(`renderSharedState({ version: 4, requirements: ['<script>'], decision: 'continue' });`);

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -68,10 +69,11 @@ def test_count_skills_map_user_intent_to_configured_tools():
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
     assert all(name in planning for name in expected)
-    assert "Registry intent takes priority over generic count wording" in intent
+    assert "registered count" in intent
+    assert "total count" in intent
     assert all(name in statistics for name in expected)
     assert "match_entities" in agents["planner"]["system_prompt"]
-    assert "逐条匹配范围内所有轨迹、不去重" in agents["planner"]["system_prompt"]
+    assert "逐条匹配范围内所有轨迹且不去重" in agents["planner"]["system_prompt"]
     assert "statistics 技能" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
 
@@ -82,12 +84,28 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     acceptance = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
     time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
 
-    assert "统计任务只规划 dedup_tracks 或 match_entities，不得加入 recognize_tracks" in planner["system_prompt"]
-    assert "问在库、未在库、注册或未注册数量时" in planner["system_prompt"]
+    assert "六类预设分别映射" in planner["system_prompt"]
+    assert "在库数量和不在库数量用 match_entities" in planner["system_prompt"]
     assert "只问总数时不得调用 match_entities" in planner["system_prompt"]
-    assert "Count-only plans must contain only the requested count tools, never `recognize_tracks`" in acceptance
+    assert "Count-only plans must not include recognition steps" in acceptance
     assert "including “所有时间”" in time_scope
     assert "Time scope is not a separate plan step" in time_scope
+
+
+def test_planner_and_question_presets_cover_the_six_request_types():
+    role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
+    planner = next(item for item in role_config["agents"] if item["name"] == "planner")
+    intent = (ROOT / "skills/planning/intent/SKILL.md").read_text(encoding="utf-8")
+    template = (ROOT / "web/templates/index.html").read_text(encoding="utf-8")
+    preset_select = re.search(r'<select class="agent-preset-select".*?</select>', template).group()
+    labels = re.findall(r'<option value="[^"]*"[^>]*>([^<]+)</option>', preset_select)
+
+    assert "六类预设分别映射" in planner["system_prompt"]
+    assert "hull-number lookup" in intent
+    assert "description lookup" in intent
+    assert "image lookup" in intent
+    assert labels == ["Presets", "Hull number", "Description", "Image", "Total count", "Registered count", "Unregistered count"]
+    assert 'data-attach-image="true"' in preset_select
 
 
 def test_state_update_prompts_require_current_plan_ids_and_nested_reflection_patch():

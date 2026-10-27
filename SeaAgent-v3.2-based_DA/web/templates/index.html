@@ -184,9 +184,12 @@
             <h1>Ask about vessels in your videos.</h1>
             <p>Use trajectory memory, registry knowledge and visual evidence together. Every answer keeps its evidence trail.</p>
             <div class="qa-suggestion-row">
-              <button type="button" onclick="useQuestion('舷号 0857 有没有在视频中出现？')">Hull number <span>0857</span></button>
-              <button type="button" onclick="useQuestion('数据库中有没有黄色的无人艇？')">Registry <span>yellow vessels</span></button>
-              <button type="button" onclick="useQuestion('从15:30到15:40一共出现多少艘船？')">Count vessels <span>15:30–15:40</span></button>
+              <button type="button" onclick="useQuestion('舷号 0857 是否在视频中出现？')">Hull number <span>0857</span></button>
+              <button type="button" onclick="useQuestion('视频中是否出现过黄色无人艇？')">Description <span>yellow vessel</span></button>
+              <button type="button" onclick="useImageQuestion()">Image <span>attach a vessel image</span></button>
+              <button type="button" onclick="useQuestion('视频中一共出现多少艘船？')">Total count</button>
+              <button type="button" onclick="useQuestion('视频中有多少艘在库船？')">Registered count</button>
+              <button type="button" onclick="useQuestion('视频中有多少艘不在库船？')">Unregistered count</button>
             </div>
           </div>
 
@@ -239,10 +242,10 @@
 
         <div class="qa-composer-wrap">
           <div class="qa-composer">
-            <textarea id="agentQuestion" rows="1" placeholder="Ask a question, Ctrl / ⌘ + Enter to run">数据库中有没有黄色的无人艇？</textarea>
+            <textarea id="agentQuestion" rows="1" placeholder="Ask a question, Ctrl / ⌘ + Enter to run">视频中是否出现过黄色无人艇？</textarea>
             <div class="qa-composer-actions">
               <div class="qa-composer-tools">
-                <select class="agent-preset-select" aria-label="Preset questions" title="Preset questions" onchange="if(this.value){useQuestion(this.value);this.selectedIndex=0;}"><option value="">Presets</option><option value="舷号 0857 有没有在视频中出现？">Hull lookup</option><option value="数据库中有没有黄色的无人艇？">Registry lookup</option><option value="找一下15:30到15:40有哪些未在库船出现在视野中？">Unregistered vessels</option><option value="查找一下15:30到15:40有哪些在库船出现？">Registered vessels</option><option value="从15:30到15:40一共出现多少艘船？">Vessel count</option><option value="监控中什么时间出现过一艘黄色无人艇？">Appearance search</option></select>
+                <select class="agent-preset-select" aria-label="Preset questions" title="Preset questions" onchange="useAgentPreset(this)"><option value="">Presets</option><option value="舷号 0857 是否在视频中出现？">Hull number</option><option value="视频中是否出现过黄色无人艇？">Description</option><option value="视频中是否出现过与我上传图片相同的船？" data-attach-image="true">Image</option><option value="视频中一共出现多少艘船？">Total count</option><option value="视频中有多少艘在库船？">Registered count</option><option value="视频中有多少艘不在库船？">Unregistered count</option></select>
                 <button type="button" class="qa-tool-button" onclick="document.getElementById('agentImageInput').click()" title="Attach one image for recognition" aria-label="Attach image">＋</button>
                 <input id="agentImageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
                 <span id="agentImageName" class="qa-attachment-name" hidden></span>
