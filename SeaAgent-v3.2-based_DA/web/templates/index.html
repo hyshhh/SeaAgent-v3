@@ -6,7 +6,7 @@
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=30">
 <link rel="stylesheet" href="/static/css/academic.css?v=40">
-<link rel="stylesheet" href="/static/css/qa.css?v=21">
+<link rel="stylesheet" href="/static/css/qa.css?v=22">
 </head>
 <body class="academic-theme">
 <header class="app-header">
@@ -196,7 +196,7 @@
           <div class="qa-session-history" id="qaSessionHistory" hidden></div>
 
           <div class="qa-user-turn" id="qaUserTurn" hidden>
-            <div class="qa-user-bubble"><span class="qa-message-label">You</span><p id="qaUserQuestion"></p></div>
+            <div class="qa-user-bubble"><span class="qa-message-label">You</span><img class="qa-user-image" id="qaUserImage" alt="Attached image" hidden><p id="qaUserQuestion"></p></div>
           </div>
 
 <section id="agentPlanPanel" class="qa-plan" data-state="idle" hidden aria-label="Plan checklist">
@@ -241,14 +241,17 @@
         </div>
 
         <div class="qa-composer-wrap">
-          <div class="qa-composer">
+          <div class="qa-composer" id="qaComposer">
+            <div class="qa-image-preview" id="agentImagePreview" hidden>
+              <img id="agentImagePreviewImage" alt="Image to attach">
+              <button type="button" onclick="clearQueryImage()" title="Remove image" aria-label="Remove image">×</button>
+            </div>
             <textarea id="agentQuestion" rows="1" placeholder="Ask a question, Ctrl / ⌘ + Enter to run">视频中是否出现过黄色无人艇？</textarea>
             <div class="qa-composer-actions">
               <div class="qa-composer-tools">
                 <select class="agent-preset-select" aria-label="Preset questions" title="Preset questions" onchange="useAgentPreset(this)"><option value="">Presets</option><option value="舷号 0857 是否在视频中出现？">Hull number</option><option value="视频中是否出现过黄色无人艇？">Description</option><option value="视频中是否出现过与我上传图片相同的船？" data-attach-image="true">Image</option><option value="视频中一共出现多少艘船？">Total count</option><option value="视频中有多少艘在库船？">Registered count</option><option value="视频中有多少艘不在库船？">Unregistered count</option></select>
                 <button type="button" class="qa-tool-button" onclick="document.getElementById('agentImageInput').click()" title="Attach one image for recognition" aria-label="Attach image">＋</button>
                 <input id="agentImageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
-                <span id="agentImageName" class="qa-attachment-name" hidden></span>
                 <button type="button" class="qa-endpoint-button" onclick="openQaEndpointSettings()" title="Configure VLM and embedding service ports">Model ports</button>
                 <button type="button" class="qa-tool-button" onclick="loadAgentMemorySummary(true)" title="Refresh memory summary" aria-label="Refresh memory summary">↻</button>
                 <button type="button" class="qa-tool-button qa-tool-button-danger" onclick="clearAgentMemory()" title="Clear QA memory" aria-label="Clear QA memory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></svg></button>
@@ -462,7 +465,7 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=23"></script>
   <script src="/static/js/memory.js?v=9"></script>
-<script src="/static/js/agent.js?v=92"></script>
+<script src="/static/js/agent.js?v=93"></script>
 <script src="/static/js/settings.js?v=12"></script>
 </body>
 </html>

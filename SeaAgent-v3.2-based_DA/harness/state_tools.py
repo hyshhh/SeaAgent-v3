@@ -98,7 +98,10 @@ def _decode_patch(value: Any) -> dict[str, Any]:
         try:
             value = json.loads(value)
         except json.JSONDecodeError as error:
-            raise ValueError("patch must be a JSON object") from error
+            try:
+                value = json.loads(value.replace("\\'", "'"))
+            except json.JSONDecodeError:
+                raise ValueError("patch must be a JSON object") from error
     if not isinstance(value, dict):
         raise ValueError("patch must be an object")  # noqa: TRY004 - Pydantic validators require ValueError.
     return value
@@ -189,7 +192,7 @@ def build_state_tools(state: Any) -> list[Any]:
             args_schema=_ReflectionUpdateArguments,
             description=(
                 "Reflector 专用；在 patch 对象中传 assessment、evidence_gaps、conflicts、decision（terminate/replan/continue/failed）。"
-                "assessment 必须是对象，如 {'final_answer': '结论'}。"
+                "patch 必须是对象，不能序列化为字符串；assessment 必须是对象，如 {'final_answer': '结论'}。"
             ),
         ),
     ]

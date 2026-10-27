@@ -342,6 +342,8 @@ class MemoryRepository:
             turn["clarificationResponse"] = str(result["clarificationResponse"])
         if result.get("clarificationQuestion"):
             turn["clarificationQuestion"] = str(result["clarificationQuestion"])
+        if result.get("imageId"):
+            turn["imageId"] = str(result["imageId"])
         return turn
 
     @staticmethod
@@ -363,6 +365,8 @@ class MemoryRepository:
             normalized["clarificationResponse"] = str(turn["clarificationResponse"])
         if turn.get("clarificationQuestion"):
             normalized["clarificationQuestion"] = str(turn["clarificationQuestion"])
+        if turn.get("imageId"):
+            normalized["imageId"] = str(turn["imageId"])
         return normalized
 
     @classmethod

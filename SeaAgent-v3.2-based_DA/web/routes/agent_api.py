@@ -5,8 +5,6 @@ import asyncio
 import base64
 import json
 import logging
-import shutil
-import tempfile
 import threading
 import uuid
 from pathlib import Path
@@ -20,7 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from agent import AgentController
 from config import project_root
 from harness.shared_state import SharedStateStore
-from web.models import AgentQuery, AgentResume
+from web.models import AgentQuery, AgentResume, QueryImageUpload
 
 router = APIRouter(tags=["agent-memory"])
 logger = logging.getLogger(__name__)
@@ -47,7 +45,24 @@ def _controller(request: Request, event_handler=None) -> AgentController:
     )
 
 
-def _save_query_image(data_url: str | None) -> tuple[str | None, Path | None]:
+def _query_image_directory() -> Path:
+    return project_root() / "data/memory/query_images"
+
+
+def _query_image_path(image_id: str) -> Path:
+    image_id = str(image_id or "")
+    stem, suffix = Path(image_id).stem, Path(image_id).suffix.lower()
+    if Path(image_id).name != image_id or len(stem) != 32 or suffix not in {".jpg", ".png", ".webp"}:
+        raise HTTPException(404, "Query image not found")
+    try:
+        if uuid.UUID(hex=stem).hex != stem:
+            raise ValueError
+    except ValueError as error:
+        raise HTTPException(404, "Query image not found") from error
+    return _query_image_directory() / image_id
+
+
+def _save_query_image(data_url: str | None) -> tuple[str | None, str | None]:
     if not data_url:
         return None, None
     header, separator, encoded = data_url.partition(",")
@@ -63,24 +78,60 @@ def _save_query_image(data_url: str | None) -> tuple[str | None, Path | None]:
     decoded = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
     if decoded is None:
         raise HTTPException(422, "The attached image cannot be decoded")
-    directory = Path(tempfile.mkdtemp(prefix="seaagent-qa-"))
-    path = directory / f"reference{suffix}"
+    directory = _query_image_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    image_id = f"{uuid.uuid4().hex}{suffix}"
+    path = directory / image_id
     try:
         path.write_bytes(content)
-    except OSError:
-        shutil.rmtree(directory, ignore_errors=True)
-        raise
-    return str(path), directory
+    except OSError as error:
+        path.unlink(missing_ok=True)
+        raise HTTPException(500, "Could not save the attached image") from error
+    return str(path), image_id
 
 
-def _remove_query_image(directory: Path | None) -> None:
-    if directory is not None:
-        shutil.rmtree(directory, ignore_errors=True)
+def _resolve_query_image(body: AgentQuery, repository=None) -> tuple[str | None, str | None]:
+    if body.image:
+        path, image_id = _save_query_image(body.image)
+    else:
+        image_id = body.image_id
+        if not image_id and body.session_id and repository is not None:
+            turns = (repository.get_session(body.session_id) or {}).get("turns", [])
+            if turns and turns[-1].get("state") == "awaiting_input":
+                image_id = turns[-1].get("imageId")
+        if not image_id:
+            return None, None
+        path = _query_image_path(image_id)
+        if not path.is_file():
+            raise HTTPException(404, "Query image not found")
+    return str(path), image_id
 
 
-def _answer_controller(controller: AgentController, question: str, session_id: str, cancel: threading.Event, image_path: str | None):
+def _remove_session_query_images(session: dict | None) -> None:
+    for turn in (session or {}).get("turns", []):
+        image_id = str(turn.get("imageId") or "")
+        if image_id:
+            try:
+                _query_image_path(image_id).unlink(missing_ok=True)
+            except HTTPException:
+                continue
+
+
+def _remove_all_query_images() -> None:
+    directory = _query_image_directory()
+    if directory.is_dir():
+        for path in directory.iterdir():
+            if path.is_file() and path.suffix.lower() in {".jpg", ".png", ".webp"}:
+                path.unlink(missing_ok=True)
+
+
+def _answer_controller(controller: AgentController, question: str, session_id: str, cancel: threading.Event, image_path: str | None, image_id: str | None):
     """Call both current and lightweight test controllers without passing an empty image argument."""
-    kwargs = {"image_path": image_path} if image_path else {}
+    kwargs = {}
+    if image_path:
+        kwargs["image_path"] = image_path
+    if image_id:
+        kwargs["image_id"] = image_id
     return controller.answer(question, session_id, cancel, **kwargs)
 
 
@@ -96,9 +147,10 @@ async def _evidence_image_response(request: Request, image_path: Path, scale: fl
 async def query_agent(body: AgentQuery, request: Request):
     session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     cancel = _begin_run(request, session_id)
-    image_path, image_dir = None, None
     try:
-        image_path, image_dir = _save_query_image(body.image)
+        image_path, image_id = await run_in_threadpool(
+            _resolve_query_image, body, getattr(request.app.state, "repository", None)
+        )
         return await run_in_threadpool(
             _answer_controller,
             _controller(request),
@@ -106,10 +158,32 @@ async def query_agent(body: AgentQuery, request: Request):
             session_id,
             cancel,
             image_path,
+            image_id,
         )
     finally:
-        _remove_query_image(image_dir)
         request.app.state.agent_runs.pop(session_id, None)
+
+
+@router.post("/api/agent/query-images")
+async def upload_query_image(body: QueryImageUpload):
+    _, image_id = await run_in_threadpool(_save_query_image, body.image)
+    return {"imageId": image_id}
+
+
+@router.get("/api/agent/query-images/{image_id}")
+async def query_image(image_id: str):
+    path = _query_image_path(image_id)
+    if not path.is_file():
+        raise HTTPException(404, "Query image not found")
+    media_type = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}[path.suffix.lower()]
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, no-store"})
+
+
+@router.delete("/api/agent/query-images/{image_id}")
+async def delete_query_image(image_id: str):
+    path = _query_image_path(image_id)
+    path.unlink(missing_ok=True)
+    return {"success": True}
 
 
 # 1.4 人工确认后恢复
@@ -148,7 +222,9 @@ async def stream_agent_query(body: AgentQuery, request: Request):
     session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     cancel = _begin_run(request, session_id)
     try:
-        image_path, image_dir = _save_query_image(body.image)
+        image_path, image_id = await run_in_threadpool(
+            _resolve_query_image, body, getattr(request.app.state, "repository", None)
+        )
     except Exception:
         request.app.state.agent_runs.pop(session_id, None)
         raise
@@ -161,13 +237,9 @@ async def stream_agent_query(body: AgentQuery, request: Request):
         worker: asyncio.Task | None = None
         captured_terminal: dict | None = None
 
-        def cleanup() -> None:
-            _remove_query_image(image_dir)
-
         def release(_task=None) -> None:
             if request.app.state.agent_runs.get(session_id) is cancel:
                 request.app.state.agent_runs.pop(session_id, None)
-            cleanup()
             if _task is not None and not _task.cancelled():
                 _task.exception()  # 已断开的客户端也要消费后台异常。
 
@@ -195,6 +267,7 @@ async def stream_agent_query(body: AgentQuery, request: Request):
                         session_id,
                         cancel,
                         image_path,
+                        image_id,
                     )
                 )
                 worker.add_done_callback(release)
@@ -295,6 +368,7 @@ async def clear_agent_memory(request: Request):
     request.app.state.agent_memory_clearing = True
     try:
         result = await run_in_threadpool(request.app.state.memory_manager.clear_qa_memory)
+        _remove_all_query_images()
     finally:
         request.app.state.agent_memory_clearing = False
     return {"success": True, "message": "问答记忆已清除", "data": result}
@@ -324,6 +398,7 @@ async def delete_agent_session(session_id: str, request: Request):
         removed = await run_in_threadpool(request.app.state.repository.delete_session, session_id)
         if not removed:
             raise HTTPException(404, "会话不存在")
+        _remove_session_query_images(session)
         config = getattr(request.app.state, "config", None)
         if config is not None:
             run_ids = {

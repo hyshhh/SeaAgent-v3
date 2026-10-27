@@ -86,6 +86,42 @@ def test_unmatched_supplied_alias_requests_registry_assistance():
     assert result["nextStep"] == "match_registry_tracks"
 
 
+def test_image_recognition_reports_missing_query_image(tmp_path):
+    service = ToolService.__new__(ToolService)
+    service._validate_time_range = lambda _value: (None, "")
+
+    result = service._recognize_tracks(image_path=str(tmp_path / "missing.png"))
+
+    assert result["ok"] is False
+    assert result["error"] == "image_not_found"
+    assert result["errorType"] == "FileNotFoundError"
+
+
+def test_image_embedding_failure_is_a_tool_error_not_a_negative_match(tmp_path):
+    image_path = tmp_path / "query.png"
+    image_path.write_bytes(b"image")
+
+    class Embedder:
+        def encode_images(self, paths):
+            assert paths == [str(image_path)]
+            raise RuntimeError("embedding backend unavailable")
+
+    service = ToolService.__new__(ToolService)
+    service.embedder = Embedder()
+    service._validate_time_range = lambda _value: (None, "")
+    service._scan_tracks = lambda _scope: ([_track("t-1")], True)
+    service._load_search_frames = lambda _tracks: (
+        {"t-1": [{"keyframeId": "kf-1", "keyframeVectorId": 1}]}, [], {"t-1": "kf-1"}
+    )
+
+    result = service.recognize_tracks(image_path=str(image_path))
+
+    assert result["ok"] is False
+    assert result["error"] == "tool_failed"
+    assert result["errorType"] == "RuntimeError"
+    assert result["hint"] == "embedding backend unavailable"
+
+
 def test_vlm_can_resolve_a_registry_reference_id_and_track_keyframe(tmp_path):
     reference_path = tmp_path / "reference.jpg"
     candidate_path = tmp_path / "candidate.jpg"

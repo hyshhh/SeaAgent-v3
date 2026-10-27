@@ -127,6 +127,22 @@ def test_reflection_update_accepts_json_patch_and_sibling_fields():
     assert state.snapshot()["decision"] == "terminate"
 
 
+def test_reflection_update_accepts_apostrophe_escaped_json_patch():
+    state = SharedTaskState("问题")
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+    patch = json.dumps({
+        "assessment": {"confirmed": "未发现明确的大型军舰证据"},
+        "evidence_gaps": ["未获得用户关于'大型军舰'的具体定义标准"],
+        "conflicts": [],
+        "decision": "continue",
+    }, ensure_ascii=False).replace("'大型军舰'", "\\'大型军舰\\'")
+
+    result = tools["update_reflection_state"].invoke({"patch": patch})
+
+    assert result["ok"] is True
+    assert state.snapshot()["evidence_gaps"] == ["未获得用户关于'大型军舰'的具体定义标准"]
+
+
 def test_executor_maps_unambiguous_evidence_name_to_plan_id():
     state = SharedTaskState("问题")
     state.update(

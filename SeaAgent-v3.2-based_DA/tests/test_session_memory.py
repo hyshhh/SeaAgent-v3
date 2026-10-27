@@ -32,12 +32,14 @@ class _FakeRuntime:
     """只记录 thread_id：会话续接的全部证据就是这个 id 是否被复用。"""
 
     threads = []
+    questions = []
 
     def __init__(self, config, service, model=None, event_handler=None):
         self.event_handler = event_handler
 
     def run(self, question, thread_id=None, **_kwargs):
         type(self).threads.append(thread_id)
+        type(self).questions.append(question)
         return {"answer": f"回答：{question}", "state": "completed", "evidence": {"shownKeyframeIds": ["kf-1"]}, "tool_records": [], "rounds": [], "tool_chain": ["show_evidence"]}
 
     def close(self):
@@ -48,6 +50,7 @@ class _FakeRuntime:
 def agent(tmp_path, monkeypatch):
     repository = _repository(tmp_path)
     _FakeRuntime.threads = []
+    _FakeRuntime.questions = []
     monkeypatch.setattr(controller_module, "SeaVideoHarness", _FakeRuntime)
     return AgentController(config={"harness": {}, "paths": _paths(tmp_path)}, repository=repository, tools=object())
 
@@ -77,6 +80,18 @@ def test_first_question_creates_a_session(agent):
     assert session["turnCount"] == 1
     assert session["turns"][0]["answer"] == "回答：15:30 到 15:40 有几艘船？"
     assert set(session["turns"][0]) == {"question", "answer", "state", "partial", "createdAt"}
+
+
+def test_attached_query_image_is_saved_with_qa_turn(agent):
+    image_id = "a" * 32 + ".png"
+
+    result = agent.answer("识别这艘船", image_path="/data/memory/query_images/reference.png", image_id=image_id)
+
+    turn = agent.repository.get_session(result["sessionId"])["turns"][0]
+    assert result["imageId"] == image_id
+    assert turn["imageId"] == image_id
+    assert turn["question"] == "识别这艘船"
+    assert "/data/memory/query_images/reference.png" in _FakeRuntime.questions[-1]
 
 
 def test_follow_up_is_a_fresh_run_and_appends_only_qa(agent):

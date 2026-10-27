@@ -5,6 +5,7 @@ tools:
       在轨迹记忆内部完成舷号、目标名称/别名、外观描述或图片检索。用户用名称指代目标（如“小红”）时填 hull_number；纯外观描述用 description。
       省略 time_range 表示全部监控时间；有时间段时只搜该范围。
       返回 status、少量候选及 coverageComplete；候选含 scoreBand、分数、时间和证据 ID，不返回原始轨迹。
+      图片路径不可用或图片编码失败时会返回工具错误，不能将工具错误当作未匹配。
       舷号/别名未确认时返回 nextStep=match_registry_tracks；覆盖不完整时不得把无候选说成未出现。
     arguments:
       hull_number: {type: string, required: false, description: 可选舷号或目标别名；纯外观描述请用 description。}

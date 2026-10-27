@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ShipCreate(BaseModel):
@@ -39,11 +39,35 @@ class AgentQuery(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000)
     session_id: str | None = Field(default=None, alias="sessionId", max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
     image: str | None = Field(default=None, max_length=6_000_000)
+    image_id: str | None = Field(default=None, alias="imageId", max_length=40, pattern=r"^[0-9a-f]{32}\.(?:jpg|png|webp)$")
+
+    @model_validator(mode="after")
+    def _one_image_source(self):
+        if self.image and self.image_id:
+            raise ValueError("provide image or imageId, not both")
+        return self
 
     @field_validator("image")
     @classmethod
     def _validate_image_data_url(cls, value: str | None) -> str | None:
         if value is not None and not value.startswith((
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+        )):
+            raise ValueError("image must be a JPEG, PNG or WebP data URL")
+        return value
+
+
+class QueryImageUpload(BaseModel):
+    """Image upload used by the QA composer before a question is submitted."""
+
+    image: str = Field(..., min_length=1, max_length=6_000_000)
+
+    @field_validator("image")
+    @classmethod
+    def _validate_image_data_url(cls, value: str) -> str:
+        if not value.startswith((
             "data:image/jpeg;base64,",
             "data:image/png;base64,",
             "data:image/webp;base64,",

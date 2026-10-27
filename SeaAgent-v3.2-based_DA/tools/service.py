@@ -279,15 +279,15 @@ class ToolService:
         frame_groups: dict[str, list[dict[str, Any]]],
     ) -> dict[str, dict[str, Any]]:
         frames = self._flatten_frames(frame_groups)
-        if not frames or not Path(image_path).is_file():
+        if not frames:
             return {}
-        try:
-            query = self.embedder.encode_images([image_path])[0]
-            vectors = self._load_indexed_vectors(
-                frames, vector_key="keyframeVectorId", index=self.vectors.keyframes
-            )
-        except Exception:  # noqa: BLE001 - failed embedding must remain an unconfirmed search.
-            return {}
+        if not Path(image_path).is_file():
+            raise FileNotFoundError(f"Recognition image does not exist: {image_path}")
+        # Keep encoding failures visible to the tool boundary instead of reporting a false mismatch.
+        query = self.embedder.encode_images([image_path])[0]
+        vectors = self._load_indexed_vectors(
+            frames, vector_key="keyframeVectorId", index=self.vectors.keyframes
+        )
         scored: list[dict[str, Any]] = []
         for track_id, track_frames in frame_groups.items():
             values = [
@@ -328,6 +328,13 @@ class ToolService:
         image_path = str(image_path or "").strip()
         if not hull and not description and not image_path:
             return {"ok": False, "error": "recognition_query_required", "hint": "至少提供 hull_number、description 或 image_path。"}
+        if image_path and not Path(image_path).is_file():
+            return {
+                "ok": False,
+                "error": "image_not_found",
+                "errorType": "FileNotFoundError",
+                "hint": "上传图片已不可用，请重新附加后再试。",
+            }
 
         tracks, search_complete = self._scan_tracks(scope)
         frames, missing, first_keyframes = self._load_search_frames(tracks)

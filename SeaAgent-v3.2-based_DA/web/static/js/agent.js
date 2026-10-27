@@ -13,6 +13,7 @@ const sessionRuns = new Map();
 let currentSessionId = null;   // 正在查看的会话；null = 尚未提问的新会话
 let currentSession = null;     // 该会话在服务端的存档（含每轮问答）
 let sessionSummaries = [];     // 会话栏列表
+let selectedQueryImage = null;
 
 let harnessResult = null;
 let harnessEvidence = null;
@@ -367,7 +368,123 @@ function autoGrowComposer() {
   const node = document.getElementById('agentQuestion');
   if (!node) return;
   node.style.height = 'auto';
-  node.style.height = `${Math.min(node.scrollHeight, 132)}px`;
+  node.style.height = `${Math.min(node.scrollHeight, 180)}px`;
+}
+
+function queryImageUrl(imageId) {
+  const id = String(imageId || '');
+  return /^[0-9a-f]{32}\.(?:jpg|png|webp)$/.test(id)
+    ? `/api/agent/query-images/${encodeURIComponent(id)}`
+    : '';
+}
+
+function renderUserImage(source) {
+  const image = document.getElementById('qaUserImage');
+  if (!image) return;
+  const value = String(source || '');
+  const safeUrl = value.startsWith('blob:')
+    ? value
+    : value.startsWith('/api/agent/query-images/') && queryImageUrl(value.split('/').pop()) === value
+      ? value
+      : '';
+  image.hidden = !safeUrl;
+  if (safeUrl) image.src = safeUrl;
+  else image.removeAttribute?.('src');
+}
+
+function renderComposerImage() {
+  const preview = document.getElementById('agentImagePreview');
+  const image = document.getElementById('agentImagePreviewImage');
+  const selected = selectedQueryImage;
+  if (preview) preview.hidden = !selected;
+  if (image && selected) image.src = selected.previewUrl;
+  else image?.removeAttribute?.('src');
+  document.getElementById('qaComposer')?.classList.toggle('has-image', !!selected);
+}
+
+async function removeUploadedQueryImage(imageId) {
+  const url = queryImageUrl(imageId);
+  if (!url) return;
+  try { await fetch(url, {method: 'DELETE'}); }
+  catch (_error) { /* A stale unattached upload can be removed with QA memory. */ }
+}
+
+async function selectQueryImage(file) {
+  if (!file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    if (typeof showToast === 'function') showToast('Choose a JPEG, PNG or WebP image.', 'error');
+    return;
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    if (typeof showToast === 'function') showToast('Attached image must be smaller than 4 MB.', 'error');
+    return;
+  }
+
+  const previous = selectedQueryImage;
+  if (previous?.previewUrl) URL.revokeObjectURL(previous.previewUrl);
+  if (previous?.imageId) void removeUploadedQueryImage(previous.imageId);
+  const selected = {file, previewUrl: URL.createObjectURL(file), imageId: '', uploadPromise: null, submitted: false};
+  selectedQueryImage = selected;
+  renderComposerImage();
+  void uploadSelectedQueryImage(selected).then((imageId) => {
+    if (selectedQueryImage !== selected && !selected.submitted) return removeUploadedQueryImage(imageId);
+  }).catch((error) => {
+    selected.error = error;
+    if (selectedQueryImage === selected && typeof showToast === 'function') showToast(error.message, 'error');
+  });
+}
+
+async function uploadSelectedQueryImage(selected) {
+  if (selected.imageId) return selected.imageId;
+  if (!selected.uploadPromise) {
+    selected.uploadPromise = (async () => {
+      const response = await fetch('/api/agent/query-images', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({image: await readImageDataUrl(selected.file)}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || `Image upload failed: ${response.status}`);
+      selected.imageId = data.imageId || '';
+      if (!queryImageUrl(selected.imageId)) throw new Error('The server returned an invalid image ID.');
+      if (selectedQueryImage === selected) renderComposerImage();
+      return selected.imageId;
+    })();
+  }
+  return selected.uploadPromise;
+}
+
+function clearQueryImage() {
+  const selected = selectedQueryImage;
+  selectedQueryImage = null;
+  renderComposerImage();
+  if (selected?.previewUrl) URL.revokeObjectURL(selected.previewUrl);
+  if (selected?.imageId) void removeUploadedQueryImage(selected.imageId);
+}
+
+function droppedImage(dataTransfer) {
+  const files = [...(dataTransfer?.files || [])];
+  const imageFile = files.find((file) => file.type.startsWith('image/'));
+  if (imageFile) return imageFile;
+  for (const item of [...(dataTransfer?.items || [])]) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) return item.getAsFile?.() || null;
+  }
+  return null;
+}
+
+function handleQueryImagePaste(event) {
+  const image = droppedImage(event.clipboardData);
+  if (!image) return;
+  event.preventDefault();
+  void selectQueryImage(image);
+}
+
+function handleQueryImageDrop(event) {
+  const image = droppedImage(event.dataTransfer);
+  if (!image) return;
+  event.preventDefault();
+  document.getElementById('qaComposer')?.classList.remove('is-dragging');
+  void selectQueryImage(image);
 }
 
 /* 输入区的按钮随「当前会话是否在跑」切换：跑着的时候只能停，不能在同一个会话里再发一轮。 */
@@ -785,6 +902,7 @@ function renderSessionHistory(turns) {
   const head = folded > 0 ? `<div class="qa-history-more">${folded} earlier turn${folded === 1 ? '' : 's'} hidden</div>` : '';
   node.innerHTML = head + shown.map((turn) => `<article class="qa-history-item">
       <span>You</span>
+      ${turn.imageId ? `<img class="qa-history-image" src="${escapeHtml(queryImageUrl(turn.imageId))}" alt="Attached image" loading="lazy">` : ''}
       <p>${escapeHtml(turn.question || '')}</p>
       <span>Harness</span>
       <p class="qa-history-answer">${escapeHtml(compact(turnAnswer(turn), 420))}</p>
@@ -872,6 +990,10 @@ function renderView() {
   if (userTurn) userTurn.hidden = false;
   const questionNode = document.getElementById('qaUserQuestion');
   if (questionNode) questionNode.textContent = run ? run.question : (latest?.question || '');
+  const imageSource = run
+    ? run.imagePreviewUrl || run.imageUrl || (run.imageId ? queryImageUrl(run.imageId) : '')
+    : latest?.imageId ? queryImageUrl(latest.imageId) : '';
+  renderUserImage(imageSource);
 
   if (run) {
     run.events.forEach((event) => appendHarnessEvent(event));
@@ -1450,6 +1572,7 @@ async function clearAgentMemory() {
     if ([...sessionRuns.values()].some((run) => run.status === 'running')) {
       throw new Error('Stop active runs before clearing memory.');
     }
+    clearQueryImage();
     const response = await fetch('/api/agent/memory', {method: 'DELETE'});
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.detail || `Request failed: ${response.status}`);
@@ -1479,11 +1602,11 @@ function dispatchRunEvent(run, event) {
   if (qaView === 'trace') renderTrajectory();
 }
 
-async function streamAgentQuery(question, sessionId, run, image = null) {
+async function streamAgentQuery(question, sessionId, run, imageId = null) {
   const response = await fetch('/api/agent/query/stream', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({question, sessionId, ...(image ? {image} : {})}),
+    body: JSON.stringify({question, sessionId, ...(imageId ? {imageId} : {})}),
     signal: run.controller?.signal,
   });
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `Request failed: ${response.status}`);
@@ -1536,14 +1659,18 @@ async function askAgent() {
   }
   currentSessionId = sessionId;
   if (!currentSession || currentSession.sessionId !== sessionId) currentSession = {sessionId, title: question, turns: []};
-  const run = {id: sessionId, question, events: [], result: null, error: null, status: 'running', stopping: false, controller: new AbortController()};
+  const imageSelection = selectedQueryImage;
+  if (imageSelection) imageSelection.submitted = true;
+  const run = {
+    id: sessionId, question, events: [], result: null, error: null, status: 'running',
+    stopping: false, controller: new AbortController(),
+    imagePreviewUrl: imageSelection?.previewUrl || '', imageUrl: '', imageId: '',
+  };
   const imageInput = document.getElementById('agentImageInput');
-  const imageFile = imageInput?.files?.[0] || null;
-  if (imageFile && imageFile.size > 4 * 1024 * 1024) {
-    if (typeof showToast === 'function') showToast('Attached image must be smaller than 4 MB.', 'error');
-    return;
-  }
   sessionRuns.set(sessionId, run);
+  selectedQueryImage = null;
+  renderComposerImage();
+  if (imageInput) imageInput.value = '';
   // 发出去就清空输入框并收回到一行，保持输入区紧凑
   const input = document.getElementById('agentQuestion');
   if (input) { input.value = ''; autoGrowComposer(); }
@@ -1551,10 +1678,14 @@ async function askAgent() {
   // 新会话立刻进列表并打上「回答中」标记：不等服务端把行写出来
   await loadSessions();
 
+  let queryStarted = false;
   try {
-    const image = imageFile ? await readImageDataUrl(imageFile) : null;
-    const result = await streamAgentQuery(question, sessionId, run, image);
+    const imageId = imageSelection ? await uploadSelectedQueryImage(imageSelection) : null;
+    run.imageId = imageId || '';
+    queryStarted = true;
+    const result = await streamAgentQuery(question, sessionId, run, imageId);
     run.result = result || null;
+    run.imageId = result?.imageId || run.imageId;
     run.status = result?.state === 'awaiting_confirmation' ? 'awaiting_confirmation' : result?.state === 'cancelled' ? 'stopped' : result?.success === false ? 'error' : 'done';
   } catch (error) {
     // 用户按过停止：无论流是抛 AbortError 还是直接断掉，都算「已停止」而不是失败
@@ -1564,17 +1695,24 @@ async function askAgent() {
     } else {
       run.status = 'error';
       run.result = error.result || run.result;
+      run.imageId = run.result?.imageId || run.imageId;
       run.error = error.message;
+      if (imageSelection && !queryStarted && !run.result) {
+        imageSelection.submitted = false;
+        imageSelection.uploadPromise = null;
+        selectedQueryImage = imageSelection;
+        run.imageId = '';
+        run.imageUrl = '';
+        run.imagePreviewUrl = '';
+        renderComposerImage();
+      }
       if (!error.harnessEventRendered && currentSessionId === sessionId) {
         appendHarnessEvent({type: 'error', title: 'Harness failed', message: error.message});
       }
-      if (typeof showToast === 'function') showToast(error.message, 'error');
+      if (typeof showToast === 'function' && !(imageSelection && imageSelection.error === error)) showToast(error.message, 'error');
     }
   } finally {
     run.controller = null;
-    if (imageInput) imageInput.value = '';
-    const imageName = document.getElementById('agentImageName');
-    if (imageName) { imageName.textContent = ''; imageName.hidden = true; }
     if (currentSessionId === sessionId) renderView();
     await loadSessions();
     try {
@@ -1586,6 +1724,10 @@ async function askAgent() {
     } catch (_error) {
       /* 存档刷新失败不影响已经渲染好的本轮结果 */
     }
+    run.imageUrl = run.imageId ? queryImageUrl(run.imageId) : '';
+    if (run.imagePreviewUrl) URL.revokeObjectURL(run.imagePreviewUrl);
+    run.imagePreviewUrl = '';
+    if (currentSessionId === sessionId) renderView();
   }
 }
 
@@ -1611,13 +1753,27 @@ document.addEventListener('DOMContentLoaded', () => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); askAgent(); }
   });
   input?.addEventListener('input', autoGrowComposer);
+  input?.addEventListener('paste', handleQueryImagePaste);
   document.getElementById('agentImageInput')?.addEventListener('change', (event) => {
     const file = event.target.files?.[0];
-    const name = document.getElementById('agentImageName');
-    if (!name) return;
-    name.textContent = file ? file.name : '';
-    name.hidden = !file;
+    if (file) void selectQueryImage(file);
+    event.target.value = '';
   });
+  const composer = document.getElementById('qaComposer');
+  composer?.addEventListener('dragenter', (event) => {
+    if (droppedImage(event.dataTransfer)) composer.classList.add('is-dragging');
+  });
+  composer?.addEventListener('dragover', (event) => {
+    if (droppedImage(event.dataTransfer)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      composer.classList.add('is-dragging');
+    }
+  });
+  composer?.addEventListener('dragleave', (event) => {
+    if (!composer.contains(event.relatedTarget)) composer.classList.remove('is-dragging');
+  });
+  composer?.addEventListener('drop', handleQueryImageDrop);
   autoGrowComposer();
   bindConfirmationButtons();
   loadAgentMemorySummary();

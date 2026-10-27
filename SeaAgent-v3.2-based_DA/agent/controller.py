@@ -34,6 +34,7 @@ class AgentController:
         session_id: str | None = None,
         cancel: Any = None,
         image_path: str | None = None,
+        image_id: str | None = None,
     ) -> dict[str, Any]:
         session_id = str(session_id or "").strip() or f"session-{uuid.uuid4().hex[:12]}"
         session = self.repository.get_session(session_id)
@@ -56,12 +57,12 @@ class AgentController:
                 question = f"{original_question}\n\n用户补充信息：{clarification_response}"
         if not clarification:
             clarification_response = ""
+        image_id = image_id or str((pending_turn or {}).get("imageId") or "") or None
         runtime_question = question
         stored_question = question
         if image_path:
             runtime_question += f"\n\n用户附带了一张图片，识别时可将此路径传给 recognize_tracks.image_path：{image_path}"
-            stored_question += "\n\n[附带图片]"
-        display_question = original_question + ("\n\n[附带图片]" if image_path else "")
+        display_question = original_question
         runtime_id = str((pending_turn or {}).get("runtimeId") or f"qa-{uuid.uuid4().hex}")
         runtime: SeaVideoHarness | None = None
         result: dict[str, Any] = {}
@@ -80,6 +81,8 @@ class AgentController:
         if clarification:
             result["clarificationQuestion"] = str(result.get("clarification") or clarification)
             result["clarificationResponse"] = clarification_response
+        if image_id:
+            result["imageId"] = image_id
         # 成功与失败都留档：失败轮次同样属于会话历史，前端据此还原完整对话
         result["question"] = display_question
         result["sessionId"] = session_id
@@ -112,7 +115,7 @@ class AgentController:
         try:
             runtime = SeaVideoHarness(self.config, self.tools, event_handler=self.event_handler)
             state = runtime.resume(decision, thread_id=runtime_id, feedback=feedback, cancel=cancel)
-            question = str((state.get("shared_state") or {}).get("question") or question)
+            question = str(pending_turn.get("question") or (state.get("shared_state") or {}).get("question") or question)
             result = self._project(session_id, state, question)
         except Exception as error:
             logger.exception("Agent controller resume failed: session_id=%s", session_id)
@@ -127,6 +130,9 @@ class AgentController:
                 if result.get("state") != "awaiting_confirmation":
                     self._discard_run(runtime, runtime_id)
         result["sessionId"] = session_id
+        result["imageId"] = str(pending_turn.get("imageId") or "") if pending_turn else ""
+        if not result["imageId"]:
+            result.pop("imageId")
         result["turnIndex"] = self.repository.replace_last_turn(
             session_id, question, result, runtime_id=runtime_id
         )

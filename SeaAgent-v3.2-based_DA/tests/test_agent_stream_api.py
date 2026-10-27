@@ -1,9 +1,12 @@
+import base64
 import json
 from types import SimpleNamespace
 
+import cv2
+import numpy as np
 import pytest
 
-from web.models import AgentQuery
+from web.models import AgentQuery, QueryImageUpload
 from web.routes import agent_api
 
 
@@ -147,6 +150,7 @@ async def test_cleanup_blocks_new_runs_until_it_finishes(monkeypatch, action):
 
     monkeypatch.setattr(agent_api, "run_in_threadpool", cleanup)
     monkeypatch.setattr(agent_api, "_delete_runtime_state", lambda *args: None)
+    monkeypatch.setattr(agent_api, "_remove_all_query_images", lambda: None)
     operation = agent_api.clear_agent_memory(request) if action == "clear" else agent_api.delete_agent_session("t", request)
     task = asyncio.create_task(operation)
     await started.wait()
@@ -159,3 +163,65 @@ async def test_cleanup_blocks_new_runs_until_it_finishes(monkeypatch, action):
         await task
     assert request.app.state.agent_runs == {}
     assert not getattr(request.app.state, "agent_memory_clearing", False)
+
+
+def test_query_image_is_persisted_and_resolved_from_data_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_api, "project_root", lambda: tmp_path)
+    ok, encoded = cv2.imencode(".png", np.zeros((4, 4, 3), dtype=np.uint8))
+    assert ok
+    data_url = "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode()
+
+    image_path, image_id = agent_api._save_query_image(data_url)
+    resolved, resolved_id = agent_api._resolve_query_image(
+        AgentQuery(question="识别图片", imageId=image_id)
+    )
+
+    assert image_path == resolved
+    assert resolved_id == image_id
+    assert image_path.startswith(str(tmp_path / "data" / "memory" / "query_images"))
+    assert agent_api._query_image_path(image_id).is_file()
+    agent_api._remove_session_query_images({"turns": [{"imageId": image_id}]})
+    assert not agent_api._query_image_path(image_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_query_image_upload_preview_and_delete_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_api, "project_root", lambda: tmp_path)
+    ok, encoded = cv2.imencode(".png", np.zeros((4, 4, 3), dtype=np.uint8))
+    assert ok
+    data_url = "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode()
+
+    uploaded = await agent_api.upload_query_image(QueryImageUpload(image=data_url))
+    preview = await agent_api.query_image(uploaded["imageId"])
+
+    assert preview.path.name == uploaded["imageId"]
+    assert preview.media_type == "image/png"
+    await agent_api.delete_query_image(uploaded["imageId"])
+    assert not agent_api._query_image_path(uploaded["imageId"]).exists()
+
+
+def test_query_image_ids_reject_path_traversal():
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as error:
+        agent_api._query_image_path("../" + "a" * 32 + ".png")
+    assert error.value.status_code == 404
+
+
+def test_awaiting_input_reuses_the_saved_query_image(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_api, "project_root", lambda: tmp_path)
+    image_id = "b" * 32 + ".png"
+    path = tmp_path / "data" / "memory" / "query_images" / image_id
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"image")
+
+    class Repository:
+        def get_session(self, _session_id):
+            return {"turns": [{"state": "awaiting_input", "imageId": image_id}]}
+
+    image_path, resolved_id = agent_api._resolve_query_image(
+        AgentQuery(question="补充日期", sessionId="session-1"), Repository()
+    )
+
+    assert image_path == str(path)
+    assert resolved_id == image_id

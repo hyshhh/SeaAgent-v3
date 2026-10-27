@@ -45,10 +45,14 @@ function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: []
       addEventListener() {},
     },
     window: {}, requestAnimationFrame: (fn) => fn(), fetch, TextDecoder, Uint8Array,
+    URL: {createObjectURL: () => 'blob:query-image', revokeObjectURL() {}},
+    FileReader: class {
+      readAsDataURL() { this.result = 'data:image/png;base64,AA=='; this.onload(); }
+    },
     AbortController, URLSearchParams, console,
   });
   vm.runInContext(source, context);
-  return { elements, activityRows, run: (code) => vm.runInContext(code, context) };
+  return { elements, activityRows, context, run: (code) => vm.runInContext(code, context) };
 }
 
 const confirmation = { actions: [{ tool: 'add_registry_vessel', arguments: { hull_number: '003' } }] };
@@ -89,6 +93,49 @@ test('image presets fill the query and open the attachment picker', () => {
   assert.equal(result.question, '根据我上传的图片查找视频中的船。');
   assert.equal(result.selectedIndex, 0);
   assert.equal(imageInput.clickCount, 2);
+});
+
+test('pasted images show a preview and upload to the persistent QA image endpoint', async () => {
+  const requests = [];
+  const ui = page(async (url, options = {}) => {
+    requests.push([url, options]);
+    return {ok: true, json: async () => ({imageId: 'a'.repeat(32) + '.png'})};
+  });
+  const preview = {hidden: true};
+  const image = {src: ''};
+  const composer = {classList: {toggle() {}}};
+  ui.elements.set('agentImagePreview', preview);
+  ui.elements.set('agentImagePreviewImage', image);
+  ui.elements.set('qaComposer', composer);
+  const event = {clipboardData: {files: [{type: 'image/png', size: 12, name: 'clipboard.png'}]}, prevented: false, preventDefault() { this.prevented = true; }};
+
+  ui.context.event = event;
+  ui.run('handleQueryImagePaste(event)');
+  await ui.run('uploadSelectedQueryImage(selectedQueryImage)');
+
+  assert.equal(event.prevented, true);
+  assert.equal(preview.hidden, false);
+  assert.equal(image.src, 'blob:query-image');
+  assert.equal(requests[0][0], '/api/agent/query-images');
+  assert.equal(JSON.parse(requests[0][1].body).image, 'data:image/png;base64,AA==');
+});
+
+test('dropped images are accepted by the composer', async () => {
+  const ui = page();
+  const composer = {classList: {remove() {}, toggle() {}}};
+  const preview = {hidden: true};
+  const imagePreview = {src: ''};
+  ui.elements.set('qaComposer', composer);
+  ui.elements.set('agentImagePreview', preview);
+  ui.elements.set('agentImagePreviewImage', imagePreview);
+  const event = {dataTransfer: {files: [{type: 'image/jpeg', size: 20}]}, prevented: false, preventDefault() { this.prevented = true; }};
+  ui.context.event = event;
+
+  ui.run('handleQueryImageDrop(event)');
+
+  assert.equal(event.prevented, true);
+  assert.equal(preview.hidden, false);
+  assert.equal(imagePreview.src, 'blob:query-image');
 });
 
 test('shared state renders escaped fields and its snapshot version', () => {
@@ -302,8 +349,8 @@ test('confirmation card is mounted in the visible chat or trace view', () => {
 
   assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
   assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
-  assert.match(template, /qa\.css\?v=21/);
-  assert.match(template, /agent\.js\?v=92/);
+  assert.match(template, /qa\.css\?v=22/);
+  assert.match(template, /agent\.js\?v=93/);
   const ui = page();
   ui.run(`currentSessionId = 't'; qaView = 'chat';
     renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);
