@@ -1368,22 +1368,17 @@
   font-weight: 600;
 }
 #tab-agent-qa .qa-state-field dd {
+  box-sizing: border-box;
   min-width: 0;
+  min-height: 36px;
+  max-height: 120px;
   margin: 0;
+  padding: 8px;
   overflow: auto;
   color: var(--qa-body);
   font: 11px/1.45 Consolas, "Cascadia Mono", monospace;
   white-space: pre-wrap;
   word-break: break-word;
-}
-#tab-agent-qa .qa-state-field[data-key="requirements"] dd,
-#tab-agent-qa .qa-state-field[data-key="plan"] dd,
-#tab-agent-qa .qa-state-field[data-key="next_action"] dd,
-#tab-agent-qa .qa-state-field[data-key="clarification"] dd {
-  box-sizing: border-box;
-  height: 120px;
-  padding: 8px;
-  overflow: auto;
   border: 1px solid var(--qa-line);
   border-radius: 5px;
   background: #fafbfc;

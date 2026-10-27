@@ -76,6 +76,19 @@ test('shared state renders escaped fields and its snapshot version', () => {
   assert.equal(ui.elements.get('qaSharedStateMeta').textContent, 'Version 4');
 });
 
+test('shared state groups render fields for every role and runtime section', () => {
+  const ui = page();
+  ui.run(`renderSharedState({
+    evidence_ids: ['e1'], step_status: { step_1: 'completed' }, execution_status: 'success',
+    assessment: { final_answer: 'done' }, evidence_gaps: ['none'], conflicts: [], decision: 'terminate',
+    question: 'count ships', task_status: 'completed', iteration: 1, pending_agent: null,
+    evidence: [{ id: 'e1' }], tool_results: [{ tool: 'dedup_tracks' }]
+  });`);
+  const html = ui.elements.get('qaSharedStateGroups').innerHTML;
+  for (const group of ['executor', 'reflector', 'runtime', 'evidence']) assert.match(html, new RegExp(`data-group="${group}"`));
+  for (const key of ['evidence_ids', 'assessment', 'task_status', 'tool_results']) assert.match(html, new RegExp(`data-key="${key}"`));
+});
+
 test('evidence statistics render even when the query returns no visual items', () => {
   const ui = page();
   ui.run(`renderEvidence({ statistics: {
@@ -114,10 +127,13 @@ test('registry match evidence displays external match score and object', () => {
   assert.match(html, /0\.910/);
 });
 
-test('planner shared-state fields use fixed scrollable boxes', () => {
-  assert.match(styles, /qa-state-field\[data-key="plan"\] dd/);
-  assert.match(styles, /height: 120px/);
+test('all shared-state fields use bounded scrollable value boxes', () => {
+  assert.match(styles, /\.qa-state-field dd\s*\{/);
+  assert.match(styles, /max-height: 120px/);
+  assert.match(styles, /min-height: 36px/);
   assert.match(styles, /overflow: auto/);
+  assert.match(styles, /border: 1px solid var\(--qa-line\)/);
+  assert.doesNotMatch(styles, /qa-state-field\[data-key=/);
 });
 
 test('skill loading and reading events collapse into one summary row per agent and phase', () => {
