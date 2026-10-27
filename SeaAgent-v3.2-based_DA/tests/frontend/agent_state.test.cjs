@@ -114,6 +114,18 @@ test('compact count result metadata remains visible in the evidence panel', () =
   assert.match(html, /Search complete: No/);
 });
 
+test('registry count metadata distinguishes matched tracks from raw tracks', () => {
+  const ui = page();
+  ui.run(`renderEvidence({ statistics: { queryByTool: [{
+    tool: 'match_entities',
+    statistics: { trackCount: 24, inRegistryCount: 6, unregisteredCount: 18, coverageComplete: true }
+  }] } });`);
+  const html = ui.elements.get('evidenceGallery').innerHTML;
+  assert.match(html, /Tracks matched: 24/);
+  assert.match(html, /Tracks in registry: 6/);
+  assert.match(html, /Tracks not in registry: 18/);
+});
+
 test('registry match evidence displays external match score and object', () => {
   const ui = page();
   ui.run(`renderEvidence({ displayGroups: [{

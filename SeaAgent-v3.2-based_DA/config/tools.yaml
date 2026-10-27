@@ -46,8 +46,8 @@ tools:
   - name: match_entities
     label: 实体先验库匹配统计
     description: >-
-      依赖 dedup_tracks 的去重逻辑，按低阈值分组，再将每条轨迹的关键帧与先验库图片比较；任一图像分数达到阈值即计为在库。
-      只向模型返回实体总数、在库数和不在库数；匹配 ID、分数及对象留作运行证据。省略 time_range 表示全部监控时间。
+      将时间范围内的每条轨迹分别与先验库图片匹配，不做轨迹去重；任一关键帧分数达到阈值即计为在库。
+      只向模型返回轨迹总数、在库数和不在库数；匹配 ID、分数及对象留作运行证据。省略 time_range 表示全部监控时间。
     arguments:
       time_range: {type: time_range, required: false, description: 可选起止时间。}
 

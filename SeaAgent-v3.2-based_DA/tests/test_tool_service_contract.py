@@ -161,32 +161,6 @@ def test_dedup_tool_returns_only_counts():
     }
 
 
-def test_registry_entity_analysis_reads_all_frames_once_and_preserves_coverage():
-    tracks = [_track("t-1")]
-    frames = {"t-1": [{"keyframeId": "kf-1"}, {"keyframeId": "kf-2"}]}
-    calls = []
-    service = ToolService.__new__(ToolService)
-    service._validate_time_range = lambda _value: (None, None)
-    service._scan_tracks = lambda _scope: (tracks, True)
-
-    def load_search_frames(_tracks, max_frames):
-        calls.append(max_frames)
-        return frames, ["t-1"]
-
-    service._load_search_frames = load_search_frames
-    service._deduplicate_tracks = lambda _tracks, grouped, **_kwargs: {
-        "lowGroups": [["t-1"]],
-        "coverageComplete": False,
-        "receivedAllFrames": grouped == {"t-1": {"keyframes": frames["t-1"]}},
-    }
-
-    result = service._dedup_track_analysis(all_keyframes=True)
-
-    assert calls == [None]
-    assert result["receivedAllFrames"] is True
-    assert result["coverageComplete"] is False
-
-
 def test_track_deduplication_uses_instance_safe_overlap_check():
     service = ToolService.__new__(ToolService)
     service.settings = {"dedup_high": 0.9, "dedup_low": 0.8}
@@ -212,7 +186,7 @@ def test_track_deduplication_uses_instance_safe_overlap_check():
     }
 
 
-def test_registry_count_combines_categories_and_uses_low_threshold_groups():
+def test_registry_count_matches_each_track_without_deduplication():
     class Repository:
         def list_registry(self):
             return [{"registryId": "r-1", "hullNumber": "A01", "references": [{"referenceId": "ref-1"}]}]
@@ -220,16 +194,25 @@ def test_registry_count_combines_categories_and_uses_low_threshold_groups():
     service = ToolService.__new__(ToolService)
     service.repository = Repository()
     service.settings = {"image_match": 0.72}
-    service._dedup_track_analysis = lambda *_args, **_kwargs: {
-        "ok": True,
-        "tracks": [_track("t-1"), _track("t-2")],
-        "frames": {"t-1": [{"keyframeId": "kf-1"}], "t-2": [{"keyframeId": "kf-2"}]},
-        "coverageComplete": True,
-        "lowGroups": [["t-1", "t-2"]],
-        "highGroups": [["t-1"], ["t-2"]],
-    }
+    tracks = [_track("t-1"), _track("t-2")]
+    frames = {"t-1": [{"trackId": "t-1", "keyframeId": "kf-1"}], "t-2": [{"trackId": "t-2", "keyframeId": "kf-2"}]}
+    service._validate_time_range = lambda _value: (None, "")
+    service._scan_tracks = lambda _scope: (tracks, True)
+
+    def load_frames(items, max_frames, *, require_complete):
+        assert items == tracks
+        assert max_frames is None
+        assert require_complete is True
+        return frames, []
+
+    service._load_search_frames = load_frames
+    service._deduplicate_tracks = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("registry counts must not deduplicate tracks")
+    )
+
     def match_images(**kwargs):
         assert kwargs["best_by_max_score"] is True
+        assert {frame["trackId"] for frame in kwargs["galleryImages"]} == {"t-1", "t-2"}
         return {
             "matches": [{
                 "matchedTrackId": "t-1",
@@ -248,11 +231,12 @@ def test_registry_count_combines_categories_and_uses_low_threshold_groups():
 
     result = service.match_entities()
 
-    assert result["entityCount"] == 1
+    assert result["trackCount"] == 2
     assert result["inRegistryCount"] == 1
-    assert result["unregisteredCount"] == 0
+    assert result["unregisteredCount"] == 1
     assert result["coverageComplete"] is True
     assert result["matches"][0]["score"] == 0.73
+    assert [item["trackId"] for item in result["matches"]] == ["t-1", "t-2"]
     assert result["matches"][0]["matchedObject"] == {
         "registryId": "r-1",
         "hullNumber": "A01",
@@ -260,6 +244,53 @@ def test_registry_count_combines_categories_and_uses_low_threshold_groups():
         "keyframeId": "kf-1",
     }
     assert result["matches"][0]["scoreBand"] == "match"
+
+
+def test_registry_count_requires_vectors_for_every_selected_keyframe():
+    class Repository:
+        def get_keyframes(self, _track_ids, embedded_only=False):
+            assert embedded_only is False
+            return {"t-1": [
+                {"keyframeId": "kf-1", "keyframeVectorId": 1},
+                {"keyframeId": "kf-2", "keyframeVectorId": 2},
+            ]}
+
+    class Index:
+        def get_many(self, ids):
+            return {1: [1.0]} if 1 in ids else {}
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service.vectors = type("Vectors", (), {"keyframes": Index()})()
+
+    frames, incomplete = service._load_search_frames(
+        [_track("t-1")], max_frames=None, require_complete=True
+    )
+
+    assert [frame["keyframeId"] for frame in frames["t-1"]] == ["kf-1"]
+    assert incomplete == ["t-1"]
+
+
+def test_registry_count_marks_unsearchable_track_as_incomplete():
+    class Repository:
+        def list_registry(self):
+            return []
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service.settings = {"image_match": 0.72}
+    tracks = [_track("t-1")]
+    service._validate_time_range = lambda _value: (None, "")
+    service._scan_tracks = lambda _scope: (tracks, True)
+    service._load_search_frames = lambda _items, max_frames, *, require_complete: (
+        {"t-1": []}, ["t-1"]
+    )
+
+    result = service.match_entities()
+
+    assert result["trackCount"] == 1
+    assert result["unregisteredCount"] == 1
+    assert result["coverageComplete"] is False
 
 
 def test_image_match_can_select_a_registry_by_its_best_single_frame_score():
@@ -297,6 +328,38 @@ def test_image_match_can_select_a_registry_by_its_best_single_frame_score():
 
     assert result["matches"][0]["matchedRegistryId"] == "r-1"
     assert result["matches"][0]["maxEmbeddingScore"] == 0.9
+
+
+def test_image_match_marks_registry_coverage_incomplete_when_reference_vector_is_missing():
+    class Index:
+        def __init__(self, values):
+            self.values = values
+
+        def get_many(self, ids):
+            return {value: self.values[value] for value in ids if value in self.values}
+
+    service = ToolService.__new__(ToolService)
+    service.settings = {"image_match": 0.72, "image_exclude": 0.5}
+    service.vectors = type("Vectors", (), {
+        "keyframes": Index({10: [1.0, 0.0]}),
+        "registry": Index({1: [0.9, 0.4]}),
+    })()
+    registry = {
+        "registryId": "r-1",
+        "references": [
+            {"registryId": "r-1", "referenceId": "ref-1", "registryVectorId": 1},
+            {"registryId": "r-1", "referenceId": "ref-2", "registryVectorId": 2},
+        ],
+    }
+
+    result = service._match_images(
+        queryImages=registry["references"],
+        galleryImages=[{"trackId": "t-1", "keyframeId": "kf-1", "keyframeVectorId": 10}],
+        registryItems=[registry],
+    )
+
+    assert result["matches"]
+    assert result["registryCoverageComplete"] is False
 
 
 def test_image_match_does_not_encode_or_persist_missing_vectors():

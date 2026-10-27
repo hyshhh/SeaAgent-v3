@@ -121,6 +121,8 @@ class ToolService:
         self,
         tracks: list[dict[str, Any]],
         max_frames: int | None = MAX_FRAMES_PER_TRACK,
+        *,
+        require_complete: bool = False,
     ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
         """Keep only a few searchable frames per track; full frame records stay inside the service."""
         grouped: dict[str, list[dict[str, Any]]] = {}
@@ -154,7 +156,7 @@ class ToolService:
                     and int(frame["keyframeVectorId"]) in vectors
                 ]
                 grouped[track_id] = searchable
-                if not searchable:
+                if not searchable or (require_complete and len(searchable) != len(frames)):
                     missing.append(track_id)
         return grouped, missing
 
@@ -519,17 +521,12 @@ class ToolService:
     def _dedup_track_analysis(
         self,
         time_range: tuple[str | float, str | float] | None = None,
-        *,
-        all_keyframes: bool = False,
     ) -> dict[str, Any]:
         scope, problem = self._validate_time_range(time_range)
         if problem:
             return {"ok": False, "error": "invalid_time_range", "hint": problem}
         tracks, scan_complete = self._scan_tracks(scope)
-        frames, missing = self._load_search_frames(
-            tracks,
-            max_frames=None if all_keyframes else self.MAX_FRAMES_PER_TRACK,
-        )
+        frames, missing = self._load_search_frames(tracks)
         dedup = self._deduplicate_tracks(
             tracks,
             {track_id: {"keyframes": values} for track_id, values in frames.items()},
@@ -565,11 +562,13 @@ class ToolService:
     # 5.4 统计库外实体
     def match_entities(self, time_range: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
         def count() -> dict[str, Any]:
-            result = self._dedup_track_analysis(time_range, all_keyframes=True)
-            if not result.get("ok"):
-                return result
-            frames = result["frames"]
-            groups = result["lowGroups"]
+            scope, problem = self._validate_time_range(time_range)
+            if problem:
+                return {"ok": False, "error": "invalid_time_range", "hint": problem}
+            tracks, scan_complete = self._scan_tracks(scope)
+            frames, missing = self._load_search_frames(
+                tracks, max_frames=None, require_complete=True
+            )
             registry_items = self.repository.list_registry()
             references = [
                 reference
@@ -582,7 +581,7 @@ class ToolService:
                 galleryImages=self._flatten_frames(frames),
                 registryItems=registry_items,
                 best_by_max_score=True,
-            ) if references and frames else {}
+            ) if references and tracks else {}
             by_track: dict[str, list[dict[str, Any]]] = {}
             for match in visual.get("matches", []):
                 by_track.setdefault(str(match["matchedTrackId"]), []).append(match)
@@ -590,8 +589,9 @@ class ToolService:
             in_registry = 0
             matches = []
             threshold = float(self.settings["image_match"])
-            for group in groups:
-                candidates = [match for track_id in group for match in by_track.get(track_id, [])]
+            for track in tracks:
+                track_id = str(track["trackId"])
+                candidates = by_track.get(track_id, [])
                 best = max(candidates, key=lambda item: float(item["maxEmbeddingScore"])) if candidates else None
                 score = float(best["maxEmbeddingScore"]) if best else None
                 registered = score is not None and score >= threshold
@@ -607,8 +607,8 @@ class ToolService:
                         "keyframeId": best.get("bestMatchedKeyframeId"),
                     }
                 detail = {
-                    "trackId": str(group[0]) if group else "",
-                    "trackIds": list(group),
+                    "trackId": track_id,
+                    "trackIds": [track_id],
                     "score": round(score, 6) if score is not None else None,
                     "matchedObject": match_object,
                     "keyframeIds": best.get("matchedKeyframeIds", []) if best else [],
@@ -618,16 +618,16 @@ class ToolService:
                 matches.append(detail)
 
             registry_coverage = (
-                not result["tracks"]
+                not tracks
                 or not registry_items
                 or bool(references and visual.get("registryCoverageComplete"))
             )
             return {
                 "ok": True,
-                "entityCount": len(groups),
+                "trackCount": len(tracks),
                 "inRegistryCount": in_registry,
-                "unregisteredCount": len(groups) - in_registry,
-                "coverageComplete": result.get("coverageComplete", False) and registry_coverage,
+                "unregisteredCount": len(tracks) - in_registry,
+                "coverageComplete": scan_complete and not missing and registry_coverage,
                 "matches": matches,
             }
 
@@ -965,6 +965,9 @@ class ToolService:
         reference_vectors = self._load_indexed_vectors(
             references, vector_key="registryVectorId", index=self.vectors.registry
         )
+        all_reference_vectors_available = all(
+            reference.get("registryVectorId") in reference_vectors for reference in references
+        )
         frames_by_track = self._group(keyframes, "trackId")
         refs_by_registry = self._group(references, "registryId")
         visual_registry_ids = {str(key) for key in refs_by_registry}
@@ -1042,8 +1045,10 @@ class ToolService:
             if match_limit > 0:
                 matches = matches[:match_limit]
         unscored_track_ids = [str(tid) for tid in frames_by_track if str(tid) not in best_by_track]
-        registry_coverage_complete = bool(total_registry_count and frames_by_track) and all(
-            len(ids) == total_registry_count for ids in compared_by_track.values()
+        registry_coverage_complete = (
+            bool(total_registry_count and frames_by_track)
+            and all_reference_vectors_available
+            and all(len(ids) == total_registry_count for ids in compared_by_track.values())
         )
         return {
             "ok": True,

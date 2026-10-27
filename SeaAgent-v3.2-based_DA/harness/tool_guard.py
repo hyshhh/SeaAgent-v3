@@ -31,7 +31,7 @@ _MODEL_RESULT_FIELDS = {
         "coverageComplete",
     ),
     "match_entities": (
-        "ok", "entityCount", "inRegistryCount", "unregisteredCount",
+        "ok", "trackCount", "inRegistryCount", "unregisteredCount",
         "coverageComplete",
     ),
     "show_evidence": (

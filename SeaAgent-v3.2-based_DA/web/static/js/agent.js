@@ -1409,8 +1409,8 @@ function renderEvidence(evidence) {
     trackCount: 'Raw tracks', highThresholdShipCount: 'High-threshold entities', lowThresholdShipCount: 'Low-threshold entities',
     coverageComplete: 'Search complete',
     searchedTrackCount: 'Tracks searched', unsearchableTrackCount: 'Unsearchable tracks',
-    candidateCount: 'Candidates', entityCount: 'Entities',
-    inRegistryCount: 'In registry', unregisteredCount: 'Not in registry',
+    candidateCount: 'Candidates',
+    inRegistryCount: 'Tracks in registry', unregisteredCount: 'Tracks not in registry',
     confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',
   };
   const statsToShow = queryByTool.length
@@ -1419,7 +1419,10 @@ function renderEvidence(evidence) {
   for (const item of statsToShow) {
     const values = Object.entries(item.values)
       .filter(([key, value]) => statLabels[key] && value !== undefined && value !== null)
-      .map(([key, value]) => `${statLabels[key]}: ${key === 'coverageComplete' ? (value ? 'Yes' : 'No') : String(value)}`);
+      .map(([key, value]) => {
+        const label = key === 'trackCount' && item.tool === 'match_entities' ? 'Tracks matched' : statLabels[key];
+        return `${label}: ${key === 'coverageComplete' ? (value ? 'Yes' : 'No') : String(value)}`;
+      });
     if (values.length) {
       facts.push([item.tool ? displayToolLabel(item.tool) : 'Query statistics', values.join(' · ')]);
     }

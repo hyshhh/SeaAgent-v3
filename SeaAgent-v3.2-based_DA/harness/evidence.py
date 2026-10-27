@@ -24,7 +24,6 @@ TOOL_STATISTIC_KEYS = (
     "trackCount",
     "highThresholdShipCount",
     "lowThresholdShipCount",
-    "entityCount",
     "inRegistryCount",
     "unregisteredCount",
     "coverageComplete",

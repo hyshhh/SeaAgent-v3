@@ -107,7 +107,7 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
     guard = RepeatToolCallMiddleware(state=state, scope="executor")
     full_result = {
         "ok": True,
-        "entityCount": 2,
+        "trackCount": 2,
         "inRegistryCount": 1,
         "unregisteredCount": 1,
         "coverageComplete": True,
@@ -127,7 +127,7 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
 
     assert json.loads(message.content) == {
         "ok": True,
-        "entityCount": 2,
+        "trackCount": 2,
         "inRegistryCount": 1,
         "unregisteredCount": 1,
         "coverageComplete": True,

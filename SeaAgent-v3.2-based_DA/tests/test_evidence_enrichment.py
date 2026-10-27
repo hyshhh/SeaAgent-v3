@@ -91,7 +91,7 @@ def test_compact_count_fields_feed_frontend_statistics():
 def test_external_registry_match_evidence_is_enriched_without_counting_as_model_result():
     payload = build_evidence_payload([
         _record("match_entities", {
-            "entityCount": 1,
+            "trackCount": 1,
             "inRegistryCount": 1,
             "unregisteredCount": 0,
             "coverageComplete": True,
@@ -109,7 +109,7 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
         }),
     ])
 
-    assert payload["statistics"]["queryByTool"][0]["statistics"]["entityCount"] == 1
+    assert payload["statistics"]["queryByTool"][0]["statistics"]["trackCount"] == 1
     assert payload["trackIds"] == ["t-1", "t-2"]
     assert payload["keyframeIds"] == ["kf-1"]
     assert payload["registryReferenceIds"] == ["ref-1"]

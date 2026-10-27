@@ -64,12 +64,14 @@ def test_count_skills_map_user_intent_to_configured_tools():
     agents = {item["name"]: item for item in role_config["agents"]}
     expected = ("dedup_tracks", "match_entities")
     planning = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
+    intent = (ROOT / "skills/planning/intent/SKILL.md").read_text(encoding="utf-8")
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
     assert all(name in planning for name in expected)
+    assert "Registry intent takes priority over generic count wording" in intent
     assert all(name in statistics for name in expected)
     assert "match_entities" in agents["planner"]["system_prompt"]
-    assert "同时返回去重后实体总数" in agents["planner"]["system_prompt"]
+    assert "逐条匹配范围内所有轨迹、不去重" in agents["planner"]["system_prompt"]
     assert "statistics 技能" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
 
@@ -81,6 +83,8 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
 
     assert "统计任务只规划 dedup_tracks 或 match_entities，不得加入 recognize_tracks" in planner["system_prompt"]
+    assert "问在库、未在库、注册或未注册数量时" in planner["system_prompt"]
+    assert "只问总数时不得调用 match_entities" in planner["system_prompt"]
     assert "Count-only plans must contain only the requested count tools, never `recognize_tracks`" in acceptance
     assert "including “所有时间”" in time_scope
     assert "Time scope is not a separate plan step" in time_scope
