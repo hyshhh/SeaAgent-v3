@@ -183,6 +183,67 @@ def _display_groups(records: list[dict[str, Any]], limit: int) -> list[dict[str,
     return ordered[:limit]
 
 
+def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Build one compact evidence row per track for the QA table.
+
+    Keyframes remain internal provenance.  The UI receives only the track time,
+    generated clip and (when registry matching ran) its compact match summary.
+    """
+    rows: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    registry_matching = any(str(record.get("tool") or "") == "match_entities" for record in records)
+
+    def touch(track_id: Any) -> dict[str, Any] | None:
+        value = str(track_id or "").strip()
+        if not value:
+            return None
+        if value not in rows:
+            rows[value] = {"trackId": value, "registryMatch": None}
+            order.append(value)
+        return rows[value]
+
+    def copy_time(row: dict[str, Any], source: dict[str, Any]) -> None:
+        for key in ("startTime", "endTime", "startTimeText", "endTimeText"):
+            if source.get(key) not in (None, ""):
+                row[key] = source[key]
+
+    for record in records:
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        tool = str(record.get("tool") or "")
+        for item in result.get("trackRows", []) if isinstance(result.get("trackRows"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            row = touch(item.get("trackId"))
+            if row is None:
+                continue
+            copy_time(row, item)
+            if item.get("shipSegmentId"):
+                row["shipSegmentId"] = str(item["shipSegmentId"])
+
+        candidates = [item for item in (result.get("matches") or []) if isinstance(item, dict)]
+        if isinstance(result.get("tracks"), list):
+            candidates.extend(item for item in result["tracks"] if isinstance(item, dict))
+        for candidate in candidates:
+            track_id = _record_id(candidate, "trackId", "matchedTrackId", "queryTrackId")
+            row = touch(track_id)
+            if row is None:
+                continue
+            copy_time(row, candidate)
+            if tool != "match_entities" or not registry_matching:
+                continue
+            score = candidate.get("score", candidate.get("embeddingScore"))
+            score = float(score) if isinstance(score, (int, float)) else None
+            object_value = candidate.get("matchedObject")
+            match = {
+                "status": "In registry" if str(candidate.get("scoreBand") or candidate.get("band")) == "match" else "Not in registry",
+                "score": score,
+                "matchedObject": object_value if isinstance(object_value, dict) else None,
+            }
+            row["registryMatch"] = match
+
+    return [rows[track_id] for track_id in order[:limit]]
+
+
 # 2.2 汇总成本轮的证据载荷
 def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) -> dict[str, Any]:
     successful = [
@@ -221,6 +282,13 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
         "shipSegmentIds": segments,
         "registryReferenceIds": references,
         "trackIds": tracks,
+        "trackRows": _display_rows(successful, limit),
+        "registryMatchUsed": any(str(record.get("tool") or "") == "match_entities" for record in successful),
+        "trackRowsTruncated": any(
+            isinstance(record.get("result"), dict)
+            and bool(record["result"].get("truncated", record["result"].get("trackRowsTruncated", False)))
+            for record in successful
+        ),
         "displayGroups": _display_groups(successful, limit),
         "statistics": {
             "query": query_statistics,
@@ -229,5 +297,5 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
         },
         "tools": [str(record.get("tool") or "") for record in successful],
     }
-    evidence["isEmpty"] = not (keyframes or segments or references)
+    evidence["isEmpty"] = not (evidence["trackRows"] or keyframes or segments or references)
     return evidence

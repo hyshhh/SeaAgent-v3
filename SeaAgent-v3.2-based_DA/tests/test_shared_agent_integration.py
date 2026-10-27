@@ -116,7 +116,7 @@ class _Service:
                     with self._lock:
                         self.active_queries -= 1
             if name == "show_evidence":
-                return {"ok": True, "shownKeyframeIds": ["kf1"]}
+                return {"ok": True, "trackIds": ["t1"], "shownKeyframeIds": ["kf1"]}
             return {"ok": True, "trackIds": ["t1"], "keyframeIds": ["kf1"]}
 
         return invoke
@@ -162,7 +162,8 @@ def test_real_graph_completes_with_model_budget_and_state_updates(tmp_path, stre
     assert runtime.shared_state.snapshot()["model_requests"]["executor"] > 0
     assert runtime.shared_state.snapshot()["tool_calls"]["executor"] >= 3
     assert "convergence" not in result["shared_state"]
-    assert result["evidence"]["shownKeyframeIds"] == ["kf1"]
+    assert result["evidence"]["trackIds"] == ["t1"]
+    assert "shownKeyframeIds" not in result["evidence"]
     assert runtime._connection is None
 
 
@@ -191,7 +192,8 @@ def test_real_graph_iteration_limit_does_not_start_a_summary_request(tmp_path):
     assert result["state"] == "stalled" and result["partial"]
     assert result["shared_state"]["decision"] == "replan"
     assert result["shared_state"]["pending_agent"] is None
-    assert result["evidence"]["shownKeyframeIds"] == ["kf1"]
+    assert result["evidence"]["trackIds"] == ["t1"]
+    assert "shownKeyframeIds" not in result["evidence"]
 
 
 def test_agent_without_state_write_gets_one_forced_repair_turn(tmp_path):

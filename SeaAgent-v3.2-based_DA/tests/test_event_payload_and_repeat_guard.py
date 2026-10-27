@@ -134,13 +134,24 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
     }
     assert message.artifact["full_result"] == json.loads(message.content)
     assert state.snapshot()["tool_results"][0]["result"] == json.loads(message.content)
-    assert state.evidence_artifact_results() == [{"matches": full_result["matches"]}]
+    assert state.evidence_artifact_results() == [{
+        "tool": "match_entities",
+        "result": {
+            "matches": [
+                {key: item[key] for key in ("trackId", "score", "scoreBand", "matchedObject")}
+                for item in full_result["matches"]
+            ],
+            "trackCount": 2,
+            "truncated": False,
+        },
+    }]
     trace = _Trace(None, event_limit=4000, shared_state=state)
     trace.consume({"messages": [message]}, agent_name="executor")
     result = trace.result("thread", {"harness": {}})
     assert result["tool_records"][0]["result"] == json.loads(message.content)
     assert result["enrichedEvidence"]["trackIds"] == ["t-1", "t-2"]
     assert result["enrichedEvidence"]["displayGroups"][0]["score"] == 0.91
+    assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "In registry"
     assert state.evidence_artifact_results() == []
 
 

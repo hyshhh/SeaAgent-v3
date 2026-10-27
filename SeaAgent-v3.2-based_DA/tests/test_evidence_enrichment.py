@@ -115,3 +115,37 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
     assert payload["registryReferenceIds"] == ["ref-1"]
     assert payload["displayGroups"][0]["score"] == 0.83
     assert payload["displayGroups"][0]["matchedObject"]["hullNumber"] == "0857"
+
+
+def test_evidence_rows_keep_track_time_clip_and_only_explicit_registry_statistics():
+    payload = build_evidence_payload([
+        _record("dedup_tracks", {
+            "trackCount": 2,
+            "trackRows": [{"trackId": "t-1", "startTimeText": "start", "endTimeText": "end"}],
+            "trackRowsTruncated": True,
+        }),
+        _record("match_entities", {
+            "matches": [{
+                "trackId": "t-1",
+                "startTimeText": "matched start",
+                "endTimeText": "matched end",
+                "score": 0.91,
+                "scoreBand": "match",
+                "matchedObject": {"hullNumber": "0857"},
+                "keyframeIds": ["kf-hidden"],
+            }],
+        }),
+    ])
+
+    assert payload["trackRows"] == [{
+        "trackId": "t-1",
+        "registryMatch": {
+            "status": "In registry",
+            "score": 0.91,
+            "matchedObject": {"hullNumber": "0857"},
+        },
+        "startTimeText": "matched start",
+        "endTimeText": "matched end",
+    }]
+    assert payload["registryMatchUsed"] is True
+    assert payload["trackRowsTruncated"] is True

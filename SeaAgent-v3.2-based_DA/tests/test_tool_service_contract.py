@@ -138,7 +138,7 @@ def test_registry_assisted_search_without_reference_images_is_unconfirmed():
     assert result["coverageComplete"] is False
 
 
-def test_dedup_tool_returns_only_counts():
+def test_dedup_tool_returns_counts_and_bounded_display_rows():
     service = ToolService.__new__(ToolService)
     service._dedup_track_analysis = lambda *_args, **_kwargs: {
         "ok": True,
@@ -148,6 +148,7 @@ def test_dedup_tool_returns_only_counts():
         "trackCount": 2,
         "highThresholdShipCount": 2,
         "lowThresholdShipCount": 1,
+        "tracks": [_track("t-1")],
     }
 
     result = service.dedup_tracks()
@@ -158,6 +159,13 @@ def test_dedup_tool_returns_only_counts():
         "highThresholdShipCount": 2,
         "lowThresholdShipCount": 1,
         "coverageComplete": False,
+        "trackRows": [{
+            "trackId": "t-1",
+            "scoreBand": "mismatch",
+            "startTime": 1.0,
+            "endTime": 2.0,
+        }],
+        "trackRowsTruncated": False,
     }
 
 

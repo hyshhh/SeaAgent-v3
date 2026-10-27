@@ -39,6 +39,7 @@ class ToolService:
     }
     MAX_RETURNED_MATCHES = 10
     MAX_FRAMES_PER_TRACK = 3
+    MAX_EVIDENCE_TRACKS = 60
 
     # ------------------------------------------------------------------ #
     # 一、服务初始化与执行守卫                                                       #
@@ -179,9 +180,21 @@ class ToolService:
             "trackId": str(track["trackId"]),  # 轨迹编号
             "scoreBand": band,  # 原始档位 match / uncertain / mismatch
         }
-        for field in ("startTimeText", "endTimeText"):
-            if track.get(field):
-                summary[field] = track[field]  # 轨迹时间
+        start = track.get("overlapStart", track.get("startTime"))
+        end = track.get("overlapEnd", track.get("endTime"))
+        for field, value in (("startTime", start), ("endTime", end)):
+            if value is not None:
+                summary[field] = value
+        for field, value in (
+            ("startTimeText", track.get("startTimeText")),
+            ("endTimeText", track.get("endTimeText")),
+        ):
+            if value:
+                summary[field] = value
+        if start is not None and ("overlapStart" in track):
+            summary["startTimeText"] = format_monitor_time(start)
+        if end is not None and ("overlapEnd" in track):
+            summary["endTimeText"] = format_monitor_time(end)
         hull = track.get("finalHullNumber")
         description = str(track.get("finalDescription") or "").strip()
         keyframe_ids = [str(frame["keyframeId"]) for frame in frames[: self.MAX_FRAMES_PER_TRACK]]
@@ -554,6 +567,12 @@ class ToolService:
                     "lowThresholdShipCount",
                     "coverageComplete",
                 )
+            } | {
+                "trackRows": [
+                    self._track_match_summary(track, [])
+                    for track in result.get("tracks", [])[: self.MAX_EVIDENCE_TRACKS]
+                ],
+                "trackRowsTruncated": len(result.get("tracks", [])) > self.MAX_EVIDENCE_TRACKS,
             }
 
         return self._run_tool("dedup_tracks", dedup)
@@ -606,15 +625,15 @@ class ToolService:
                         "registryReferenceId": best.get("bestMatchedRegistryReferenceId"),
                         "keyframeId": best.get("bestMatchedKeyframeId"),
                     }
-                detail = {
-                    "trackId": track_id,
-                    "trackIds": [track_id],
-                    "score": round(score, 6) if score is not None else None,
-                    "matchedObject": match_object,
-                    "keyframeIds": best.get("matchedKeyframeIds", []) if best else [],
-                    "registryReferenceIds": best.get("matchedRegistryReferenceIds", []) if best else [],
-                    "scoreBand": "match" if registered else "mismatch",
-                }
+                detail = self._track_match_summary(
+                    track,
+                    [],
+                    score=score,
+                    band="match" if registered else "mismatch",
+                    reference_ids=best.get("matchedRegistryReferenceIds", []) if best else [],
+                )
+                detail["matchedObject"] = match_object
+                detail["trackIds"] = [track_id]
                 matches.append(detail)
 
             registry_coverage = (
@@ -1078,16 +1097,34 @@ class ToolService:
         registry_reference_ids = list(dict.fromkeys(str(value) for value in (registry_reference_ids or []) if value))
         generated_segments: list[str] = []
         shown_keyframes = list(keyframe_ids)
+        track_rows: list[dict[str, Any]] = []
         for track_id in track_ids:
+            track = self.repository.get_track(track_id)
             frames = self._build_frames([track_id]).get("keyframes", [])
             if frames:
                 selected = frames[: self.MAX_FRAMES_PER_TRACK]
                 # 该轨迹展示的关键帧
                 shown_keyframes.extend(str(frame["keyframeId"]) for frame in selected)
-            clip = self._build_clip(track_id, scope)
+            # 该轨迹生成的视频片段
+            clip = self._build_clip(track_id, scope, scale=0.25)
             if clip.get("ok") and clip.get("found") and clip.get("shipSegmentId"):
-                # 该轨迹生成的视频片段
                 generated_segments.append(str(clip["shipSegmentId"]))
+            if not track:
+                continue
+            start = max(float(track["startTime"]), scope[0]) if track and scope else (track.get("startTime") if track else None)
+            end = min(float(track["endTime"]), scope[1]) if track and scope else (track.get("endTime") if track else None)
+            if start is None or end is None or start > end:
+                continue
+            row = {
+                "trackId": str(track_id),
+                "startTime": start,
+                "endTime": end,
+                "startTimeText": format_monitor_time(start) if start is not None else "",
+                "endTimeText": format_monitor_time(end) if end is not None else "",
+            }
+            if clip.get("ok") and clip.get("found") and clip.get("shipSegmentId"):
+                row["shipSegmentId"] = str(clip["shipSegmentId"])
+            track_rows.append(row)
         shown_keyframes = list(dict.fromkeys(shown_keyframes))[:limit * self.MAX_FRAMES_PER_TRACK]
         shown_segments = list(dict.fromkeys(generated_segments))[:limit]
         shown_references = self._representative_registry_reference_ids(registry_reference_ids)[:limit]
@@ -1097,6 +1134,7 @@ class ToolService:
             "shownShipSegmentIds": shown_segments,  # 展示的视频片段编号
             "shownRegistryReferenceIds": shown_references,  # 展示的库参考图编号
             "trackIds": track_ids,  # 汇总的轨迹编号
+            "trackRows": track_rows,  # 前端按轨迹渲染的统一证据行
             "statistics": {  # 展示数量统计
                 "trackCount": len(track_ids),  # 轨迹数
                 "keyframeCount": len(shown_keyframes),  # 关键帧数

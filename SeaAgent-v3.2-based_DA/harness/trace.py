@@ -400,15 +400,14 @@ class _Trace:
             records = restored + records
         private_records = []
         if self.shared_state is not None:
-            private_records = [
-                {
-                    "tool": "match_entities",
+            for item in self.shared_state.evidence_artifact_results():
+                if not isinstance(item, dict):
+                    continue
+                private_records.append({
+                    "tool": str(item.get("tool") or "match_entities"),
                     "status": "completed",
-                    "result": item,
-                }
-                for item in self.shared_state.evidence_artifact_results()
-                if isinstance(item, dict)
-            ]
+                    "result": item.get("result", item),
+                })
         enriched_evidence = build_evidence_payload([*records, *private_records])
         if self.shared_state is not None:
             self.shared_state.clear_evidence_artifacts()

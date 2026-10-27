@@ -34,10 +34,7 @@ _MODEL_RESULT_FIELDS = {
         "ok", "trackCount", "inRegistryCount", "unregisteredCount",
         "coverageComplete",
     ),
-    "show_evidence": (
-        "ok", "shownKeyframeIds", "shownShipSegmentIds",
-        "shownRegistryReferenceIds", "trackIds", "statistics",
-    ),
+    "show_evidence": ("ok", "trackIds"),
 }
 _MATCH_FIELDS = (
     "trackId", "startTimeText", "endTimeText", "hullNumber", "description",
@@ -93,7 +90,10 @@ def _model_message(request: Any, response: Any, result: Any) -> Any:
         return response
     previous = getattr(response, "artifact", None)
     artifact = dict(previous) if isinstance(previous, dict) else {}
-    artifact["full_result"] = compact if name == "match_entities" else result
+    if name == "show_evidence":
+        artifact["full_result"] = {**compact, "trackRows": result.get("trackRows", [])}
+    else:
+        artifact["full_result"] = compact if name in {"dedup_tracks", "match_entities"} else result
     return _message(
         request,
         json.dumps(compact, ensure_ascii=False, default=str),
@@ -249,11 +249,48 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         state_result = result
         if name == "match_entities" and not failed and isinstance(result, dict):
             try:
-                self.state.store_evidence_artifact({"matches": result.get("matches", [])})
+                rows = [
+                    {
+                        field: item[field]
+                        for field in ("trackId", "startTime", "endTime", "startTimeText", "endTimeText", "score", "scoreBand", "matchedObject")
+                        if field in item
+                    }
+                    for item in result.get("matches", [])[:60]
+                    if isinstance(item, dict)
+                ]
+                self.state.store_evidence_artifact({
+                    "tool": name,
+                    "result": {
+                        "matches": rows,
+                        "trackCount": result.get("trackCount", len(result.get("matches", []))),
+                        "truncated": len(result.get("matches", [])) > len(rows),
+                    },
+                })
             except OSError:
                 pass
             state_result = _model_result(name, result)
-        elif name == "dedup_tracks" and not failed:
+        elif name == "dedup_tracks" and not failed and isinstance(result, dict):
+            try:
+                self.state.store_evidence_artifact({
+                    "tool": name,
+                    "result": {
+                        "trackRows": result.get("trackRows", [])[:60],
+                        "truncated": bool(result.get("trackRowsTruncated")),
+                    },
+                })
+            except OSError:
+                pass
+            state_result = _model_result(name, result)
+        elif name == "show_evidence" and not failed and isinstance(result, dict):
+            try:
+                self.state.store_evidence_artifact({
+                    "tool": name,
+                    "result": {
+                        "trackRows": result.get("trackRows", [])[:60],
+                    },
+                })
+            except OSError:
+                pass
             state_result = _model_result(name, result)
         self.state.finish_call(key, state_result, failed)
         if name not in STATE_TOOLS and name != "read_file":

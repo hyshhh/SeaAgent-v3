@@ -1769,3 +1769,26 @@
   height: 2px;
   background: #0a0a0a;
 }
+
+/* Evidence is one compact, track-aligned table; keyframes stay out of the QA view. */
+#tab-agent-qa .qa-evidence-table-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--qa-line); border-radius: 6px; }
+#tab-agent-qa .qa-evidence-table { width: 100%; min-width: 500px; border-collapse: collapse; table-layout: fixed; background: #fff; }
+#tab-agent-qa .qa-evidence-table th,
+#tab-agent-qa .qa-evidence-table td { padding: 6px 8px; border-bottom: 1px solid var(--qa-line); text-align: left; vertical-align: middle; }
+#tab-agent-qa .qa-evidence-table th { position: sticky; top: 0; z-index: 1; color: #657383; background: #f5f7f9; font-size: 9px; font-weight: 650; }
+#tab-agent-qa .qa-evidence-table td { color: var(--qa-ink); font-size: 10px; }
+#tab-agent-qa .qa-evidence-table tr:last-child td { border-bottom: 0; }
+#tab-agent-qa .qa-evidence-table th:nth-child(1) { width: 64px; }
+#tab-agent-qa .qa-evidence-table th:nth-child(2) { width: 148px; }
+#tab-agent-qa .qa-evidence-table th:nth-child(3) { width: 132px; }
+#tab-agent-qa .qa-evidence-table th:nth-child(4) { width: 140px; }
+#tab-agent-qa .qa-evidence-track-id { color: #244f70 !important; font-family: Consolas, monospace; font-weight: 700; }
+#tab-agent-qa .qa-evidence-clip-cell { padding: 4px !important; background: #111820; }
+#tab-agent-qa .qa-evidence-clip { display: block; width: 100%; max-height: 78px; aspect-ratio: 16 / 9; object-fit: contain; background: #111820; }
+#tab-agent-qa .qa-evidence-registry-cell { line-height: 1.4; }
+#tab-agent-qa .qa-registry-status { display: inline-block; padding: 2px 5px; border-radius: 3px; font-size: 9px; font-weight: 650; white-space: nowrap; }
+#tab-agent-qa .qa-registry-status.is-registered { color: #286747; background: #edf7f1; }
+#tab-agent-qa .qa-registry-status.is-unregistered { color: #785d25; background: #faf5e9; }
+#tab-agent-qa .qa-registry-object { display: block; margin-top: 2px; color: #697785; font-family: Consolas, monospace; font-size: 9px; }
+#tab-agent-qa .qa-evidence-empty { color: #9aa4ad; }
+#tab-agent-qa .qa-evidence-truncated { margin: 6px 0 0; color: var(--qa-muted); font-size: 9px; }

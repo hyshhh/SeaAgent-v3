@@ -1086,8 +1086,7 @@ function completeToolEvent(event) {
 /* 证据工具一返回就刷新证据面板，不必等整轮结束——中间件保证收尾前一定会调用它。 */
 function isEvidencePayload(result) {
   return !!result && typeof result === 'object' && [
-    'trackIds', 'keyframeIds', 'shownKeyframeIds', 'shownShipSegmentIds',
-    'shownRegistryReferenceIds', 'statistics',
+    'trackRows', 'trackIds', 'statistics',
   ].some((key) => Array.isArray(result[key]) || (result[key] && typeof result[key] === 'object'));
 }
 
@@ -1357,27 +1356,10 @@ function renderEvidence(evidence) {
   harnessEvidence = evidence || null;
   const node = document.getElementById('evidenceGallery');
   if (!node) return;
-  const groups = [
-    ['shownTrackIds', 'trackIds', 'Tracks', (id) => `<span class="evidence-track-id">${escapeHtml(id)}</span>`],
-    ['shownKeyframeIds', 'keyframeIds', 'Keyframes', (id) => `<a class="evidence-card" href="/api/evidence/keyframes/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/keyframes/${encodeURIComponent(id)}" alt="Keyframe ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
-    ['shownShipSegmentIds', 'shipSegmentIds', 'Video clips', (id) => `<a class="evidence-card" href="/api/evidence/clips/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/clips/${encodeURIComponent(id)}/poster" alt="Video clip ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
-    ['shownRegistryReferenceIds', 'registryReferenceIds', 'Registry references', (id) => `<a class="evidence-card" href="/api/evidence/registry/${encodeURIComponent(id)}" target="_blank" rel="noopener"><img src="/api/evidence/registry/${encodeURIComponent(id)}" alt="Registry reference ${escapeHtml(id)}"><span>${escapeHtml(id)}</span></a>`],
-  ];
-  const maxItems = Math.max(0, Number(document.getElementById('evidenceMaxItems')?.value || 0));
-  let shown = 0;
-  const sections = groups.flatMap(([key, fallbackKey, label, render]) => {
-    const sourceKey = Array.isArray(evidence?.[key]) ? key : fallbackKey;
-    const source = Array.isArray(evidence?.[sourceKey]) ? evidence[sourceKey] : [];
-    const ids = maxItems ? source.slice(0, Math.max(0, maxItems - shown)) : source;
-    shown += ids.length;
-    return ids.length ? [`<section class="evidence-group"><strong>${label}</strong><div class="evidence-group-grid">${ids.map((id) => render(String(id))).join('')}</div></section>`] : [];
-  });
-  const total = groups.reduce((sum, [key, fallbackKey]) => {
-    const sourceKey = Array.isArray(evidence?.[key]) ? key : fallbackKey;
-    return sum + (Array.isArray(evidence?.[sourceKey]) ? evidence[sourceKey].length : 0);
-  }, 0);
+  const rows = Array.isArray(evidence?.trackRows) ? evidence.trackRows : [];
+  const total = Number(evidence?.statistics?.query?.trackCount ?? evidence?.statistics?.trackCount ?? rows.length);
   const count = document.getElementById('evidenceResultCount');
-  if (count) count.textContent = total ? `${shown}/${total} item${total === 1 ? '' : 's'}` : 'No items';
+  if (count) count.textContent = total ? `${rows.length}/${total} tracks` : 'No tracks';
   // 一行上下文：截图进论文时，这张图要能自己说清"这是哪一问的证据"。
   const context = document.getElementById('evidenceContext');
   if (context) {
@@ -1385,35 +1367,38 @@ function renderEvidence(evidence) {
     context.textContent = asked ? `Evidence for: ${asked}` : '';
     context.hidden = !asked;
   }
-  node.style.setProperty('--qa-image-scale', String(Number(document.getElementById('evidenceImageScale')?.value || 0.5)));
-  node.style.setProperty('--qa-video-scale', String(Number(document.getElementById('evidenceVideoScale')?.value || 0.25)));
+  const registryMatchUsed = evidence?.registryMatchUsed === true;
+  const tableRows = rows.map((row) => {
+    const trackId = String(row?.trackId || '');
+    const start = String(row?.startTimeText || '');
+    const end = String(row?.endTimeText || '');
+    const time = start && end ? `${start} – ${end}` : start || end || '—';
+    const query = new URLSearchParams({scale: '0.25'});
+    if (Number.isFinite(Number(row?.startTime))) query.set('startTime', String(row.startTime));
+    if (Number.isFinite(Number(row?.endTime))) query.set('endTime', String(row.endTime));
+    const segmentId = String(row?.shipSegmentId || '');
+    const clipUrl = segmentId
+      ? `/api/evidence/clips/${encodeURIComponent(segmentId)}`
+      : `/api/evidence/tracks/${encodeURIComponent(trackId)}/clip?${query}`;
+    const clip = trackId
+      ? `<video class="qa-evidence-clip" data-src="${escapeHtml(clipUrl)}" aria-label="Track ${escapeHtml(trackId)} clip" autoplay muted loop playsinline preload="none"></video>`
+      : '<span class="qa-evidence-empty">—</span>';
+    const match = row?.registryMatch;
+    let matchCell = '';
+    if (registryMatchUsed && match?.status) {
+      const object = match?.matchedObject && typeof match.matchedObject === 'object' ? match.matchedObject : {};
+      const name = object.hullNumber || object.registryId || '';
+      const score = Number.isFinite(Number(match?.score)) ? ` · ${Number(match.score).toFixed(3)}` : '';
+      const status = match?.status || 'Not in registry';
+      matchCell = `<span class="qa-registry-status ${status === 'In registry' ? 'is-registered' : 'is-unregistered'}">${escapeHtml(status)}</span>${name ? `<span class="qa-registry-object">${escapeHtml(name)}${escapeHtml(score)}</span>` : ''}`;
+    }
+    return `<tr><td class="qa-evidence-track-id">${escapeHtml(trackId)}</td><td>${escapeHtml(time)}</td><td class="qa-evidence-clip-cell">${clip}</td><td class="qa-evidence-registry-cell">${matchCell}</td></tr>`;
+  });
+  const table = tableRows.length
+    ? `<div class="qa-evidence-table-scroll"><table class="qa-evidence-table"><thead><tr><th>Track ID</th><th>Appearance time</th><th>Clip</th><th>Registry match</th></tr></thead><tbody>${tableRows.join('')}</tbody></table></div>`
+    : '<div class="qa-inspector-empty">No track evidence available.</div>';
   // 不再把整段原始 JSON 摊在面板里：换成能一眼看懂的要点。
   // 论文插图里那堆花括号只会占地方，真正要交代的是"有几条、什么 ID、用什么取的"。
-  const tools = Array.isArray(evidence?.tools) ? [...new Set(evidence.tools.filter(Boolean))] : [];
-  const matchRows = (Array.isArray(evidence?.displayGroups) ? evidence.displayGroups : [])
-    .filter((group) => group?.registryMatch)
-    .map((group) => {
-      const ids = Array.isArray(group.trackIds) && group.trackIds.length ? group.trackIds : [group.trackId];
-      const object = group.matchedObject && typeof group.matchedObject === 'object' ? group.matchedObject : {};
-      const decision = group.band === 'match' ? 'In registry' : 'Not in registry';
-      const hull = object.hullNumber ? ` · ${object.hullNumber}` : '';
-      const score = Number.isFinite(Number(group.score)) ? Number(group.score).toFixed(3) : 'No score';
-      return `<li><span>${escapeHtml(ids.filter(Boolean).join(', '))}</span><strong>${decision}${escapeHtml(hull)}</strong><em>${score}</em></li>`;
-    });
-  const matchSection = matchRows.length
-    ? `<section class="qa-registry-match-evidence"><strong>Registry match evidence</strong><ul>${matchRows.join('')}</ul></section>`
-    : '';
-  const facts = [
-    ['Items', `${shown}/${total}`],
-    ['Breakdown', groups.filter(([key, fallbackKey]) => {
-      const source = Array.isArray(evidence?.[key]) ? evidence[key] : evidence?.[fallbackKey];
-      return Array.isArray(source) && source.length;
-    }).map(([key, fallbackKey, label]) => {
-      const source = Array.isArray(evidence?.[key]) ? evidence[key] : evidence?.[fallbackKey];
-      return `${label} ${source.length}`;
-    }).join(' · ') || '—'],
-    ['Retrieved by', tools.length ? tools.join(', ') : '—'],
-  ];
   const statistics = evidence?.statistics || {};
   const queryStatistics = statistics.query || statistics;
   const queryByTool = Array.isArray(statistics.queryByTool) ? statistics.queryByTool : [];
@@ -1429,6 +1414,7 @@ function renderEvidence(evidence) {
   const statsToShow = queryByTool.length
     ? queryByTool.map((item) => ({ tool: item.tool, values: item.statistics || {} }))
     : [{ tool: '', values: Array.isArray(queryStatistics) ? {} : queryStatistics }];
+  const facts = [];
   for (const item of statsToShow) {
     const values = Object.entries(item.values)
       .filter(([key, value]) => statLabels[key] && value !== undefined && value !== null)
@@ -1440,15 +1426,41 @@ function renderEvidence(evidence) {
       facts.push([item.tool ? displayToolLabel(item.tool) : 'Query statistics', values.join(' · ')]);
     }
   }
-  const shownStatistics = statistics.display || {};
-  if (Object.keys(shownStatistics).length) {
-    facts.push(['Evidence display', `${shownStatistics.trackCount ?? 0} tracks · ${shownStatistics.keyframeCount ?? 0} keyframes · ${shownStatistics.clipCount ?? 0} clips · ${shownStatistics.registryReferenceCount ?? 0} registry references`]);
-  }
   const meta = `<dl class="evidence-meta">${facts.map(([term, value]) =>
     `<div><dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
-  node.innerHTML = (sections.length
-    ? sections.join('')
-    : '<div class="qa-inspector-empty">No evidence available.</div>') + matchSection + meta;
+  const truncated = evidence?.trackRowsTruncated || evidence?.statistics?.truncated;
+  node.innerHTML = table + (truncated ? '<p class="qa-evidence-truncated">Showing the first 60 tracks.</p>' : '') + meta;
+  observeEvidenceClips(node);
+}
+
+function observeEvidenceClips(root) {
+  const videos = [...(root.querySelectorAll?.('video[data-src]') || [])];
+  if (!videos.length) return;
+  const activate = (video) => {
+    if (!video.dataset.src || video.src) return;
+    video.src = video.dataset.src;
+    video.addEventListener('error', () => {
+      const empty = document.createElement('span');
+      empty.className = 'qa-evidence-empty';
+      empty.textContent = 'Clip unavailable';
+      video.replaceWith(empty);
+    }, {once: true});
+    video.load();
+    const playback = video.play?.();
+    playback?.catch?.(() => {});
+  };
+  if (typeof IntersectionObserver === 'undefined') {
+    videos.forEach(activate);
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      activate(entry.target);
+      observer.unobserve(entry.target);
+    }
+  }, {rootMargin: '160px'});
+  videos.forEach((video) => observer.observe(video));
 }
 
 async function loadAgentMemorySummary(showNotice = false) {
@@ -1640,14 +1652,6 @@ document.addEventListener('DOMContentLoaded', () => {
     name.hidden = !file;
   });
   autoGrowComposer();
-  for (const id of ['evidenceImageScale', 'evidenceVideoScale', 'evidenceMaxItems']) {
-    const control = document.getElementById(id);
-    const output = document.getElementById(`${id}Value`);
-    control?.addEventListener('input', () => {
-      if (output) output.textContent = id === 'evidenceMaxItems' ? (Number(control.value) ? control.value : 'All') : `${Math.round(Number(control.value) * 100)}%`;
-      if (harnessEvidence) renderEvidence(harnessEvidence);
-    });
-  }
   bindConfirmationButtons();
   loadAgentMemorySummary();
   loadSessions();

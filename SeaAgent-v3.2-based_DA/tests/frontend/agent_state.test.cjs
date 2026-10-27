@@ -45,7 +45,7 @@ function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: []
       addEventListener() {},
     },
     window: {}, requestAnimationFrame: (fn) => fn(), fetch, TextDecoder, Uint8Array,
-    AbortController, console,
+    AbortController, URLSearchParams, console,
   });
   vm.runInContext(source, context);
   return { elements, activityRows, run: (code) => vm.runInContext(code, context) };
@@ -119,9 +119,9 @@ test('evidence statistics render even when the query returns no visual items', (
     display: { trackCount: 0, keyframeCount: 0, clipCount: 0, registryReferenceCount: 0 }
   } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
-  assert.match(html, /No evidence available/);
+  assert.match(html, /No track evidence available/);
   assert.match(html, /High-threshold entities: 0/);
-  assert.match(html, /Evidence display/);
+  assert.doesNotMatch(html, /keyframes/i);
 });
 
 test('compact count result metadata remains visible in the evidence panel', () => {
@@ -149,17 +149,38 @@ test('registry count metadata distinguishes matched tracks from raw tracks', () 
   assert.match(html, /Tracks not in registry: 18/);
 });
 
-test('registry match evidence displays external match score and object', () => {
+test('track evidence is one table with compact clips and optional registry result', () => {
   const ui = page();
-  ui.run(`renderEvidence({ displayGroups: [{
-    trackId: 't-1', trackIds: ['t-1', 't-2'], score: 0.91, band: 'match', registryMatch: true,
-    matchedObject: { hullNumber: '0857' }, keyframeIds: ['kf-1'], registryReferenceIds: ['ref-1']
+  ui.run(`renderEvidence({ registryMatchUsed: true, tools: ['match_entities'], trackRows: [
+    { trackId: 't-1', startTimeText: '2026-10-25 10:00:00', endTimeText: '2026-10-25 10:00:05',
+      startTime: 1792893600, endTime: 1792893605,
+      shipSegmentId: 'segment-1',
+      registryMatch: { status: 'In registry', score: 0.91, matchedObject: { hullNumber: '0857' } } },
+    { trackId: 't-2', startTimeText: '2026-10-25 10:02:00', endTimeText: '2026-10-25 10:02:05',
+      registryMatch: { status: 'Not in registry', score: 0.42, matchedObject: null } }
+  ] });`);
+  const html = ui.elements.get('evidenceGallery').innerHTML;
+  assert.match(html, /<table class="qa-evidence-table">/);
+  assert.match(html, /<th>Track ID<\/th><th>Appearance time<\/th><th>Clip<\/th><th>Registry match<\/th>/);
+  assert.match(html, /autoplay muted loop playsinline preload="none"/);
+  assert.match(html, /data-src="\/api\/evidence\/clips\/segment-1"/);
+  assert.match(html, /data-src="\/api\/evidence\/tracks\/t-2\/clip\?/);
+  assert.match(html, /0857/);
+  assert.match(html, /In registry/);
+  assert.match(html, /Not in registry/);
+  assert.doesNotMatch(html, /Keyframes|Registry references/);
+});
+
+test('non-match evidence leaves the registry column empty', () => {
+  const ui = page();
+  ui.run(`renderEvidence({ tools: ['dedup_tracks'], trackRows: [{
+    trackId: 't-4', startTimeText: 'start', endTimeText: 'end'
   }] });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
-  assert.match(html, /Registry match evidence/);
-  assert.match(html, /t-1, t-2/);
-  assert.match(html, /0857/);
-  assert.match(html, /0\.910/);
+  assert.match(html, /<td class="qa-evidence-registry-cell"><\/td>/);
+  assert.doesNotMatch(html, /Not in registry|In registry/);
+  ui.run(`renderEvidence({ registryMatchUsed: true, trackRows: [{trackId: 't-4'}] });`);
+  assert.match(ui.elements.get('evidenceGallery').innerHTML, /<td class="qa-evidence-registry-cell"><\/td>/);
 });
 
 test('all shared-state fields use bounded scrollable value boxes', () => {
@@ -279,8 +300,8 @@ test('confirmation card is mounted in the visible chat or trace view', () => {
 
   assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
   assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
-  assert.match(template, /qa\.css\?v=19/);
-  assert.match(template, /agent\.js\?v=90/);
+  assert.match(template, /qa\.css\?v=20/);
+  assert.match(template, /agent\.js\?v=91/);
   const ui = page();
   ui.run(`currentSessionId = 't'; qaView = 'chat';
     renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);
