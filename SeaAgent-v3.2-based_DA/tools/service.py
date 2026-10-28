@@ -197,6 +197,8 @@ class ToolService:
         score: float | None = None,
         band: str = "mismatch",
         reference_ids: list[str] | None = None,
+        matched_keyframe_id: str | None = None,
+        matched_registry_reference_id: str | None = None,
     ) -> dict[str, Any]:
         summary = {
             "trackId": str(track["trackId"]),  # 轨迹编号
@@ -230,6 +232,10 @@ class ToolService:
             summary["keyframeIds"] = keyframe_ids  # 代表关键帧，每条轨迹限量
         if reference_ids:
             summary["registryReferenceIds"] = list(dict.fromkeys(reference_ids))[: self.MAX_FRAMES_PER_TRACK]  # 关联的库参考图编号
+        if matched_keyframe_id:
+            summary["matchedKeyframeId"] = str(matched_keyframe_id)
+        if matched_registry_reference_id:
+            summary["matchedRegistryReferenceId"] = str(matched_registry_reference_id)
         return summary
 
     # 2.6 按外观文本给轨迹打分
@@ -373,17 +379,22 @@ class ToolService:
                     or keyframe_hull_matches.get(track_id)
                 )
             )
-            score_values = [
-                float(item["embeddingScore"])
-                for item in (text_item, image_item)
+            scored_items = [
+                (float(item["embeddingScore"]), item, mode)
+                for item, mode in ((text_item, "text"), (image_item, "image"))
                 if item.get("embeddingScore") is not None
             ]
-            score = max(score_values) if score_values else (1.0 if exact else None)
+            best_score, best_item, best_mode = max(
+                scored_items, default=(None, {}, "text"), key=lambda item: item[0] or 0
+            )
+            score = best_score if best_score is not None else (1.0 if exact else None)
             band = "match" if exact else (
-                self._band(score, "image" if image_item else "text") if score is not None else "uncertain"
+                self._band(score, best_mode) if score is not None else "uncertain"
             )
             frame_ids = list(dict.fromkeys(
-                text_item.get("matchedKeyframeIds", []) + image_item.get("matchedKeyframeIds", [])
+                best_item.get("matchedKeyframeIds", [])
+                + text_item.get("matchedKeyframeIds", [])
+                + image_item.get("matchedKeyframeIds", [])
             ))
             if exact and not frame_ids:
                 frame_ids = [frame["keyframeId"] for frame in keyframe_hull_matches.get(track_id, [])[:2]]
@@ -393,7 +404,13 @@ class ToolService:
             # 只把有明确舷号证据或实际匹配分数的轨迹返回；未评分轨迹只影响覆盖状态，
             # 不应把整段轨迹列表膨胀进模型上下文。
             if exact or score is not None:
-                candidates.append(self._track_match_summary(track, selected_frames, score=score, band=band))
+                candidates.append(self._track_match_summary(
+                    track,
+                    selected_frames,
+                    score=score,
+                    band=band,
+                    matched_keyframe_id=frame_ids[0] if frame_ids else None,
+                ))
         candidates = [item for item in candidates if item["scoreBand"] != "mismatch"]
         candidates.sort(key=lambda item: (item["scoreBand"] != "match", -(item["score"] or -1)))
         selected = candidates[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
@@ -415,6 +432,11 @@ class ToolService:
         }
         if hull and status != "confirmed":
             result["nextStep"] = "match_registry_tracks"  # 有舷号但未确认时，引导去登记表比对
+        elif not hull and status == "unconfirmed" and any(
+            item.get("scoreBand") == "uncertain" and item.get("matchedKeyframeId")
+            for item in selected
+        ):
+            result["nextStep"] = "verify_vessel_images"
         return result
 
     # 2.9 轨迹识别工具的入口
@@ -476,12 +498,19 @@ class ToolService:
                 continue
             frame_ids = item.get("matchedKeyframeIds") or []
             selected_frames = [frame for frame in frames.get(str(track["trackId"]), []) if frame["keyframeId"] in frame_ids]
+            matched_keyframe_id = str(item.get("bestMatchedKeyframeId") or (frame_ids[0] if frame_ids else ""))
+            matched_reference_id = str(
+                item.get("bestMatchedRegistryReferenceId")
+                or next(iter(item.get("matchedRegistryReferenceIds") or []), "")
+            )
             matches.append(self._track_match_summary(
                 track,
                 selected_frames,
                 score=item.get("embeddingScore"),
                 band=str(item.get("scoreBand") or "uncertain"),
                 reference_ids=item.get("matchedRegistryReferenceIds"),
+                matched_keyframe_id=matched_keyframe_id,
+                matched_registry_reference_id=matched_reference_id,
             ))
         matches.sort(key=lambda item: (item["scoreBand"] != "match", -(item.get("score") or -1)))
         matches = matches[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
@@ -491,7 +520,7 @@ class ToolService:
         missing = list(dict.fromkeys(missing + [str(value) for value in result.get("unscoredTrackIds", [])]))
         visual_complete = bool(result.get("registryCoverageComplete")) and complete and not missing
         status = "confirmed" if any(item["scoreBand"] == "match" for item in matches) else "unconfirmed" if matches or not visual_complete else "mismatch"
-        return {
+        response = {
             "ok": True,  # 调用成功
             "status": status,  # confirmed / unconfirmed / mismatch
             "registryFound": True,  # 已找到该舷号的库项
@@ -503,6 +532,14 @@ class ToolService:
             },
             "coverageComplete": visual_complete,  # 时间与视觉覆盖都完整、无遗漏轨迹
         }
+        if any(
+            item.get("scoreBand") == "uncertain"
+            and item.get("matchedKeyframeId")
+            and item.get("matchedRegistryReferenceId")
+            for item in matches
+        ):
+            response["nextStep"] = "verify_vessel_images"
+        return response
 
     # 3.2 先验库匹配工具的入口
     def match_registry_tracks(self, hull_number: str, time_range: tuple[str | float, str | float] | None = None, top_k: int | None = None) -> dict[str, Any]:
@@ -518,17 +555,21 @@ class ToolService:
     def verify_vessel_images(
         self,
         reference_image: str | None = None,
+        reference_description: str | None = None,
         reference_registry_reference_id: str | None = None,
         candidate_image: str | None = None,
         candidate_keyframe_id: str | None = None,
     ) -> dict[str, Any]:
         def verify() -> dict[str, Any]:
             reference = str(reference_image or "").strip()
+            description = str(reference_description or "").strip()
             reference_id = str(reference_registry_reference_id or "").strip()
             candidate = str(candidate_image or "").strip()
             keyframe_id = str(candidate_keyframe_id or "").strip()
-            if bool(reference) == bool(reference_id) or bool(candidate) == bool(keyframe_id):
-                return {"ok": False, "error": "two_images_required", "decision": "uncertain"}  # 参考图与候选图必须各给且只给一张
+            if sum(bool(value) for value in (reference, description, reference_id)) != 1:
+                return {"ok": False, "error": "one_reference_required", "decision": "uncertain"}
+            if bool(candidate) == bool(keyframe_id):
+                return {"ok": False, "error": "one_candidate_required", "decision": "uncertain"}
             if reference_id:
                 references = self.repository.references_by_ids([reference_id])
                 reference = str(references[0].get("imagePath") or "") if references else ""
@@ -544,9 +585,14 @@ class ToolService:
                 candidate = str(frame.get("keyframePath") or "") if frame else ""
                 if not candidate:
                     return {"ok": False, "error": "keyframe_not_found", "decision": "uncertain"}  # 关键帧编号查不到图片
-            if not Path(reference).is_file() or not Path(candidate).is_file():
+            if description:
+                if not Path(candidate).is_file():
+                    return {"ok": False, "error": "image_not_found", "decision": "uncertain"}
+                result = self.llm.verify([], [candidate], reference_description=description)
+            elif not Path(reference).is_file() or not Path(candidate).is_file():
                 return {"ok": False, "error": "image_not_found", "decision": "uncertain"}  # 文件路径不存在
-            result = self.llm.verify([reference], [candidate])
+            else:
+                result = self.llm.verify([reference], [candidate])
             facts = result.get("facts") or []
             facts = facts if isinstance(facts, list) else [facts]
             response = {
@@ -554,10 +600,13 @@ class ToolService:
                 "decision": result.get("decision", "uncertain"),  # 视觉模型的核验结论
                 "facts": [str(fact).strip()[:200] for fact in facts[:3] if str(fact).strip()],  # 限长的可见依据
             }
+            if result.get("formatRecovered"):
+                response["formatRecovered"] = True
             if reference_id:
                 response["registryReferenceId"] = reference_id  # 使用的库参考图编号
             if keyframe_id:
                 response["keyframeId"] = keyframe_id  # 使用的轨迹关键帧编号
+            response["referenceType"] = "description" if description else "registry" if reference_id else "image"
             return response
 
         return self._run_tool("verify_vessel_images", verify)

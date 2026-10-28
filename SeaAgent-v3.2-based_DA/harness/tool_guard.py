@@ -21,10 +21,10 @@ _MODEL_RESULT_FIELDS = {
         "ok", "status", "matches", "coverageComplete", "nextStep",
     ),
     "match_registry_tracks": (
-        "ok", "status", "matches", "coverageComplete", "registryFound",
+        "ok", "status", "matches", "coverageComplete", "registryFound", "nextStep",
     ),
     "verify_vessel_images": (
-        "ok", "decision", "facts", "registryReferenceId", "keyframeId",
+        "ok", "decision", "facts", "formatRecovered", "registryReferenceId", "keyframeId",
     ),
     "dedup_tracks": (
         "ok", "trackCount", "highThresholdShipCount", "lowThresholdShipCount",
@@ -38,7 +38,7 @@ _MODEL_RESULT_FIELDS = {
 }
 _MATCH_FIELDS = (
     "trackId", "startTimeText", "endTimeText", "keyframeId", "hullNumber", "description",
-    "scoreBand", "registryReferenceIds",
+    "scoreBand", "registryReferenceIds", "matchedKeyframeId", "matchedRegistryReferenceId",
 )
 
 

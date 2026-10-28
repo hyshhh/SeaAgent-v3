@@ -6,7 +6,8 @@ tools:
       省略 time_range 表示全部监控时间；有时间段时只搜该范围。
       返回 status、少量候选及 coverageComplete；候选含 scoreBand、分数、时间和证据 ID，不返回原始轨迹。
       图片路径不可用或图片编码失败时会返回工具错误，不能将工具错误当作未匹配。
-      舷号/别名未确认时返回 nextStep=match_registry_tracks；覆盖不完整时不得把无候选说成未出现。
+      舷号/别名未确认时返回 nextStep=match_registry_tracks；描述或图片检索有可核验的不确定候选时返回 nextStep=verify_vessel_images。
+      候选提供 matchedKeyframeId，供 VLM 核验实际命中的关键帧；覆盖不完整时不得把无候选说成未出现。
     arguments:
       hull_number: {type: string, required: false, description: 可选舷号或目标别名；纯外观描述请用 description。}
       description: {type: string, required: false, description: 可选外观描述，例如颜色、船型和固定结构。}
@@ -18,23 +19,26 @@ tools:
     label: 先验库辅助识别
     description: >-
       仅用于用户提供的舷号或目标名称/别名。工具内部查找对应先验库参考图，并与范围内轨迹关键帧做视觉 embedding 比对；
-      自动完成分页、视觉匹配和覆盖统计，只返回 status、少量候选和证据 ID。库中有记录不等于视频出现。
+      自动完成分页、视觉匹配和覆盖统计，只返回 status、少量候选和证据 ID。候选含 matchedKeyframeId、matchedRegistryReferenceId；
+      有可核验的不确定候选时返回 nextStep=verify_vessel_images。库中有记录不等于视频出现。
     arguments:
       hull_number: {type: string, required: true, description: 要比对的舷号或别名。}
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天；省略表示全部监控时间。"}
       top_k: {type: integer, required: false, default: 6, description: 返回候选上限。}
 
   - name: verify_vessel_images
-    label: VLM 图像核验
+    label: VLM 候选核验
     description: >-
-      只判断两张图片是否为同一艘船。参考图传 reference_image 或先验库返回的 reference_registry_reference_id；
-      候选图传 candidate_image 或轨迹结果中的 candidate_keyframe_id。用于核验不确定的图片/先验库候选，不搜索轨迹。
-      返回 decision（match、mismatch 或 uncertain）和最多三条简短可见依据；证据不足或仅颜色相似时返回 uncertain。
+      只核验一个已召回的轨迹候选，不搜索轨迹。参考证据三选一：用户图片 reference_image、用户描述 reference_description、
+      先验库图片 reference_registry_reference_id；候选证据二选一：candidate_image 或候选的 matchedKeyframeId。
+      对不确定候选逐个调用。返回 decision（match、mismatch 或 uncertain）及最多三条依据；证据不足或只有颜色相似时返回 uncertain。
+      若模型 JSON 格式异常但 decision 唯一明确，会标记 formatRecovered=true 且不返回依据；歧义结果仍报错。
     arguments:
-      reference_image: {type: string, required: false, description: 用户提供的已知船舶图片路径；与 reference_registry_reference_id 二选一。}
-      reference_registry_reference_id: {type: string, required: false, description: 先验库识别结果中的参考图 ID；与 reference_image 二选一。}
+      reference_image: {type: string, required: false, description: 用户提供的参考图片路径；与另外两种 reference 参数互斥。}
+      reference_description: {type: string, required: false, description: 用户原始外观描述；与另外两种 reference 参数互斥。}
+      reference_registry_reference_id: {type: string, required: false, description: 先验库辅助识别结果中的 matchedRegistryReferenceId；与另外两种 reference 参数互斥。}
       candidate_image: {type: string, required: false, description: 待核验图片的本地路径；与 candidate_keyframe_id 二选一。}
-      candidate_keyframe_id: {type: string, required: false, description: 待核验轨迹关键帧 ID；与 candidate_image 二选一。}
+      candidate_keyframe_id: {type: string, required: false, description: 候选的 matchedKeyframeId；与 candidate_image 二选一。}
 
   - name: dedup_tracks
     label: 轨迹去重统计

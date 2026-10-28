@@ -141,7 +141,7 @@ def test_vlm_can_resolve_a_registry_reference_id_and_track_keyframe(tmp_path):
         def verify(self, reference, candidate):
             assert reference == [str(reference_path)]
             assert candidate == [str(candidate_path)]
-            return {"decision": "match", "facts": ["same hull outline"]}
+            return {"decision": "match", "facts": [], "formatRecovered": True}
 
     service = ToolService.__new__(ToolService)
     service.repository = Repository()
@@ -154,6 +154,7 @@ def test_vlm_can_resolve_a_registry_reference_id_and_track_keyframe(tmp_path):
 
     assert result["ok"] is True
     assert result["decision"] == "match"
+    assert result["formatRecovered"] is True
     assert result["registryReferenceId"] == "ref-1"
     assert result["keyframeId"] == "kf-1"
 

@@ -179,6 +179,25 @@ def test_tool_error_keeps_error_type_for_model_debugging():
     }
 
 
+def test_vlm_json_recovery_marker_is_visible_to_the_model():
+    guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
+    message = guard.wrap_tool_call(
+        _Request("verify_vessel_images", {"candidate_keyframe_id": "kf-1"}),
+        lambda request: ToolMessage(
+            content=json.dumps({
+                "ok": True,
+                "decision": "uncertain",
+                "facts": [],
+                "formatRecovered": True,
+            }),
+            name="verify_vessel_images",
+            tool_call_id=request.tool_call["id"],
+        ),
+    )
+
+    assert json.loads(message.content)["formatRecovered"] is True
+
+
 def test_different_arguments_are_not_skipped():
     guard = RepeatToolCallMiddleware()
     guard.wrap_tool_call(_Request("read_file", {"file_path": "/skills/a/SKILL.md"}), _handler)

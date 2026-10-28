@@ -36,12 +36,12 @@ PROMPT_SETTING_SPECS: dict[str, dict[str, Any]] = {
         "max_chars": 8000,
         "label": {
             "single_frame_recognition": "单帧识别提示词",
-            "verify_images": "图像核验提示词",
+            "verify_images": "VLM 候选核验提示词",
             "text_retrieval_instruction": "文本检索指令",
         }.get(key, key),
         "help": {
             "single_frame_recognition": "单帧舷号可读性与外观描述识别。",
-            "verify_images": "比较两张图片是否为同一艘船。",
+            "verify_images": "比较参考图片与候选图片，或用户描述与候选图片。",
             "text_retrieval_instruction": "文本向量检索时使用的英文指令。",
         }.get(key, ""),
     }

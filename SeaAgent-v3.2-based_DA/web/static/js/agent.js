@@ -47,11 +47,11 @@ const STEP_KINDS = {
 
 const TOOL_LABELS = {
   recognize_tracks: 'Direct recognition', match_registry_tracks: 'Registry-assisted recognition',
-  verify_vessel_images: 'VLM image check', dedup_tracks: 'Trajectory deduplication',
+  verify_vessel_images: 'VLM candidate check', dedup_tracks: 'Trajectory deduplication',
   match_entities: 'Registry match statistics',
   show_evidence: 'Evidence and statistics',
   '直接识别': 'Direct recognition', '先验库辅助识别': 'Registry-assisted recognition',
-  'VLM 图像核验': 'VLM image check', '轨迹去重统计': 'Trajectory deduplication',
+  'VLM 候选核验': 'VLM candidate check', 'VLM 图像核验': 'VLM candidate check', '轨迹去重统计': 'Trajectory deduplication',
   '实体先验库匹配统计': 'Registry match statistics',
   '证据与统计': 'Evidence and statistics',
   '读取技能正文': 'Read skill file',

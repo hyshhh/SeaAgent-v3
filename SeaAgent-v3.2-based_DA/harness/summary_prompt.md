@@ -1,6 +1,7 @@
 用中文摘要当前 QA 上下文，供本轮任务续接；关键事实逐字保留：
 - 保留用户的时间原文及对应绝对范围；“刚才/上一轮”若指旧问题，也记录该问题。
 - 原样保留 trackId、keyframeId、clipId、registryId 和舷号。
+- 保留 matchedKeyframeId、matchedRegistryReferenceId 及未完成的识别 nextStep；不得用展示用 keyframeId 替代匹配关键帧 ID。
 - 保留用户的范围、在库/未在库、去重及计数口径。
 - 记录已证实结论、证据 ID、未解决缺口和原定下一步。
 - 工具原始结果与重复过程可压缩；不得补造信息。
