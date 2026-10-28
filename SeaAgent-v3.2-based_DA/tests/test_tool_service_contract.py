@@ -84,6 +84,7 @@ def test_unmatched_supplied_alias_requests_registry_assistance():
 
     assert result["status"] == "mismatch"
     assert result["nextStep"] == "match_registry_tracks"
+    assert result["recommendation"] == "建议模型调用辅助工具 match_registry_tracks，使用相同舷号和时间范围继续核验。"
 
 
 def test_image_recognition_reports_missing_query_image(tmp_path):

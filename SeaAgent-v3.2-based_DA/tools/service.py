@@ -432,6 +432,7 @@ class ToolService:
         }
         if hull and status != "confirmed":
             result["nextStep"] = "match_registry_tracks"  # 有舷号但未确认时，引导去登记表比对
+            result["recommendation"] = "建议模型调用辅助工具 match_registry_tracks，使用相同舷号和时间范围继续核验。"
         elif not hull and status == "unconfirmed" and any(
             item.get("scoreBand") == "uncertain" and item.get("matchedKeyframeId")
             for item in selected

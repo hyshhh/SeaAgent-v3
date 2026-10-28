@@ -18,7 +18,7 @@ REPEAT_HINT = (
 _REPEAT_CLOSEOUT_MESSAGE = "相同工具和参数已调用 4 次；已进入状态收尾，本次调用未执行。"
 _MODEL_RESULT_FIELDS = {
     "recognize_tracks": (
-        "ok", "status", "matches", "coverageComplete", "nextStep",
+        "ok", "status", "matches", "coverageComplete", "nextStep", "recommendation",
     ),
     "match_registry_tracks": (
         "ok", "status", "matches", "coverageComplete", "registryFound", "nextStep",

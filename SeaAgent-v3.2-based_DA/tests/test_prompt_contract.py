@@ -57,7 +57,12 @@ def test_supplied_aliases_follow_the_registry_assistance_step():
 
     assert "目标名称（如“小红”）" in executor["system_prompt"]
     assert "nextStep" in executor["system_prompt"]
+    assert "recommendation" in executor["system_prompt"]
+    assert "运行时会强制" not in executor["system_prompt"]
     assert "“小红”" in recognition
+    assert "same query and time range" in recognition
+    planner = next(item for item in role_config["agents"] if item["name"] == "planner")
+    assert "条件 match_registry_tracks" in planner["system_prompt"]
 
 
 def test_count_skills_map_user_intent_to_configured_tools():

@@ -89,6 +89,8 @@ def test_recognition_model_result_reads_counts_from_nested_statistics():
         "status": "unconfirmed",
         "matches": [],
         "coverageComplete": False,
+        "nextStep": "match_registry_tracks",
+        "recommendation": "建议模型调用辅助工具 match_registry_tracks，使用相同舷号和时间范围继续核验。",
         "statistics": {"searchedTrackCount": 12, "unsearchableTrackCount": 3},
     }
     message = guard.wrap_tool_call(
@@ -103,6 +105,7 @@ def test_recognition_model_result_reads_counts_from_nested_statistics():
     model_result = json.loads(message.content)
     assert model_result["searchedTrackCount"] == 12
     assert model_result["unsearchableTrackCount"] == 3
+    assert model_result["recommendation"].startswith("建议模型调用辅助工具 match_registry_tracks")
 
 
 def test_registry_assistance_result_keeps_matches_scores_and_coverage_for_reflection():
