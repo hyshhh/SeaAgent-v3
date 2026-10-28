@@ -5,23 +5,23 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Sea-Video-Harness · Maritime Video QA</title>
 <link rel="stylesheet" href="/static/css/style.css?v=30">
-<link rel="stylesheet" href="/static/css/academic.css?v=40">
-<link rel="stylesheet" href="/static/css/qa.css?v=22">
+<link rel="stylesheet" href="/static/css/academic.css?v=41">
+<link rel="stylesheet" href="/static/css/qa.css?v=23">
 </head>
 <body class="academic-theme">
 <header class="app-header">
   <div class="brand-mark" aria-hidden="true"><span>SA</span></div>
   <div class="header-copy"><h1>Sea-Video-Harness</h1></div>
+  <nav class="tab-nav" aria-label="System navigation">
+    <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">Maritime Monitoring</button>
+    <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">Trajectory Memory</button>
+    <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">Video QA</button>
+    <button class="tab-btn" data-tab="database" onclick="switchTab('database')">Registry</button>
+    <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">Live Camera</button>
+    <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">Settings</button>
+  </nav>
   <div class="system-badge"><span></span><strong>System Ready</strong></div>
 </header>
-<nav class="tab-nav" aria-label="System navigation">
-  <button class="tab-btn active" data-tab="monitoring" onclick="switchTab('monitoring')">Maritime Monitoring</button>
-  <button class="tab-btn" data-tab="memory" onclick="switchTab('memory')">Trajectory Memory</button>
-  <button class="tab-btn" data-tab="agent-qa" onclick="switchTab('agent-qa')">Video QA</button>
-  <button class="tab-btn" data-tab="database" onclick="switchTab('database')">Registry</button>
-  <button class="tab-btn" data-tab="camera-demo" onclick="switchTab('camera-demo')">Live Camera</button>
-  <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">Settings</button>
-</nav>
 <main class="page-shell">
 <section class="tab-content active" id="tab-monitoring">
   <div class="monitor-workspace">
@@ -465,7 +465,7 @@
 <script src="/static/js/app.js?v=8"></script>
 <script src="/static/js/pipeline.js?v=23"></script>
   <script src="/static/js/memory.js?v=9"></script>
-<script src="/static/js/agent.js?v=93"></script>
+<script src="/static/js/agent.js?v=94"></script>
 <script src="/static/js/settings.js?v=12"></script>
 </body>
 </html>

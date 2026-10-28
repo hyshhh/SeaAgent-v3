@@ -38,7 +38,7 @@ def test_repeat_call_is_skipped_with_a_hint():
     assert second.status == "success", "跳过不是失败，否则会误触发连续失败守卫"
 
 
-def test_tool_result_is_compact_for_model_but_full_for_trace_and_state():
+def test_tool_result_is_compact_for_model_and_state_but_full_for_trace():
     guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
     full_result = {
         "ok": True,
@@ -75,7 +75,7 @@ def test_tool_result_is_compact_for_model_but_full_for_trace_and_state():
     assert "confidence" not in model_result
     assert "task" not in model_result
     assert message.artifact["full_result"] == full_result
-    assert guard.state.snapshot()["tool_results"][0]["result"] == full_result
+    assert guard.state.snapshot()["tool_results"][0]["result"] == model_result
 
     trace = _Trace(None, event_limit=4000, shared_state=SharedTaskState("q"))
     trace.consume({"messages": [message]}, agent_name="executor")
@@ -103,6 +103,60 @@ def test_recognition_model_result_reads_counts_from_nested_statistics():
     model_result = json.loads(message.content)
     assert model_result["searchedTrackCount"] == 12
     assert model_result["unsearchableTrackCount"] == 3
+
+
+def test_registry_assistance_result_keeps_matches_scores_and_coverage_for_reflection():
+    state = SharedTaskState("check hull 0857")
+    guard = RepeatToolCallMiddleware(state=state, scope="executor")
+    direct = {
+        "ok": True,
+        "status": "mismatch",
+        "coverageComplete": True,
+        "matches": [],
+        "statistics": {"searchedTrackCount": 214, "candidateCount": 0},
+    }
+    assisted = {
+        "ok": True,
+        "status": "confirmed",
+        "registryFound": True,
+        "coverageComplete": True,
+        "matches": [{
+            "trackId": "track-19",
+            "score": 0.91,
+            "scoreBand": "match",
+            "matchedKeyframeId": "kf-19",
+            "matchedRegistryReferenceId": "ref-0857",
+        }],
+        "statistics": {"searchedTrackCount": 214, "candidateCount": 1},
+    }
+
+    messages = []
+    for tool, result, call_id in (
+        ("recognize_tracks", direct, "direct"),
+        ("match_registry_tracks", assisted, "assisted"),
+    ):
+        messages.append(guard.wrap_tool_call(
+            _Request(tool, {}, call_id),
+            lambda request, result=result: ToolMessage(
+                content=json.dumps(result),
+                name=request.tool_call["name"],
+                tool_call_id=request.tool_call["id"],
+            ),
+        ))
+
+    compact_helper = json.loads(messages[1].content)
+    assert compact_helper["status"] == "confirmed"
+    assert compact_helper["matches"][0]["trackId"] == "track-19"
+    assert compact_helper["matches"][0]["score"] == 0.91
+    assert compact_helper["searchedTrackCount"] == 214
+    assert compact_helper["candidateCount"] == 1
+    results = state.view()["tool_results"]
+    assert [item["result"]["status"] for item in results] == ["mismatch", "confirmed"]
+    helper = results[1]["result"]
+    assert helper["matches"][0]["trackId"] == "track-19"
+    assert helper["matches"][0]["score"] == 0.91
+    assert helper["searchedTrackCount"] == 214
+    assert helper["candidateCount"] == 1
 
 
 def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path):

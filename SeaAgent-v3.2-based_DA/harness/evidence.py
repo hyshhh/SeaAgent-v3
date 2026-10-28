@@ -31,6 +31,7 @@ TOOL_STATISTIC_KEYS = (
     "candidateCount",
     "unsearchableTrackCount",
 )
+REGISTRY_MATCH_TOOLS = frozenset({"match_entities", "match_registry_tracks"})
 NESTED_KEYS = ("keyframes", "keyframesByTrack", "matches", "registryItems", "registryReferences", "tracks")  # 需要下钻的嵌套容器：工具结果常把明细放在这些键下
 
 
@@ -160,7 +161,7 @@ def _display_groups(records: list[dict[str, Any]], limit: int) -> list[dict[str,
             if not track_id:
                 continue
             group = touch(track_id)
-            if str(record.get("tool") or "") == "match_entities":
+            if str(record.get("tool") or "") in REGISTRY_MATCH_TOOLS:
                 group["registryMatch"] = True
             group["trackIds"].extend(_collect_ids(candidate, TRACK_ID_KEYS))
             group["keyframeIds"].extend(_collect_ids(candidate, KEYFRAME_ID_KEYS))
@@ -191,7 +192,7 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
     """
     rows: dict[str, dict[str, Any]] = {}
     order: list[str] = []
-    registry_matching = any(str(record.get("tool") or "") == "match_entities" for record in records)
+    registry_matching = any(str(record.get("tool") or "") in REGISTRY_MATCH_TOOLS for record in records)
 
     def touch(track_id: Any) -> dict[str, Any] | None:
         value = str(track_id or "").strip()
@@ -234,13 +235,15 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             if row is None:
                 continue
             copy_track_evidence(row, candidate)
-            if tool != "match_entities" or not registry_matching:
+            if tool not in REGISTRY_MATCH_TOOLS or not registry_matching:
                 continue
             score = candidate.get("score", candidate.get("embeddingScore"))
             score = float(score) if isinstance(score, (int, float)) else None
             object_value = candidate.get("matchedObject")
+            band = str(candidate.get("scoreBand") or candidate.get("band") or "")
+            status = {"match": "In registry", "mismatch": "Not in registry"}.get(band, "Unconfirmed")
             match = {
-                "status": "In registry" if str(candidate.get("scoreBand") or candidate.get("band")) == "match" else "Not in registry",
+                "status": status,
                 "score": score,
                 "matchedObject": object_value if isinstance(object_value, dict) else None,
             }
@@ -288,7 +291,7 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
         "registryReferenceIds": references,
         "trackIds": tracks,
         "trackRows": _display_rows(successful, limit),
-        "registryMatchUsed": any(str(record.get("tool") or "") == "match_entities" for record in successful),
+        "registryMatchUsed": any(str(record.get("tool") or "") in REGISTRY_MATCH_TOOLS for record in successful),
         "trackRowsTruncated": any(
             isinstance(record.get("result"), dict)
             and bool(record["result"].get("truncated", record["result"].get("trackRowsTruncated", False)))

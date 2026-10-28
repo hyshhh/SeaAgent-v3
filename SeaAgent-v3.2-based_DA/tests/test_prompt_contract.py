@@ -118,6 +118,24 @@ def test_state_update_prompts_require_current_plan_ids_and_nested_reflection_pat
     assert "patch 对象内" in agents["reflector"]["system_prompt"]
 
 
+def test_reflector_must_reconcile_direct_and_registry_assisted_findings():
+    role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
+    reflector = next(item for item in role_config["agents"] if item["name"] == "reflector")
+    acceptance = (ROOT / "skills/reflection/acceptance/SKILL.md").read_text(encoding="utf-8")
+    finalize = (ROOT / "skills/answer/finalize/SKILL.md").read_text(encoding="utf-8")
+
+    assert "直接检索 mismatch 不得覆盖辅助匹配 confirmed" in reflector["system_prompt"]
+    assert "report confirmed candidate track IDs and scores" in acceptance
+    assert "report the matched track IDs and scores" in finalize
+
+
+def test_summarization_preserves_separate_direct_and_assisted_match_findings():
+    summary = (ROOT / "harness/summary_prompt.md").read_text(encoding="utf-8")
+
+    assert "分开记录直接识别与先验库辅助匹配" in summary
+    assert "辅助匹配 confirmed 不得被直接识别 mismatch 覆盖" in summary
+
+
 def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")

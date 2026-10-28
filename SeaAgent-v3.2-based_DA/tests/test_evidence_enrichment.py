@@ -166,3 +166,36 @@ def test_explicit_track_keyframe_wins_over_a_match_frame():
     ])
 
     assert payload["trackRows"][0]["keyframeId"] == "kf-first"
+
+
+def test_registry_assisted_recognition_adds_match_status_to_track_rows():
+    payload = build_evidence_payload([
+        _record("recognize_tracks", {
+            "ok": True,
+            "status": "mismatch",
+            "matches": [],
+            "coverageComplete": True,
+        }),
+        _record("match_registry_tracks", {
+            "ok": True,
+            "status": "confirmed",
+            "coverageComplete": True,
+            "matches": [{
+                "trackId": "t-0857",
+                "startTimeText": "start",
+                "endTimeText": "end",
+                "score": 0.91,
+                "scoreBand": "match",
+                "matchedKeyframeId": "kf-match",
+                "matchedRegistryReferenceId": "ref-0857",
+            }],
+        }),
+    ])
+
+    assert payload["registryMatchUsed"] is True
+    assert payload["trackRows"] == [{
+        "trackId": "t-0857",
+        "registryMatch": {"status": "In registry", "score": 0.91, "matchedObject": None},
+        "startTimeText": "start",
+        "endTimeText": "end",
+    }]

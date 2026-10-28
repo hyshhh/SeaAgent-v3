@@ -879,6 +879,7 @@ tbody tr:hover td { background: #f2f6f9; }
   height: 58px;
   padding: 7px max(24px, calc((100vw - 1640px) / 2));
   gap: 12px;
+  flex-wrap: nowrap;
 }
 .brand-mark {
   width: 38px;
@@ -889,7 +890,8 @@ tbody tr:hover td { background: #f2f6f9; }
 .brand-mark::after { display: none; }
 .brand-mark span { transform: none; }
 .header-copy {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
 }
 .app-header h1 {
@@ -907,7 +909,17 @@ tbody tr:hover td { background: #f2f6f9; }
   gap: 6px;
 }
 .system-badge strong { color: #35634f; font-size: 11px; }
-.tab-nav { padding-inline: max(24px, calc((100vw - 1640px) / 2)); }
+.app-header .tab-nav {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border: 0;
+  background: transparent;
+}
+.app-header .tab-nav::-webkit-scrollbar { display: none; }
+.app-header .tab-btn { flex: 0 0 auto; }
 .tab-btn {
   min-width: 100px;
   padding: 9px 16px 8px;
@@ -1087,6 +1099,18 @@ tbody tr:hover td { background: #f2f6f9; }
   max-width: var(--academic-content-width);
   box-sizing: border-box;
   padding: 12px 0 24px;
+}
+.app-header .header-copy { max-width: 260px; }
+@media (max-width: 760px) {
+  .app-header {
+    align-items: center;
+    gap: 8px;
+    padding-inline: 10px;
+  }
+  .app-header .header-copy { flex: 0 1 120px; }
+  .app-header h1 { font-size: 12px; }
+  .app-header .tab-nav { flex: 1 1 0; }
+  .app-header .tab-btn { min-width: max-content; padding-inline: 9px; font-size: 10px; }
 }
 #tab-agent-qa .agent-query-grid {
   grid-template-columns: minmax(540px, 1fr) minmax(620px, 1.08fr);

@@ -37,7 +37,7 @@ _MODEL_RESULT_FIELDS = {
     "show_evidence": ("ok", "trackIds"),
 }
 _MATCH_FIELDS = (
-    "trackId", "startTimeText", "endTimeText", "keyframeId", "hullNumber", "description",
+    "trackId", "startTimeText", "endTimeText", "keyframeId", "hullNumber", "description", "score",
     "scoreBand", "registryReferenceIds", "matchedKeyframeId", "matchedRegistryReferenceId",
 )
 
@@ -62,17 +62,17 @@ def _model_result(name: str, result: Any) -> Any:
             compact["hint"] = str(compact["hint"])[:400]
         return compact
     compact = {key: result[key] for key in _MODEL_RESULT_FIELDS[name] if key in result}
-    if name == "recognize_tracks":
+    if name in {"recognize_tracks", "match_registry_tracks"}:
         statistics = result.get("statistics")
         statistics = statistics if isinstance(statistics, dict) else {}
-        for key in ("searchedTrackCount", "unsearchableTrackCount"):
+        for key in ("searchedTrackCount", "candidateCount", "unsearchableTrackCount"):
             if key in statistics:
                 compact[key] = statistics[key]
     matches = compact.get("matches")
     if isinstance(matches, list):
         compact["matches"] = [
             {key: match[key] for key in _MATCH_FIELDS if key in match}
-            for match in matches[:4]
+            for match in matches[:6]
             if isinstance(match, dict)
         ]
     if isinstance(compact.get("facts"), list):
@@ -247,7 +247,9 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             isinstance(result, dict) and result.get("ok") is False
         )
         state_result = result
-        if name == "match_entities" and not failed and isinstance(result, dict):
+        if name in {"recognize_tracks", "match_registry_tracks", "verify_vessel_images"} and not failed:
+            state_result = _model_result(name, result)
+        elif name == "match_entities" and not failed and isinstance(result, dict):
             try:
                 rows = [
                     {

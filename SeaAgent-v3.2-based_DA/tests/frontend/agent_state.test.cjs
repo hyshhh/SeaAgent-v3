@@ -8,6 +8,13 @@ const source = fs.readFileSync(path.join(__dirname, '../../web/static/js/agent.j
 const template = fs.readFileSync(path.join(__dirname, '../../web/templates/index.html'), 'utf8');
 const styles = fs.readFileSync(path.join(__dirname, '../../web/static/css/qa.css'), 'utf8');
 
+test('application title and page navigation share one header row', () => {
+  const header = template.match(/<header class="app-header">([\s\S]*?)<\/header>/)?.[1] || '';
+  assert.match(header, /<h1>Sea-Video-Harness<\/h1>[\s\S]*<nav class="tab-nav"/);
+  assert.match(header, /<nav class="tab-nav"[\s\S]*<div class="system-badge"/);
+  assert.doesNotMatch(template.slice(template.indexOf('</header>'), template.indexOf('<main')), /<nav class="tab-nav"/);
+});
+
 function page(fetch = async () => ({ ok: true, json: async () => ({ sessions: [] }) })) {
   const elements = new Map();
   const activityRows = [];
@@ -220,6 +227,17 @@ test('track evidence is one table with one keyframe per track and optional regis
   assert.doesNotMatch(html, /Registry references/);
 });
 
+test('uncertain registry assistance is displayed as unconfirmed with its score', () => {
+  const ui = page();
+  ui.run(`renderEvidence({ registryMatchUsed: true, trackRows: [{
+    trackId: 't-7', registryMatch: { status: 'Unconfirmed', score: 0.694 }
+  }] });`);
+  const html = ui.elements.get('evidenceGallery').innerHTML;
+  assert.match(html, /is-unconfirmed/);
+  assert.match(html, /Unconfirmed/);
+  assert.match(html, /0\.694/);
+});
+
 test('non-match evidence leaves the registry column empty', () => {
   const ui = page();
   ui.run(`renderEvidence({ tools: ['dedup_tracks'], trackRows: [{
@@ -349,8 +367,8 @@ test('confirmation card is mounted in the visible chat or trace view', () => {
 
   assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
   assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
-  assert.match(template, /qa\.css\?v=22/);
-  assert.match(template, /agent\.js\?v=93/);
+  assert.match(template, /qa\.css\?v=23/);
+  assert.match(template, /agent\.js\?v=94/);
   const ui = page();
   ui.run(`currentSessionId = 't'; qaView = 'chat';
     renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);

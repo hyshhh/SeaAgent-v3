@@ -1789,6 +1789,7 @@
 #tab-agent-qa .qa-registry-status { display: inline-block; padding: 2px 5px; border-radius: 3px; font-size: 9px; font-weight: 650; white-space: nowrap; }
 #tab-agent-qa .qa-registry-status.is-registered { color: #286747; background: #edf7f1; }
 #tab-agent-qa .qa-registry-status.is-unregistered { color: #785d25; background: #faf5e9; }
+#tab-agent-qa .qa-registry-status.is-unconfirmed { color: #765623; background: #fff6df; }
 #tab-agent-qa .qa-registry-object { display: block; margin-top: 2px; color: #697785; font-family: Consolas, monospace; font-size: 9px; }
 #tab-agent-qa .qa-evidence-empty { color: #9aa4ad; }
 #tab-agent-qa .qa-evidence-truncated { margin: 6px 0 0; color: var(--qa-muted); font-size: 9px; }
