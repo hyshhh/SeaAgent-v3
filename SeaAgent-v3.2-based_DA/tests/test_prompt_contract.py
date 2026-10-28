@@ -92,9 +92,12 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     assert "六类预设分别映射" in planner["system_prompt"]
     assert "在库数量和不在库数量用 match_entities" in planner["system_prompt"]
     assert "只问总数时不得调用 match_entities" in planner["system_prompt"]
+    assert "默认查询全部已存轨迹：不得追问时间" in planner["system_prompt"]
     assert "Count-only plans must not include recognition steps" in acceptance
-    assert "including “所有时间”" in time_scope
-    assert "Time scope is not a separate plan step" in time_scope
+    assert "says “所有时间”" in time_scope
+    assert "Do not ask for a time range" in time_scope
+    assert "all stored trajectories" in time_scope
+    assert "不得追问时间" in planner["system_prompt"]
 
 
 def test_planner_and_question_presets_cover_the_six_request_types():
@@ -139,11 +142,14 @@ def test_summarization_preserves_separate_direct_and_assisted_match_findings():
 
     assert "分开记录直接识别与先验库辅助匹配" in summary
     assert "辅助匹配 confirmed 不得被直接识别 mismatch 覆盖" in summary
+    assert "工具结果的 appliedTimeRange" in summary
 
 
 def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")
+    executor = next(item for item in role_config["agents"] if item["name"] == "executor")
+    reflector = next(item for item in role_config["agents"] if item["name"] == "reflector")
     time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
 
     assert "{time_anchor}" in planner["system_prompt"]
@@ -153,6 +159,10 @@ def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
     assert "“前天” is anchor date minus two days" in time_scope
     assert "two-element array of ISO-8601 timestamps" in time_scope
     assert "23:59:59.999999" in time_scope
+    assert "Pass `time_range` exactly as written" in (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
+    assert "原样复制当前计划中的 ISO-8601 起止值" in executor["system_prompt"]
+    assert "appliedTimeRange 与计划范围表示同一绝对时间段" in reflector["system_prompt"]
+    assert "absolute instants" in (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
 
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():

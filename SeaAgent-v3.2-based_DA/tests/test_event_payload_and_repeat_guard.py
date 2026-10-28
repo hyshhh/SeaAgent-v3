@@ -215,6 +215,30 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
     assert state.evidence_artifact_results() == []
 
 
+def test_statistics_model_results_keep_the_applied_time_range():
+    applied_range = [
+        "2026-10-27T00:00:00.000000+08:00",
+        "2026-10-27T23:59:59.999999+08:00",
+    ]
+    cases = (
+        ("dedup_tracks", {"trackCount": 0, "highThresholdShipCount": 0, "lowThresholdShipCount": 0}),
+        ("match_entities", {"trackCount": 0, "inRegistryCount": 0, "unregisteredCount": 0}),
+    )
+    for name, counts in cases:
+        result = {"ok": True, **counts, "coverageComplete": True, "appliedTimeRange": applied_range}
+        guard = RepeatToolCallMiddleware(state=SharedTaskState("count"), scope="executor")
+        message = guard.wrap_tool_call(
+            _Request(name, {"time_range": applied_range}),
+            lambda request, result=result, name=name: ToolMessage(
+                content=json.dumps(result),
+                name=name,
+                tool_call_id=request.tool_call["id"],
+            ),
+        )
+
+        assert json.loads(message.content)["appliedTimeRange"] == applied_range
+
+
 def test_tool_error_keeps_error_type_for_model_debugging():
     guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
     message = guard.wrap_tool_call(

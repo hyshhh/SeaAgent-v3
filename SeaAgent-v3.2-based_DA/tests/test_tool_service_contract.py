@@ -189,6 +189,7 @@ def test_dedup_tool_returns_counts_and_bounded_display_rows():
         "trackCount": 2,
         "highThresholdShipCount": 2,
         "lowThresholdShipCount": 1,
+        "appliedTimeRange": None,
         "tracks": [_track("t-1")],
         "firstKeyframes": {"t-1": "kf-first"},
     }
@@ -201,6 +202,7 @@ def test_dedup_tool_returns_counts_and_bounded_display_rows():
         "highThresholdShipCount": 2,
         "lowThresholdShipCount": 1,
         "coverageComplete": False,
+        "appliedTimeRange": None,
         "trackRows": [{
             "trackId": "t-1",
             "scoreBand": "mismatch",
@@ -210,6 +212,28 @@ def test_dedup_tool_returns_counts_and_bounded_display_rows():
         }],
         "trackRowsTruncated": False,
     }
+
+
+def test_dedup_count_reports_the_applied_time_range():
+    requested = [
+        "2026-10-27T00:00:00.000000+08:00",
+        "2026-10-27T23:59:59.999999+08:00",
+    ]
+    service = ToolService.__new__(ToolService)
+    service._dedup_track_analysis = lambda *_args, **_kwargs: {
+        "ok": True,
+        "coverageComplete": True,
+        "trackCount": 0,
+        "highThresholdShipCount": 0,
+        "lowThresholdShipCount": 0,
+        "appliedTimeRange": requested,
+        "tracks": [],
+        "firstKeyframes": {},
+    }
+
+    result = service.dedup_tracks(time_range=requested)
+
+    assert result["appliedTimeRange"] == requested
 
 
 def test_show_evidence_selects_one_first_keyframe_without_embedding_requirement():
@@ -376,6 +400,27 @@ def test_registry_count_marks_unsearchable_track_as_incomplete():
     assert result["trackCount"] == 1
     assert result["unregisteredCount"] == 1
     assert result["coverageComplete"] is False
+
+
+def test_registry_count_reports_the_applied_time_range():
+    class Repository:
+        def list_registry(self):
+            return []
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service.settings = {"image_match": 0.72}
+    service._scan_tracks = lambda _scope: ([], True)
+    service._load_search_frames = lambda *_args, **_kwargs: ({}, [], {})
+    requested = [
+        "2026-10-27T00:00:00.000000+08:00",
+        "2026-10-27T23:59:59.999999+08:00",
+    ]
+
+    result = service.match_entities(time_range=requested)
+
+    assert result["appliedTimeRange"] == requested
+    assert service.match_entities()["appliedTimeRange"] is None
 
 
 def test_image_match_can_select_a_registry_by_its_best_single_frame_score():

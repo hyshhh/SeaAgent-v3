@@ -633,6 +633,7 @@ class ToolService:
             "ok": True,
             "tracks": tracks,
             "firstKeyframes": first_keyframes,
+            "appliedTimeRange": self._format_time_range(scope) if scope else None,
             **dedup,
             "coverageComplete": scan_complete and not missing,
         }
@@ -660,6 +661,7 @@ class ToolService:
                     "highThresholdShipCount",
                     "lowThresholdShipCount",
                     "coverageComplete",
+                    "appliedTimeRange",
                 )
             } | {
                 "trackRows": track_rows,
@@ -741,6 +743,7 @@ class ToolService:
                 "unregisteredCount": len(tracks) - in_registry,
                 "coverageComplete": scan_complete and not missing and registry_coverage,
                 "matches": matches,
+                "appliedTimeRange": self._format_time_range(scope) if scope else None,
             }
 
         return self._run_tool("match_entities", count)
@@ -796,6 +799,13 @@ class ToolService:
                 "time_range 早于监控数据支持的 2017 年。请核对时间；没有时间条件时省略此参数。"
             )
         return (start, end), ""
+
+    @classmethod
+    def _format_time_range(cls, scope: tuple[float, float]) -> list[str]:
+        return [
+            datetime.fromtimestamp(value, cls.DEFAULT_TIMEZONE).isoformat(timespec="microseconds")
+            for value in scope
+        ]
 
     # ------------------------------------------------------------------ #
     # 七、帧与片段                                                             #

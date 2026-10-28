@@ -44,7 +44,7 @@ tools:
     label: 轨迹去重统计
     description: >-
       在时间范围内按视觉相似度去重，只返回原始轨迹数、高阈值实体数和低阈值实体数。高阈值数为保守上界，低阈值数为合并后的下界。
-      省略 time_range 表示全部监控时间。
+      省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange，供核对。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
 
@@ -52,7 +52,7 @@ tools:
     label: 实体先验库匹配统计
     description: >-
       将时间范围内的每条轨迹分别与先验库图片匹配，不做轨迹去重；任一关键帧分数达到阈值即计为在库。
-      只向模型返回轨迹总数、在库数和不在库数；匹配 ID、分数及对象留作运行证据。省略 time_range 表示全部监控时间。
+      只向模型返回轨迹总数、在库数、不在库数和 appliedTimeRange；匹配 ID、分数及对象留作运行证据。省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange，供核对。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
 

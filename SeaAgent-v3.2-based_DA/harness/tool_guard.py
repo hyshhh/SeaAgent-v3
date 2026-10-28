@@ -28,11 +28,11 @@ _MODEL_RESULT_FIELDS = {
     ),
     "dedup_tracks": (
         "ok", "trackCount", "highThresholdShipCount", "lowThresholdShipCount",
-        "coverageComplete",
+        "coverageComplete", "appliedTimeRange",
     ),
     "match_entities": (
         "ok", "trackCount", "inRegistryCount", "unregisteredCount",
-        "coverageComplete",
+        "coverageComplete", "appliedTimeRange",
     ),
     "show_evidence": ("ok", "trackIds"),
 }
