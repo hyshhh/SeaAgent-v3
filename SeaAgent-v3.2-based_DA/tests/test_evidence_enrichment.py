@@ -74,6 +74,8 @@ def test_compact_count_fields_feed_frontend_statistics():
             "highThresholdShipCount": 12,
             "lowThresholdShipCount": 10,
             "coverageComplete": False,
+            "trackCoverageComplete": False,
+            "coverageReasons": ["track_keyframe_vectors_missing"],
         }),
     ])
 
@@ -84,6 +86,8 @@ def test_compact_count_fields_feed_frontend_statistics():
             "highThresholdShipCount": 12,
             "lowThresholdShipCount": 10,
             "coverageComplete": False,
+            "trackCoverageComplete": False,
+            "coverageReasons": ["track_keyframe_vectors_missing"],
         },
     }]
 

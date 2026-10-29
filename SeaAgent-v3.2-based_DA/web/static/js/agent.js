@@ -1528,9 +1528,24 @@ function renderEvidence(evidence) {
     trackCount: 'Raw tracks', highThresholdShipCount: 'High-threshold entities', lowThresholdShipCount: 'Low-threshold entities',
     coverageComplete: 'Search complete',
     searchedTrackCount: 'Tracks searched', unsearchableTrackCount: 'Unsearchable tracks',
+    searchableTrackCount: 'Searchable tracks', trackScanComplete: 'Track scan complete',
+    trackCoverageComplete: 'Track coverage complete', registryCoverageComplete: 'Registry match complete',
+    unclassifiedTrackCount: 'Unclassified tracks',
+    registryCount: 'Registry entities', registryReferenceCount: 'Registry references',
+    registryWithoutReferencesCount: 'Registry entries without references',
+    missingRegistryVectorCount: 'Missing registry vectors', uncomparedTrackCount: 'Uncompared tracks',
+    coverageReasons: 'Coverage reasons',
     candidateCount: 'Candidates',
     inRegistryCount: 'Tracks in registry', unregisteredCount: 'Tracks not in registry',
     confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',
+  };
+  const coverageReasonLabels = {
+    track_scan_incomplete: 'Track scan incomplete',
+    track_keyframe_vectors_missing: 'Keyframe vectors missing',
+    registry_references_missing: 'Registry references missing',
+    registry_entries_without_references: 'Registry entries lack references',
+    registry_reference_vectors_missing: 'Registry vectors missing',
+    track_registry_comparison_incomplete: 'Track comparison incomplete',
   };
   const statsToShow = queryByTool.length
     ? queryByTool.map((item) => ({ tool: item.tool, values: item.statistics || {} }))
@@ -1541,7 +1556,11 @@ function renderEvidence(evidence) {
       .filter(([key, value]) => statLabels[key] && value !== undefined && value !== null)
       .map(([key, value]) => {
         const label = key === 'trackCount' && item.tool === 'match_entities' ? 'Tracks matched' : statLabels[key];
-        return `${label}: ${key === 'coverageComplete' ? (value ? 'Yes' : 'No') : String(value)}`;
+        const displayValue = Array.isArray(value)
+          ? value.map(reason => coverageReasonLabels[reason] || reason).join(', ')
+          : String(value);
+        const booleanValue = key.endsWith('Complete') ? (value ? 'Yes' : 'No') : displayValue;
+        return `${label}: ${booleanValue}`;
       });
     if (values.length) {
       facts.push([item.tool ? displayToolLabel(item.tool) : 'Query statistics', values.join(' · ')]);

@@ -195,12 +195,19 @@ test('registry count metadata distinguishes matched tracks from raw tracks', () 
   const ui = page();
   ui.run(`renderEvidence({ statistics: { queryByTool: [{
     tool: 'match_entities',
-    statistics: { trackCount: 24, inRegistryCount: 6, unregisteredCount: 18, coverageComplete: true }
+    statistics: {
+      trackCount: 24, inRegistryCount: 6, unregisteredCount: 16, unclassifiedTrackCount: 2,
+      coverageComplete: false, trackScanComplete: true, trackCoverageComplete: true,
+      registryCoverageComplete: false, coverageReasons: ['registry_reference_vectors_missing']
+    }
   }] } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /Tracks matched: 24/);
   assert.match(html, /Tracks in registry: 6/);
-  assert.match(html, /Tracks not in registry: 18/);
+  assert.match(html, /Tracks not in registry: 16/);
+  assert.match(html, /Unclassified tracks: 2/);
+  assert.match(html, /Registry match complete: No/);
+  assert.match(html, /Registry vectors missing/);
 });
 
 test('track evidence is one table with one keyframe per track and optional registry result', () => {

@@ -203,6 +203,9 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
                 for item in full_result["matches"]
             ],
             "trackCount": 2,
+            "inRegistryCount": 1,
+            "unregisteredCount": 1,
+            "coverageComplete": True,
             "truncated": False,
         },
     }]
@@ -223,7 +226,11 @@ def test_statistics_model_results_keep_the_applied_time_range():
     ]
     cases = (
         ("dedup_tracks", {"trackCount": 0, "highThresholdShipCount": 0, "lowThresholdShipCount": 0}),
-        ("match_entities", {"trackCount": 0, "inRegistryCount": 0, "unregisteredCount": 0}),
+        ("match_entities", {
+            "trackCount": 0, "inRegistryCount": 0, "unregisteredCount": 0,
+            "unclassifiedTrackCount": 0, "trackScanComplete": True,
+            "coverageReasons": [],
+        }),
     )
     for name, counts in cases:
         result = {"ok": True, **counts, "coverageComplete": True, "appliedTimeRange": applied_range}

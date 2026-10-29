@@ -688,17 +688,31 @@ class ToolService:
                 for reference in item.get("references", [])
                 if isinstance(reference, dict)
             ]
+            referenced_registry_ids = {str(item.get("registryId")) for item in references}
+            registry_without_references_count = sum(
+                str(item.get("registryId")) not in referenced_registry_ids
+                for item in registry_items
+            )
             visual = self._match_images(
                 queryImages=references,
                 galleryImages=self._flatten_frames(frames),
                 registryItems=registry_items,
                 best_by_max_score=True,
+                diagnostics=True,
             ) if references and tracks else {}
             by_track: dict[str, list[dict[str, Any]]] = {}
             for match in visual.get("matches", []):
                 by_track.setdefault(str(match["matchedTrackId"]), []).append(match)
 
+            uncompared_track_ids = set(visual.get("uncomparedTrackIds", []))
+            if registry_items:
+                uncompared_track_ids.update(missing)
+            if tracks and registry_items and not references:
+                uncompared_track_ids.update(str(track["trackId"]) for track in tracks)
+            if visual.get("missingRegistryVectorCount", 0):
+                uncompared_track_ids.update(str(track["trackId"]) for track in tracks)
             in_registry = 0
+            in_registry_track_ids = set()
             matches = []
             threshold = float(self.settings["image_match"])
             for track in tracks:
@@ -707,7 +721,9 @@ class ToolService:
                 best = max(candidates, key=lambda item: float(item["maxEmbeddingScore"])) if candidates else None
                 score = float(best["maxEmbeddingScore"]) if best else None
                 registered = score is not None and score >= threshold
-                in_registry += registered
+                if registered:
+                    in_registry += 1
+                    in_registry_track_ids.add(track_id)
                 match_object = None
                 if best:
                     registry_id = str(best["matchedRegistryId"])
@@ -722,7 +738,11 @@ class ToolService:
                     track,
                     [],
                     score=score,
-                    band="match" if registered else "mismatch",
+                    band=(
+                        "match" if registered
+                        else "uncertain" if registry_items and track_id in uncompared_track_ids
+                        else "mismatch"
+                    ),
                     reference_ids=best.get("matchedRegistryReferenceIds", []) if best else [],
                 )
                 if keyframe_id := first_keyframes.get(track_id):
@@ -734,14 +754,52 @@ class ToolService:
             registry_coverage = (
                 not tracks
                 or not registry_items
-                or bool(references and visual.get("registryCoverageComplete"))
+                or bool(
+                    references
+                    and visual.get("registryCoverageComplete")
+                    and not uncompared_track_ids
+                )
+            )
+            track_coverage = scan_complete and not missing
+            coverage_reasons = []
+            if not scan_complete:
+                coverage_reasons.append("track_scan_incomplete")
+            if missing:
+                coverage_reasons.append("track_keyframe_vectors_missing")
+            if tracks and registry_items and not references:
+                coverage_reasons.append("registry_references_missing")
+            elif registry_without_references_count:
+                coverage_reasons.append("registry_entries_without_references")
+            if visual.get("missingRegistryVectorCount", 0):
+                coverage_reasons.append("registry_reference_vectors_missing")
+            if (
+                tracks and registry_items and references
+                and not visual.get("registryCoverageComplete")
+                and not missing
+                and not visual.get("missingRegistryVectorCount")
+            ):
+                coverage_reasons.append("track_registry_comparison_incomplete")
+            unclassified_track_ids = (
+                uncompared_track_ids - in_registry_track_ids if registry_items else set()
             )
             return {
                 "ok": True,
                 "trackCount": len(tracks),
                 "inRegistryCount": in_registry,
-                "unregisteredCount": len(tracks) - in_registry,
-                "coverageComplete": scan_complete and not missing and registry_coverage,
+                "unregisteredCount": len(tracks) - in_registry - len(unclassified_track_ids),
+                "unclassifiedTrackCount": len(unclassified_track_ids),
+                "coverageComplete": track_coverage and registry_coverage,
+                "trackScanComplete": scan_complete,
+                "trackCoverageComplete": track_coverage,
+                "registryCoverageComplete": registry_coverage,
+                "searchableTrackCount": len(tracks) - len(missing),
+                "unsearchableTrackCount": len(missing),
+                "registryCount": len(registry_items),
+                "registryReferenceCount": len(references),
+                "registryWithoutReferencesCount": registry_without_references_count,
+                "missingRegistryVectorCount": visual.get("missingRegistryVectorCount", 0),
+                "uncomparedTrackCount": len(uncompared_track_ids),
+                "coverageReasons": coverage_reasons,
                 "matches": matches,
                 "appliedTimeRange": self._format_time_range(scope) if scope else None,
             }
@@ -1031,6 +1089,7 @@ class ToolService:
         topK: int | None = None,
         registryItems: list[dict[str, Any]] | dict[str, Any] | None = None,
         best_by_max_score: bool = False,
+        diagnostics: bool = False,
     ) -> dict[str, Any]:
         queryImages = self._flatten_image_records(queryImages)
         galleryImages = self._flatten_image_records(galleryImages)
@@ -1051,12 +1110,18 @@ class ToolService:
 
         declared_registry_ids = _registry_ids(registryItems)
         if not queryImages or not galleryImages:
-            return {
+            result = {
                 "ok": True,
                 "matches": [],
                 "unscoredTrackIds": [],
                 "registryCoverageComplete": False,
             }
+            if diagnostics:
+                result.update({
+                    "missingRegistryVectorCount": 0,
+                    "uncomparedTrackIds": list(self._group(galleryImages, "trackId")),
+                })
+            return result
 
         def _is_keyframe(item: dict[str, Any]) -> bool:
             return item.get("trackId") is not None and item.get("keyframeId") is not None
@@ -1071,13 +1136,16 @@ class ToolService:
         query_is_registry = bool(query_references) and bool(gallery_keyframes)
         query_is_track = (not query_is_registry) and bool(query_keyframes) and bool(gallery_references)
         if not query_is_track and not query_is_registry:
-            return {
+            result = {
                 "ok": False,
                 "error": "one_keyframe_side_and_one_registry_side_required",
                 "matches": [],
                 "unscoredTrackIds": [],
                 "registryCoverageComplete": False,
             }
+            if diagnostics:
+                result.update({"missingRegistryVectorCount": 0, "uncomparedTrackIds": []})
+            return result
         keyframes = query_keyframes if query_is_track else gallery_keyframes
         references = gallery_references if query_is_track else query_references
 
@@ -1172,12 +1240,23 @@ class ToolService:
             and all_reference_vectors_available
             and all(len(ids) == total_registry_count for ids in compared_by_track.values())
         )
-        return {
+        result = {
             "ok": True,
             "matches": matches,
             "unscoredTrackIds": unscored_track_ids,
             "registryCoverageComplete": registry_coverage_complete,
         }
+        if diagnostics:
+            result.update({
+                "missingRegistryVectorCount": len(references) - sum(
+                    reference.get("registryVectorId") in reference_vectors for reference in references
+                ),
+                "uncomparedTrackIds": [
+                    track_id for track_id, ids in compared_by_track.items()
+                    if len(ids) != total_registry_count
+                ],
+            })
+        return result
 
     # ------------------------------------------------------------------ #
     # 九、证据汇总                                                             #

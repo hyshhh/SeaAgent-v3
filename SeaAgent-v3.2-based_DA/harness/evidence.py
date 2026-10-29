@@ -30,6 +30,17 @@ TOOL_STATISTIC_KEYS = (
     "searchedTrackCount",
     "candidateCount",
     "unsearchableTrackCount",
+    "trackScanComplete",
+    "trackCoverageComplete",
+    "registryCoverageComplete",
+    "searchableTrackCount",
+    "unclassifiedTrackCount",
+    "registryCount",
+    "registryReferenceCount",
+    "registryWithoutReferencesCount",
+    "missingRegistryVectorCount",
+    "uncomparedTrackCount",
+    "coverageReasons",
 )
 REGISTRY_MATCH_TOOLS = frozenset({"match_entities", "match_registry_tracks"})
 NESTED_KEYS = ("keyframes", "keyframesByTrack", "matches", "registryItems", "registryReferences", "tracks")  # 需要下钻的嵌套容器：工具结果常把明细放在这些键下

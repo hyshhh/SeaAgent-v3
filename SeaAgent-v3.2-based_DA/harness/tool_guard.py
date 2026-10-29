@@ -32,7 +32,12 @@ _MODEL_RESULT_FIELDS = {
     ),
     "match_entities": (
         "ok", "trackCount", "inRegistryCount", "unregisteredCount",
-        "coverageComplete", "appliedTimeRange",
+        "coverageComplete", "trackScanComplete", "trackCoverageComplete",
+        "registryCoverageComplete", "searchableTrackCount", "unsearchableTrackCount",
+        "unclassifiedTrackCount",
+        "registryCount", "registryReferenceCount", "registryWithoutReferencesCount",
+        "missingRegistryVectorCount",
+        "uncomparedTrackCount", "coverageReasons", "appliedTimeRange",
     ),
     "show_evidence": ("ok", "trackIds"),
 }
@@ -265,6 +270,18 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                     "result": {
                         "matches": rows,
                         "trackCount": result.get("trackCount", len(result.get("matches", []))),
+                        **{
+                            key: result[key]
+                            for key in (
+                                "inRegistryCount", "unregisteredCount", "unclassifiedTrackCount",
+                                "coverageComplete", "trackScanComplete", "trackCoverageComplete",
+                                "registryCoverageComplete", "searchableTrackCount",
+                                "unsearchableTrackCount", "registryCount", "registryReferenceCount",
+                                "registryWithoutReferencesCount", "missingRegistryVectorCount",
+                                "uncomparedTrackCount", "coverageReasons", "appliedTimeRange",
+                            )
+                            if key in result
+                        },
                         "truncated": len(result.get("matches", [])) > len(rows),
                     },
                 })

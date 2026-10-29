@@ -400,6 +400,65 @@ def test_registry_count_marks_unsearchable_track_as_incomplete():
     assert result["trackCount"] == 1
     assert result["unregisteredCount"] == 1
     assert result["coverageComplete"] is False
+    assert result["trackScanComplete"] is True
+    assert result["trackCoverageComplete"] is False
+    assert result["unsearchableTrackCount"] == 1
+    assert result["coverageReasons"] == ["track_keyframe_vectors_missing"]
+
+
+def test_registry_count_reports_missing_registry_references_separately():
+    class Repository:
+        def list_registry(self):
+            return [{"registryId": "r-1", "references": []}]
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service.settings = {"image_match": 0.72}
+    tracks = [_track(f"t-{index}") for index in range(214)]
+    service._validate_time_range = lambda _value: (None, "")
+    service._scan_tracks = lambda _scope: (tracks, True)
+    service._load_search_frames = lambda items, *_args, **_kwargs: (
+        {str(item["trackId"]): [{"trackId": str(item["trackId"]), "keyframeId": "kf"}] for item in items},
+        [],
+        {},
+    )
+
+    result = service.match_entities()
+
+    assert result["trackCount"] == 214
+    assert result["trackCoverageComplete"] is True
+    assert result["registryCoverageComplete"] is False
+    assert result["coverageComplete"] is False
+    assert result["coverageReasons"] == ["registry_references_missing"]
+    assert result["uncomparedTrackCount"] == 214
+    assert result["unclassifiedTrackCount"] == 214
+    assert result["unregisteredCount"] == 0
+    assert all(item["scoreBand"] == "uncertain" for item in result["matches"])
+
+
+def test_registry_count_does_not_count_unsearchable_tracks_as_unregistered():
+    class Repository:
+        def list_registry(self):
+            return [{"registryId": "r-1", "references": [{
+                "registryId": "r-1", "referenceId": "ref-1", "registryVectorId": 1,
+            }]}]
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service.settings = {"image_match": 0.72}
+    tracks = [_track("t-1")]
+    service._validate_time_range = lambda _value: (None, "")
+    service._scan_tracks = lambda _scope: (tracks, True)
+    service._load_search_frames = lambda *_args, **_kwargs: ({"t-1": []}, ["t-1"], {})
+
+    result = service.match_entities()
+
+    assert result["trackCount"] == 1
+    assert result["inRegistryCount"] == 0
+    assert result["unregisteredCount"] == 0
+    assert result["unclassifiedTrackCount"] == 1
+    assert result["coverageComplete"] is False
+    assert result["matches"][0]["scoreBand"] == "uncertain"
 
 
 def test_registry_count_reports_the_applied_time_range():
@@ -524,6 +583,7 @@ def test_image_match_does_not_encode_or_persist_missing_vectors():
             "keyframePath": "/missing/keyframe.jpg",
         }],
         registryItems=[{"registryId": "r-1"}],
+        diagnostics=True,
     )
 
     assert result == {
@@ -531,6 +591,8 @@ def test_image_match_does_not_encode_or_persist_missing_vectors():
         "matches": [],
         "unscoredTrackIds": ["t-1"],
         "registryCoverageComplete": False,
+        "missingRegistryVectorCount": 1,
+        "uncomparedTrackIds": ["t-1"],
     }
     assert service.vectors.keyframes.writes == 0
     assert service.vectors.registry.writes == 0
