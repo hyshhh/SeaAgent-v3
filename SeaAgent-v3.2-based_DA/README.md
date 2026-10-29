@@ -22,10 +22,10 @@ Sea-Video-Harness 是面向海域监控视频问答的证据状态驱动多智�
 
 ```text
 requirements / plan / next_action              Planner
-evidence_ids / step_status / execution_status   Executor
+step_status / execution_status                  Executor
 assessment / evidence_gaps / conflicts / decision Reflector
 task_status / iteration / pending_agent / version Runtime
-tool_results / evidence / call_history / 模型与工具调用计数 Runtime 自动记账
+evidence_ids / tool_results / evidence / call_history / 模型与工具调用计数 Runtime 自动记账
 ```
 
 状态更新工具只提交当前角色负责的业务字段，模型不需要维护版本号；状态版本由运行时内部推进，SQLite 保存时仍校验存储修订号，避免旧运行时覆盖新状态。状态按 `thread_id` 存入 `data/memory/shared_task_state.sqlite`；旧的同名 JSON 存档首次启动时导入，原文件保留，删除后的会话不会再次导入。

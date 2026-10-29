@@ -291,7 +291,7 @@ def test_a_second_missing_state_repair_is_rejected():
 def test_closeout_reminder_names_the_fields_owned_by_each_role():
     expected = {
         "planner": ("clarification, next_action, plan, requirements", "update_planner_state"),
-        "executor": ("evidence_ids, execution_status, step_status", "update_execution_state"),
+        "executor": ("execution_status, step_status", "update_execution_state"),
         "reflector": ("assessment, conflicts, decision, evidence_gaps", "update_reflection_state"),
     }
     for role, (fields, tool_name) in expected.items():

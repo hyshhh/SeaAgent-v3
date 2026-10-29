@@ -53,7 +53,8 @@ def test_bad_plans_do_not_partially_modify_state(patch):
 def test_model_cannot_overwrite_tool_results_or_remove_evidence():
     state = SharedTaskState("q")
     state.record_tool_result("executor", "get_frames", "c1", {"keyframeId": "kf1"}, "completed")
-    state.update("executor", {"evidence_ids": []})
+    with pytest.raises(ValueError, match="evidence_ids"):
+        state.update("executor", {"evidence_ids": []})
     assert state.snapshot()["evidence_ids"] == ["kf1"]
     with pytest.raises(ValueError):
         state.update("executor", {"tool_results": []})

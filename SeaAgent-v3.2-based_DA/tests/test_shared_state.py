@@ -38,17 +38,14 @@ def test_tool_results_collect_evidence_ids():
     assert snapshot["tool_results"][0]["callId"] == "c1"
 
 
-def test_invalid_evidence_id_is_ignored_without_polluting_state():
+def test_legacy_evidence_ids_are_ignored_without_blocking_progress():
     state = SharedTaskState("问题")
     state.update("planner", {"plan": [{"id": "scan", "content": "扫描轨迹"}]})
     state.record_tool_result("executor", "get_track", "chatcmpl-tool-call", {"trackId": "t-1"}, "completed")
     tools = {tool.name: tool for tool in build_state_tools(state)}
     update_tool = tools["update_execution_state"]
-    schema = update_tool.args_schema.model_json_schema()
-    patch_ref = schema["properties"]["patch"]["$ref"].rsplit("/", 1)[-1]
-    evidence_description = schema["$defs"][patch_ref]["properties"]["evidence_ids"]["description"]
-    assert "tool_call_id" in update_tool.description
-    assert "tool_call_id" in evidence_description
+    assert "evidence_ids" not in update_tool.description
+    assert "自动记录" in update_tool.description
 
     result = update_tool.invoke(
         {
@@ -60,13 +57,12 @@ def test_invalid_evidence_id_is_ignored_without_polluting_state():
     )
 
     assert result["ok"] is True
-    assert result["ignored_evidence_ids"] == ["chatcmpl-tool-call"]
-    assert "tool_call_id" in result["message"]
+    assert result["ignored_fields"] == ["evidence_ids"]
     assert state.snapshot()["step_status"] == {"scan": "completed"}
     assert state.snapshot()["evidence_ids"] == ["t-1"]
 
 
-def test_only_invalid_evidence_ids_still_returns_a_repairable_error():
+def test_evidence_ids_alone_are_not_an_executor_state_update():
     state = SharedTaskState("问题")
     tools = {tool.name: tool for tool in build_state_tools(state)}
 
@@ -75,8 +71,8 @@ def test_only_invalid_evidence_ids_still_returns_a_repairable_error():
     )
 
     assert result["ok"] is False
-    assert result["error"] == "invalid_evidence_ids"
-    assert result["ignored_evidence_ids"] == ["chatcmpl-tool-call"]
+    assert result["error"] == "no_owned_fields"
+    assert result["ignored_fields"] == ["evidence_ids"]
 
 
 def test_executor_can_update_progress_without_repassing_runtime_evidence():
@@ -90,6 +86,30 @@ def test_executor_can_update_progress_without_repassing_runtime_evidence():
     )
 
     assert result["ok"] is True
+    assert state.snapshot()["evidence_ids"] == ["t-1"]
+    assert state.snapshot()["step_status"] == {"scan": "completed"}
+
+
+def test_executor_accepts_legacy_json_string_patch_but_ignores_evidence_ids():
+    state = SharedTaskState("问题")
+    state.update("planner", {"plan": [{"id": "scan", "content": "扫描轨迹"}]})
+    state.record_tool_result("executor", "get_track", "call-1", {"trackId": "t-1"}, "completed")
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+
+    result = tools["update_execution_state"].invoke(
+        {
+            "patch": json.dumps(
+                {
+                    "evidence_ids": ["t-1"],
+                    "step_status": {"scan": "completed"},
+                    "execution_status": "success",
+                }
+            )
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["ignored_fields"] == ["evidence_ids"]
     assert state.snapshot()["evidence_ids"] == ["t-1"]
     assert state.snapshot()["step_status"] == {"scan": "completed"}
 

@@ -61,13 +61,6 @@ class _PlannerPatch(_StatePatch):
 
 
 class _ExecutionPatch(_StatePatch):
-    evidence_ids: list[str] | None = Field(
-        default=None,
-        description=(
-            "可省略：运行时会自动记录成功工具结果中的证据 ID。若填写，只能用结果里的 trackId、"
-            "keyframeId、shipSegmentId、registryReferenceId 等实体 ID；不能填 tool_call_id。"
-        ),
-    )
     execution_status: Literal["idle", "running", "success", "failed"] | None = None
     step_status: dict[str, Literal["pending", "in_progress", "completed", "failed"]] | None = Field(
         default=None,
@@ -170,7 +163,7 @@ def build_state_tools(state: Any) -> list[Any]:
             name="update_planner_state",
             args_schema=_PlannerUpdateArguments,
             description=(
-                "Planner 专用；在 patch 对象中传至少一个自有字段：requirements、plan（id/content/required_evidence）、"
+                "Planner 专用；patch 传对象（运行时兼容 JSON 字符串）。传至少一个自有字段：requirements、plan（id/content/required_evidence）、"
                 "next_action、clarification。不要提交 decision、step_status 或 task_status。"
             ),
         ),
@@ -179,11 +172,10 @@ def build_state_tools(state: Any) -> list[Any]:
             name="update_execution_state",
             args_schema=_ExecutionUpdateArguments,
             description=(
-                "Executor 专用；在 patch 对象中传 evidence_ids、execution_status、step_status（当前 plan[].id→pending/in_progress/completed/failed）。"
+                "Executor 专用；patch 传对象（运行时兼容 JSON 字符串）。只传 execution_status、step_status（当前 plan[].id→pending/in_progress/completed/failed）。"
                 "step_status 的键必须使用共享状态 plan[].id；不要使用工具名，先读取共享状态确认 ID。"
                 "若误传了唯一匹配某计划步骤 required_evidence 的证据名，运行时会映射到该步骤并返回 mapped_step_ids。"
-                "运行时自动记录成功工具结果中的证据 ID，通常省略 evidence_ids；若填写，只传 trackId、keyframeId、"
-                "shipSegmentId、registryReferenceId 等实体 ID，不能传 tool_call_id；无效 ID 会忽略并返回提示，其余进度照常保存。"
+                "成功工具结果中的证据 ID 由运行时自动记录。"
             ),
         ),
         StructuredTool.from_function(
@@ -191,8 +183,8 @@ def build_state_tools(state: Any) -> list[Any]:
             name="update_reflection_state",
             args_schema=_ReflectionUpdateArguments,
             description=(
-                "Reflector 专用；在 patch 对象中传 assessment、evidence_gaps、conflicts、decision（terminate/replan/continue/failed）。"
-                "patch 必须是对象，不能序列化为字符串；assessment 必须是对象，如 {'final_answer': '结论'}。"
+                "Reflector 专用；patch 传对象（运行时兼容 JSON 字符串）。传 assessment、evidence_gaps、conflicts、decision（terminate/replan/continue/failed）。"
+                "assessment 必须是对象，如 {'final_answer': '结论'}。"
             ),
         ),
     ]
@@ -202,27 +194,7 @@ def build_state_tools(state: Any) -> list[Any]:
 def _update(state: Any, role: str, patch: _StatePatch) -> dict[str, Any]:
     ignored = sorted(patch.model_extra or {})
     values = patch.model_dump(exclude_unset=True, exclude=set(ignored))
-    ignored_evidence_ids: list[str] = []
-    if role == "executor" and "evidence_ids" in values:
-        known_ids = set(state.snapshot().get("evidence_ids") or [])
-        requested_ids = list(dict.fromkeys(values["evidence_ids"] or []))
-        valid_ids = [item for item in requested_ids if item in known_ids]
-        ignored_evidence_ids = [item for item in requested_ids if item not in known_ids]
-        if valid_ids:
-            values["evidence_ids"] = valid_ids
-        else:
-            values.pop("evidence_ids")
     if not values:
-        if ignored_evidence_ids:
-            return {
-                "ok": False,
-                "error": "invalid_evidence_ids",
-                "message": (
-                    "evidence_ids 只能使用成功工具结果中的实体 ID；运行时已自动收集证据，"
-                    "请省略 tool_call_id（如 chatcmpl-tool-*）。"
-                ),
-                "ignored_evidence_ids": ignored_evidence_ids[:20],
-            }
         owned_fields = ", ".join(sorted(OWNER_FIELDS[role]))
         ignored_message = f"；已忽略字段：{', '.join(ignored)}" if ignored else ""
         return {
@@ -245,10 +217,4 @@ def _update(state: Any, role: str, patch: _StatePatch) -> dict[str, Any]:
     if ignored:
         result["ignored_fields"] = ignored
         result["message"] = "仅更新当前角色有权维护的字段；其余字段已忽略。"
-    if ignored_evidence_ids:
-        result["ignored_evidence_ids"] = ignored_evidence_ids[:20]
-        result["message"] = (
-            "进度已更新；无效 evidence_ids 已忽略。运行时自动记录成功工具结果中的实体证据 ID，"
-            "不能使用 tool_call_id。"
-        )
     return result

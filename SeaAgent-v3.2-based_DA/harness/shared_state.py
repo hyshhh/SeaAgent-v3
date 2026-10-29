@@ -19,7 +19,7 @@ from typing import Any
 # 1.1 声明各角色可维护的字段与合法状态
 OWNER_FIELDS = {
     "planner": {"requirements", "plan", "next_action", "clarification"},
-    "executor": {"evidence_ids", "step_status", "execution_status"},
+    "executor": {"step_status", "execution_status"},
     "reflector": {"assessment", "evidence_gaps", "conflicts", "decision"},
     "runtime": {"question", "task_status", "iteration", "pending_agent", "time_anchor"},
 }
@@ -528,6 +528,10 @@ class SharedTaskState:
                     self._values["closeout_required"][role] = True
                     self._changed()
                     return {"blocked": "repeat_limit", **deepcopy(previous)}
+                if previous.get("status") == "error" and tool_name in STATE_UPDATE_TOOLS:
+                    previous.update(status="pending", result=None, truncated=False)
+                    self._changed()
+                    return {"execute": True, **deepcopy(previous)}
             self._changed()
             return {"execute": True} if previous is None else deepcopy(previous)
 

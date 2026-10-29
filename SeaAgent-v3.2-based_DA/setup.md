@@ -46,7 +46,7 @@ py -m ruff check .
 Planner
   → 写入 requirements / plan / next_action
 Executor
-  → 执行工具，维护 evidence_ids / step_status / execution_status；运行时记录 tool_results
+  → 执行工具，维护 step_status / execution_status；运行时记录 evidence_ids / tool_results
 Reflector
   → 检查充分性、缺口和冲突，写入 decision
       ├─ terminate：生成答案并结束

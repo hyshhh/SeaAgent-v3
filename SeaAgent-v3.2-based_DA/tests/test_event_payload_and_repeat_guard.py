@@ -13,6 +13,7 @@ from langchain_core.messages import ToolMessage
 from config import load_config
 from harness.middleware import build_middleware
 from harness.shared_state import SharedTaskState
+from harness.state_tools import build_state_tools
 from harness.tool_guard import REPEAT_HINT, RepeatToolCallMiddleware
 from harness.trace import _bounded, _Trace
 
@@ -258,6 +259,63 @@ def test_tool_error_keeps_error_type_for_model_debugging():
         "errorType": "TimeoutError",
         "hint": "timed out",
     }
+
+
+def test_failed_state_update_can_retry_with_the_same_arguments():
+    state = SharedTaskState("q")
+    guard = RepeatToolCallMiddleware(state=state, scope="executor")
+    arguments = {"patch": {"execution_status": "success"}}
+    calls = []
+
+    def handler(current):
+        calls.append(current)
+        return ToolMessage(
+            content=json.dumps({"ok": False, "error": "invalid_state_patch"}),
+            name="update_execution_state",
+            status="error",
+            tool_call_id=current.tool_call["id"],
+        )
+
+    first = guard.wrap_tool_call(
+        _Request("update_execution_state", arguments, "state-1"), handler
+    )
+    second = guard.wrap_tool_call(
+        _Request("update_execution_state", arguments, "state-2"), handler
+    )
+
+    assert first.status == "error"
+    assert second.status == "error"
+    assert len(calls) == 2
+
+
+def test_successful_state_update_with_the_same_arguments_is_committed_once():
+    state = SharedTaskState("q")
+    state.update("planner", {"plan": [{"id": "step-1", "content": "scan"}]})
+    guard = RepeatToolCallMiddleware(state=state, scope="executor")
+    tool = next(tool for tool in build_state_tools(state) if tool.name == "update_execution_state")
+    arguments = {"patch": {"execution_status": "success", "step_status": {"step-1": "completed"}}}
+    calls = []
+
+    def handler(current):
+        calls.append(current)
+        result = tool.invoke(current.tool_call["args"])
+        return ToolMessage(
+            content=json.dumps(result),
+            name="update_execution_state",
+            tool_call_id=current.tool_call["id"],
+        )
+
+    first = guard.wrap_tool_call(
+        _Request("update_execution_state", arguments, "state-1"), handler
+    )
+    second = guard.wrap_tool_call(
+        _Request("update_execution_state", arguments, "state-2"), handler
+    )
+
+    assert json.loads(first.content)["ok"] is True
+    assert second.artifact["replayed"] is True
+    assert len(calls) == 1
+    assert state.snapshot()["role_write_counts"]["executor"] == 1
 
 
 def test_vlm_json_recovery_marker_is_visible_to_the_model():

@@ -43,7 +43,7 @@ agents:
       message: |
         按当前计划读取 /skills/recognition/SKILL.md 或 /skills/statistics/SKILL.md；混合任务只读实际涉及的技能。
     system_prompt: |
-      你是 Executor Agent：严格执行当前 plan，只维护 evidence_ids、step_status、execution_status。更新步骤时使用共享状态 plan[].id；若返回 invalid_state_patch，按提示中的有效 ID 修正后重试一次。
+      你是 Executor Agent：严格执行当前 plan，只维护 step_status、execution_status。更新步骤时使用共享状态 plan[].id；若返回 invalid_state_patch，按提示中的有效 ID 修正后重试一次。
       业务工具已在服务层完成分页、取帧、匹配、去重和统计；不要自行读取轨迹文件、先验库目录或旧版工具。
       舷号或目标名称（如“小红”）查询用 recognize_tracks.hull_number，描述查询用 description，图片查询用 image_path；三类任务都检索视频轨迹。
       识别链路：舷号/别名直查未确认且返回 nextStep 或 recommendation 时，用相同舷号和时间调用 match_registry_tracks；direct mismatch 和缺少 image_path 都不改变该步骤。只按 nextStep 调用 verify_vessel_images。
@@ -53,7 +53,7 @@ agents:
       VLM 返回 formatRecovered=true 时只使用 decision，不引用 facts；说明格式恢复未保留视觉依据。
       统计遵循 statistics 技能：总数用 dedup_tracks；在库/不在库数量用 match_entities，逐条匹配范围内轨迹且不去重。时间范围原样复制当前计划中的 ISO-8601 起止值，不要按自己的日期记忆或旧 QA 历史重新计算、替换；计划没有时间范围且用户没指定时间时，省略 time_range，查询全部轨迹。只问总数时不要调用匹配工具。直接采用范围匹配的结果，不补查或重算；匹配明细由运行时保存为证据，不要请求或复述明细。
       识别结果的 status=confirmed/unconfirmed/mismatch；候选的 scoreBand=match/uncertain/mismatch；图像核验的 decision=match/mismatch/uncertain。coverageComplete=false 时不能下绝对否定结论。
-      运行时自动收集成功结果的实体证据 ID，通常省略 evidence_ids；只写负责字段，不复制整份状态。
+      成功工具结果中的实体证据 ID 由运行时自动收集；执行进度只传 step_status、execution_status，不复制整份状态。
 
   - name: reflector
     description: 审查封装工具结果是否满足需求，汇总证据并决定继续、重规划或结束。
