@@ -1,6 +1,7 @@
 """证据富化：把散落在各次工具结果里的关键帧 / 片段 / 库图 ID 汇总成前端可直接渲染的载荷。"""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -39,8 +40,10 @@ TOOL_STATISTIC_KEYS = (
     "registryReferenceCount",
     "registryWithoutReferencesCount",
     "missingRegistryVectorCount",
+    "unsearchableRegistryCount",
     "uncomparedTrackCount",
     "coverageReasons",
+    "appliedTimeRange",
 )
 REGISTRY_MATCH_TOOLS = frozenset({"match_entities", "match_registry_tracks"})
 NESTED_KEYS = ("keyframes", "keyframesByTrack", "matches", "registryItems", "registryReferences", "tracks")  # 需要下钻的嵌套容器：工具结果常把明细放在这些键下
@@ -252,7 +255,10 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             score = float(score) if isinstance(score, (int, float)) else None
             object_value = candidate.get("matchedObject")
             band = str(candidate.get("scoreBand") or candidate.get("band") or "")
-            status = {"match": "In registry", "mismatch": "Not in registry"}.get(band, "Unconfirmed")
+            status = {
+                "match": "Threshold match",
+                "mismatch": "Classified not in registry",
+            }.get(band, "Unconfirmed")
             match = {
                 "status": status,
                 "score": score,
@@ -279,6 +285,7 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
     tracks = _dedup([item for payload in payloads for item in _collect_ids(payload, TRACK_ID_KEYS)], limit)
     query_statistics: dict[str, Any] = {}
     query_statistics_by_tool: list[dict[str, Any]] = []
+    seen_statistics: set[str] = set()
     display_statistics: dict[str, Any] = {}
     for record in successful:
         result = record["result"]
@@ -290,9 +297,19 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
         if str(record.get("tool") or "") == "show_evidence":
             display_statistics = statistics
         elif statistics:
+            tool = str(record.get("tool") or "")
+            signature = json.dumps(
+                {"tool": tool, "statistics": statistics},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+            if signature in seen_statistics:
+                continue
+            seen_statistics.add(signature)
             query_statistics.update(statistics)
             query_statistics_by_tool.append({
-                "tool": str(record.get("tool") or ""),
+                "tool": tool,
                 "statistics": statistics,
             })
 

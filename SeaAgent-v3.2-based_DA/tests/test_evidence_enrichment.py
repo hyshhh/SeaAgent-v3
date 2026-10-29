@@ -76,6 +76,7 @@ def test_compact_count_fields_feed_frontend_statistics():
             "coverageComplete": False,
             "trackCoverageComplete": False,
             "coverageReasons": ["track_keyframe_vectors_missing"],
+            "appliedTimeRange": ["2026-10-27T00:00:00+08:00", "2026-10-27T23:59:59+08:00"],
         }),
     ])
 
@@ -88,7 +89,28 @@ def test_compact_count_fields_feed_frontend_statistics():
             "coverageComplete": False,
             "trackCoverageComplete": False,
             "coverageReasons": ["track_keyframe_vectors_missing"],
+            "appliedTimeRange": ["2026-10-27T00:00:00+08:00", "2026-10-27T23:59:59+08:00"],
         },
+    }]
+
+
+def test_duplicate_statistics_from_tool_and_private_evidence_are_shown_once():
+    result = {
+        "trackCount": 214,
+        "inRegistryCount": 24,
+        "unregisteredCount": 0,
+        "unclassifiedTrackCount": 190,
+        "coverageComplete": False,
+        "coverageReasons": ["track_keyframe_vectors_missing"],
+    }
+    payload = build_evidence_payload([
+        _record("match_entities", result),
+        _record("match_entities", {**result, "matches": [{"trackId": "t-1"}]}),
+    ])
+
+    assert payload["statistics"]["queryByTool"] == [{
+        "tool": "match_entities",
+        "statistics": result,
     }]
 
 
@@ -145,7 +167,7 @@ def test_evidence_rows_keep_one_keyframe_track_time_and_explicit_registry_match(
         "trackId": "t-1",
         "keyframeId": "kf-first",
         "registryMatch": {
-            "status": "In registry",
+            "status": "Threshold match",
             "score": 0.91,
             "matchedObject": {"hullNumber": "0857"},
         },
@@ -199,7 +221,7 @@ def test_registry_assisted_recognition_adds_match_status_to_track_rows():
     assert payload["registryMatchUsed"] is True
     assert payload["trackRows"] == [{
         "trackId": "t-0857",
-        "registryMatch": {"status": "In registry", "score": 0.91, "matchedObject": None},
+        "registryMatch": {"status": "Threshold match", "score": 0.91, "matchedObject": None},
         "startTimeText": "start",
         "endTimeText": "end",
     }]

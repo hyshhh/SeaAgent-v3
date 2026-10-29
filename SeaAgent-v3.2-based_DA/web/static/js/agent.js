@@ -1509,8 +1509,8 @@ function renderEvidence(evidence) {
       const object = match?.matchedObject && typeof match.matchedObject === 'object' ? match.matchedObject : {};
       const name = object.hullNumber || object.registryId || '';
       const score = Number.isFinite(Number(match?.score)) ? ` · ${Number(match.score).toFixed(3)}` : '';
-      const status = match?.status || 'Not in registry';
-      const statusClass = status === 'In registry' ? 'is-registered' : status === 'Not in registry' ? 'is-unregistered' : 'is-unconfirmed';
+      const status = match?.status || 'Unconfirmed';
+      const statusClass = status === 'Threshold match' ? 'is-threshold-match' : status === 'Classified not in registry' ? 'is-unregistered' : 'is-unconfirmed';
       matchCell = `<span class="qa-registry-status ${statusClass}">${escapeHtml(status)}</span>${name ? `<span class="qa-registry-object">${escapeHtml(name)}${escapeHtml(score)}</span>` : score ? `<span class="qa-registry-object">${escapeHtml(score.slice(3))}</span>` : ''}`;
     }
     return `<tr><td class="qa-evidence-track-id">${escapeHtml(trackId)}</td><td>${escapeHtml(time)}</td><td class="qa-evidence-frame-cell">${keyframe}</td><td class="qa-evidence-registry-cell">${matchCell}</td></tr>`;
@@ -1533,10 +1533,11 @@ function renderEvidence(evidence) {
     unclassifiedTrackCount: 'Unclassified tracks',
     registryCount: 'Registry entities', registryReferenceCount: 'Registry references',
     registryWithoutReferencesCount: 'Registry entries without references',
-    missingRegistryVectorCount: 'Missing registry vectors', uncomparedTrackCount: 'Uncompared tracks',
-    coverageReasons: 'Coverage reasons',
+    missingRegistryVectorCount: 'Missing registry vectors', unsearchableRegistryCount: 'Unsearchable registry entities',
+    uncomparedTrackCount: 'Uncompared tracks',
+    coverageReasons: 'Coverage reasons', appliedTimeRange: 'Applied time range',
     candidateCount: 'Candidates',
-    inRegistryCount: 'Tracks in registry', unregisteredCount: 'Tracks not in registry',
+    inRegistryCount: 'Tracks above match threshold', unregisteredCount: 'Tracks classified not in registry',
     confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',
   };
   const coverageReasonLabels = {

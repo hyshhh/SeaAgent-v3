@@ -198,16 +198,19 @@ test('registry count metadata distinguishes matched tracks from raw tracks', () 
     statistics: {
       trackCount: 24, inRegistryCount: 6, unregisteredCount: 16, unclassifiedTrackCount: 2,
       coverageComplete: false, trackScanComplete: true, trackCoverageComplete: true,
-      registryCoverageComplete: false, coverageReasons: ['registry_reference_vectors_missing']
+      registryCoverageComplete: false, coverageReasons: ['registry_reference_vectors_missing'],
+      unsearchableRegistryCount: 1, appliedTimeRange: ['2026-10-27T00:00:00+08:00', '2026-10-27T23:59:59+08:00']
     }
   }] } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /Tracks matched: 24/);
-  assert.match(html, /Tracks in registry: 6/);
-  assert.match(html, /Tracks not in registry: 16/);
+  assert.match(html, /Tracks above match threshold: 6/);
+  assert.match(html, /Tracks classified not in registry: 16/);
   assert.match(html, /Unclassified tracks: 2/);
   assert.match(html, /Registry match complete: No/);
   assert.match(html, /Registry vectors missing/);
+  assert.match(html, /Unsearchable registry entities: 1/);
+  assert.match(html, /Applied time range: 2026-10-27T00:00:00\+08:00, 2026-10-27T23:59:59\+08:00/);
 });
 
 test('track evidence is one table with one keyframe per track and optional registry result', () => {
@@ -216,10 +219,10 @@ test('track evidence is one table with one keyframe per track and optional regis
     { trackId: 't-1', startTimeText: '2026-10-25 10:00:00', endTimeText: '2026-10-25 10:00:05',
       startTime: 1792893600, endTime: 1792893605,
       keyframeId: 'kf-1',
-      registryMatch: { status: 'In registry', score: 0.91, matchedObject: { hullNumber: '0857' } } },
+      registryMatch: { status: 'Threshold match', score: 0.91, matchedObject: { hullNumber: '0857' } } },
     { trackId: 't-2', startTimeText: '2026-10-25 10:02:00', endTimeText: '2026-10-25 10:02:05',
       keyframeIds: ['kf-2-first', 'kf-2-second'],
-      registryMatch: { status: 'Not in registry', score: 0.42, matchedObject: null } }
+      registryMatch: { status: 'Classified not in registry', score: 0.42, matchedObject: null } }
   ] });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /<table class="qa-evidence-table">/);
@@ -229,8 +232,8 @@ test('track evidence is one table with one keyframe per track and optional regis
   assert.equal((html.match(/<img /g) || []).length, 2);
   assert.doesNotMatch(html, /kf-2-second|<video|autoplay|\/api\/evidence\/clips/);
   assert.match(html, /0857/);
-  assert.match(html, /In registry/);
-  assert.match(html, /Not in registry/);
+  assert.match(html, /Threshold match/);
+  assert.match(html, /Classified not in registry/);
   assert.doesNotMatch(html, /Registry references/);
 });
 
@@ -252,7 +255,7 @@ test('non-match evidence leaves the registry column empty', () => {
   }] });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /<td class="qa-evidence-registry-cell"><\/td>/);
-  assert.doesNotMatch(html, /Not in registry|In registry/);
+  assert.doesNotMatch(html, /Classified not in registry|Threshold match/);
   ui.run(`renderEvidence({ registryMatchUsed: true, trackRows: [{trackId: 't-4'}] });`);
   assert.match(ui.elements.get('evidenceGallery').innerHTML, /<td class="qa-evidence-registry-cell"><\/td>/);
 });
@@ -374,8 +377,8 @@ test('confirmation card is mounted in the visible chat or trace view', () => {
 
   assert.ok(chatIndex < chatAnswerIndex && chatAnswerIndex < chatMountIndex && chatMountIndex < confirmIndex);
   assert.ok(traceIndex < traceListIndex && traceListIndex < traceMountIndex);
-  assert.match(template, /qa\.css\?v=23/);
-  assert.match(template, /agent\.js\?v=94/);
+  assert.match(template, /qa\.css\?v=27/);
+  assert.match(template, /agent\.js\?v=96/);
   const ui = page();
   ui.run(`currentSessionId = 't'; qaView = 'chat';
     renderAgentConfirmation({ confirmation: ${JSON.stringify(confirmation)} });`);

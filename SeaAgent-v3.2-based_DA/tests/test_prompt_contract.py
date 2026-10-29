@@ -100,6 +100,22 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     assert "不得追问时间" in planner["system_prompt"]
 
 
+def test_statistics_prompts_keep_threshold_and_unclassified_semantics_consistent():
+    role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
+    reflector = next(item for item in role_config["agents"] if item["name"] == "reflector")
+    executor = next(item for item in role_config["agents"] if item["name"] == "executor")
+    statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
+    tools = yaml.safe_load((ROOT / "config/tools.yaml").read_text(encoding="utf-8"))["tools"]
+    match_entities = next(item for item in tools if item["name"] == "match_entities")
+
+    for prompt in (reflector["system_prompt"], executor["system_prompt"], statistics, match_entities["description"]):
+        assert "灰区" in prompt or "gray-zone" in prompt
+        assert "unclassified" in prompt or "未分类" in prompt
+    assert "inRegistryCount" in statistics
+    assert "VLM confirmation" in statistics
+    assert "不代表 VLM 已确认" in match_entities["description"]
+
+
 def test_planner_and_question_presets_cover_the_six_request_types():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")

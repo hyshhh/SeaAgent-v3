@@ -36,7 +36,7 @@ _MODEL_RESULT_FIELDS = {
         "registryCoverageComplete", "searchableTrackCount", "unsearchableTrackCount",
         "unclassifiedTrackCount",
         "registryCount", "registryReferenceCount", "registryWithoutReferencesCount",
-        "missingRegistryVectorCount",
+        "missingRegistryVectorCount", "unsearchableRegistryCount",
         "uncomparedTrackCount", "coverageReasons", "appliedTimeRange",
     ),
     "show_evidence": ("ok", "trackIds"),
@@ -278,6 +278,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                                 "registryCoverageComplete", "searchableTrackCount",
                                 "unsearchableTrackCount", "registryCount", "registryReferenceCount",
                                 "registryWithoutReferencesCount", "missingRegistryVectorCount",
+                                "unsearchableRegistryCount",
                                 "uncomparedTrackCount", "coverageReasons", "appliedTimeRange",
                             )
                             if key in result

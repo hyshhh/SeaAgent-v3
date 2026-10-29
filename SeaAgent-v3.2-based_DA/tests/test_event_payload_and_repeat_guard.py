@@ -215,7 +215,7 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
     assert result["tool_records"][0]["result"] == json.loads(message.content)
     assert result["enrichedEvidence"]["trackIds"] == ["t-1", "t-2"]
     assert result["enrichedEvidence"]["displayGroups"][0]["score"] == 0.91
-    assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "In registry"
+    assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "Threshold match"
     assert state.evidence_artifact_results() == []
 
 
