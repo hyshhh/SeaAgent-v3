@@ -361,18 +361,14 @@ def test_registry_count_matches_each_track_without_deduplication():
     )
 
     def match_images(**kwargs):
-        assert kwargs["best_by_max_score"] is True
         assert {frame["trackId"] for frame in kwargs["galleryImages"]} == {"t-1", "t-2"}
         return {
             "matches": [{
                 "matchedTrackId": "t-1",
                 "matchedRegistryId": "r-1",
-                "maxEmbeddingScore": 0.73,
-                "embeddingScore": 0.61,
-                "matchedKeyframeIds": ["kf-1"],
-                "matchedRegistryReferenceIds": ["ref-1"],
-                "bestMatchedKeyframeId": "kf-1",
-                "bestMatchedRegistryReferenceId": "ref-1",
+                "score": 0.73,
+                "matchedKeyframeId": "kf-1",
+                "matchedRegistryReferenceId": "ref-1",
             }],
             "registryCoverageComplete": True,
             "missingRegistryVectorCount": 0,
@@ -588,11 +584,13 @@ def test_image_match_can_select_a_registry_by_its_best_single_frame_score():
         queryImages=[reference for item in registry_items for reference in item["references"]],
         galleryImages=keyframes,
         registryItems=registry_items,
-        best_by_max_score=True,
     )
 
     assert result["matches"][0]["matchedRegistryId"] == "r-1"
-    assert result["matches"][0]["maxEmbeddingScore"] == 0.9
+    assert result["matches"][0]["score"] == 0.9
+    assert result["matches"][0]["matchedKeyframeId"] == "kf-1"
+    assert "embeddingScore" not in result["matches"][0]
+    assert "maxEmbeddingScore" not in result["matches"][0]
 
 
 def test_image_match_marks_registry_coverage_incomplete_when_reference_vector_is_missing():
@@ -682,23 +680,23 @@ def test_registry_count_verifies_only_the_gray_zone_without_calling_vlm():
             {
                 "matchedTrackId": "t-high",
                 "matchedRegistryId": "r-1",
-                "maxEmbeddingScore": 0.81,
-                "bestMatchedKeyframeId": "kf-high",
-                "bestMatchedRegistryReferenceId": "ref-1",
+                "score": 0.81,
+                "matchedKeyframeId": "kf-high",
+                "matchedRegistryReferenceId": "ref-1",
             },
             {
                 "matchedTrackId": "t-gray",
                 "matchedRegistryId": "r-1",
-                "maxEmbeddingScore": 0.61,
-                "bestMatchedKeyframeId": "kf-gray",
-                "bestMatchedRegistryReferenceId": "ref-1",
+                "score": 0.61,
+                "matchedKeyframeId": "kf-gray",
+                "matchedRegistryReferenceId": "ref-1",
             },
             {
                 "matchedTrackId": "t-low",
                 "matchedRegistryId": "r-1",
-                "maxEmbeddingScore": 0.40,
-                "bestMatchedKeyframeId": "kf-low",
-                "bestMatchedRegistryReferenceId": "ref-1",
+                "score": 0.40,
+                "matchedKeyframeId": "kf-low",
+                "matchedRegistryReferenceId": "ref-1",
             },
         ],
         "registryCoverageComplete": True,

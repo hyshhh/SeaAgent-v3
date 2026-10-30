@@ -497,19 +497,19 @@ class ToolService:
             track = by_id.get(str(item.get("matchedTrackId")))
             if track is None:
                 continue
-            frame_ids = item.get("matchedKeyframeIds") or []
-            selected_frames = [frame for frame in frames.get(str(track["trackId"]), []) if frame["keyframeId"] in frame_ids]
-            matched_keyframe_id = str(item.get("bestMatchedKeyframeId") or (frame_ids[0] if frame_ids else ""))
-            matched_reference_id = str(
-                item.get("bestMatchedRegistryReferenceId")
-                or next(iter(item.get("matchedRegistryReferenceIds") or []), "")
-            )
+            matched_keyframe_id = str(item.get("matchedKeyframeId") or "")
+            matched_reference_id = str(item.get("matchedRegistryReferenceId") or "")
+            selected_frames = [
+                frame
+                for frame in frames.get(str(track["trackId"]), [])
+                if frame["keyframeId"] == matched_keyframe_id
+            ]
             matches.append(self._track_match_summary(
                 track,
                 selected_frames,
-                score=item.get("embeddingScore"),
+                score=item.get("score"),
                 band=str(item.get("scoreBand") or "uncertain"),
-                reference_ids=item.get("matchedRegistryReferenceIds"),
+                reference_ids=[matched_reference_id] if matched_reference_id else [],
                 matched_keyframe_id=matched_keyframe_id,
                 matched_registry_reference_id=matched_reference_id,
             ))
@@ -735,7 +735,6 @@ class ToolService:
                 queryImages=references,
                 galleryImages=self._flatten_frames(frames),
                 registryItems=registry_items,
-                best_by_max_score=True,
                 diagnostics=True,
             ) if references and tracks else {}
             if visual.get("ok") is False:
@@ -765,8 +764,8 @@ class ToolService:
             for track in tracks:
                 track_id = str(track["trackId"])
                 candidates = by_track.get(track_id, [])
-                best = max(candidates, key=lambda item: float(item["maxEmbeddingScore"])) if candidates else None
-                score = float(best["maxEmbeddingScore"]) if best else None
+                best = max(candidates, key=lambda item: float(item["score"])) if candidates else None
+                score = float(best["score"]) if best else None
                 match_object = None
                 if best:
                     registry_id = str(best["matchedRegistryId"])
@@ -774,25 +773,27 @@ class ToolService:
                     match_object = {
                         "registryId": registry_id,
                         "hullNumber": str(item.get("hullNumber") or ""),
-                        "registryReferenceId": best.get("bestMatchedRegistryReferenceId"),
-                        "keyframeId": best.get("bestMatchedKeyframeId"),
+                        "registryReferenceId": best.get("matchedRegistryReferenceId"),
+                        "keyframeId": best.get("matchedKeyframeId"),
                     }
                 detail = self._track_match_summary(
                     track,
                     [],
                     score=score,
                     band=self._band(score, "image") if score is not None else "uncertain",
-                    reference_ids=best.get("matchedRegistryReferenceIds", []) if best else [],
+                    reference_ids=(
+                        [best["matchedRegistryReferenceId"]]
+                        if best and best.get("matchedRegistryReferenceId")
+                        else []
+                    ),
                 )
                 if keyframe_id := first_keyframes.get(track_id):
                     detail["keyframeId"] = keyframe_id
                 detail["matchedObject"] = match_object
                 detail["trackIds"] = [track_id]
                 if best:
-                    detail["matchedKeyframeId"] = str(best.get("bestMatchedKeyframeId") or "")
-                    detail["matchedRegistryReferenceId"] = str(
-                        best.get("bestMatchedRegistryReferenceId") or ""
-                    )
+                    detail["matchedKeyframeId"] = str(best.get("matchedKeyframeId") or "")
+                    detail["matchedRegistryReferenceId"] = str(best.get("matchedRegistryReferenceId") or "")
                 if score is not None and score >= match_threshold and best:
                     detail["classification"] = "embedding_confirmed"
                     detail["verificationDecision"] = "match"
@@ -1165,7 +1166,6 @@ class ToolService:
         galleryImages: list[dict[str, Any]] | dict[str, Any] | None = None,
         topK: int | None = None,
         registryItems: list[dict[str, Any]] | dict[str, Any] | None = None,
-        best_by_max_score: bool = False,
         diagnostics: bool = False,
     ) -> dict[str, Any]:
         queryImages = self._flatten_image_records(queryImages)
@@ -1261,18 +1261,11 @@ class ToolService:
             if reference.get("registryVectorId") in reference_vectors
         }
         unsearchable_registry_ids = all_registry_ids - searchable_registry_ids
-        score_key = "maxEmbeddingScore" if best_by_max_score else "embeddingScore"
-
-        registry_hulls = {
-            str(item.get("registryId")): str(item.get("hullNumber") or "")
-            for item in (registryItems if isinstance(registryItems, list) else [registryItems] if registryItems else [])
-            if isinstance(item, dict) and item.get("registryId") is not None
-        }
         best_by_track: dict[str, dict[str, Any]] = {}
         compared_by_track: dict[str, set[str]] = {str(track_id): set() for track_id in frames_by_track}
         for track_id, track_frames in frames_by_track.items():
             for registry_id, registry_refs in refs_by_registry.items():
-                frame_scores = []
+                best_frame: tuple[float, dict[str, Any], dict[str, Any]] | None = None
                 for frame in track_frames:
                     vid = frame.get("keyframeVectorId")
                     if vid is None or frame_vectors.get(vid) is None:
@@ -1286,33 +1279,26 @@ class ToolService:
                         candidates.append((float(np.dot(frame_vector, reference_vectors[rid])), reference))
                     if candidates:
                         score, reference = max(candidates, key=lambda item: item[0])
-                        frame_scores.append((score, frame, reference))
-                top = sorted(frame_scores, key=lambda item: item[0], reverse=True)[:2]
-                if not top:
+                        if best_frame is None or score > best_frame[0]:
+                            best_frame = (score, frame, reference)
+                if best_frame is None:
                     continue
                 registry_text = str(registry_id)
                 compared_by_track[str(track_id)].add(registry_text)
-                score = float(np.mean([item[0] for item in top]))
-                max_score = float(top[0][0])
-                matched_keyframes = [item[1]["keyframeId"] for item in top]
-                matched_references = list(dict.fromkeys(
-                    item[2]["referenceId"] for item in top if item[2].get("referenceId")
-                ))
+                score, frame, reference = best_frame
                 candidate = {
                     "matchedTrackId": str(track_id),
                     "matchedRegistryId": registry_text,
-                    "matchedHullNumber": registry_hulls.get(registry_text, ""),
-                    "embeddingScore": round(score, 6), "scoreBand": self._band(score, "image"),
-                    "maxEmbeddingScore": round(max_score, 6),
-                    "bestMatchedKeyframeId": str(top[0][1].get("keyframeId") or ""),
-                    "bestMatchedRegistryReferenceId": str(top[0][2].get("referenceId") or ""),
-                    "matchedKeyframeIds": matched_keyframes, "matchedRegistryReferenceIds": matched_references,
+                    "score": round(score, 6),
+                    "scoreBand": self._band(score, "image"),
+                    "matchedKeyframeId": str(frame.get("keyframeId") or ""),
+                    "matchedRegistryReferenceId": str(reference.get("referenceId") or ""),
                 }
                 previous = best_by_track.get(str(track_id))
-                if previous is None or candidate[score_key] > previous[score_key]:
+                if previous is None or candidate["score"] > previous["score"]:
                     best_by_track[str(track_id)] = candidate
 
-        # 核心语义：每条轨迹先对所有库项比较，再只保留该轨迹的最高匹配分。
+        # 每条轨迹对每个库项只保留最高单帧，最后跨库项取最高分。
         matches = list(best_by_track.values())
         for item in matches:
             track_id = item["matchedTrackId"]
@@ -1321,10 +1307,7 @@ class ToolService:
                 and item["scoreBand"] == "mismatch"
             ):
                 item["scoreBand"] = "uncertain"
-        matches.sort(
-            key=lambda item: float(item["maxEmbeddingScore"] if best_by_max_score else item["embeddingScore"]),
-            reverse=True,
-        )
+        matches.sort(key=lambda item: float(item["score"]), reverse=True)
         if topK is not None:
             try:
                 match_limit = max(0, int(topK))
