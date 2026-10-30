@@ -43,7 +43,7 @@ _AMBIGUOUS = re.compile(
 
 
 def plan_statistics(question: str, time_anchor: str) -> dict[str, Any] | None:
-    """Return a one-tool plan only for unfiltered, unambiguous count requests."""
+    """Return a one-tool plan only for unfiltered total-count requests."""
     text = str(question or "").strip()
     if not _COUNT.search(text) or not _VESSEL.search(text) or any(
         pattern.search(text) for pattern in (_AMBIGUOUS, _FILTERED, _UNSUPPORTED_TIME)
@@ -52,19 +52,14 @@ def plan_statistics(question: str, time_anchor: str) -> dict[str, Any] | None:
 
     unregistered = bool(_UNREGISTERED.search(text))
     registered = bool(_REGISTERED.search(_UNREGISTERED.sub("", text)))
-    if unregistered and registered:
+    if unregistered or registered:
         return None
 
     try:
         time_range = _time_range(text, time_anchor)
     except (TypeError, ValueError, OverflowError):
         return None
-    if unregistered:
-        kind, tool, target = "unregistered", "match_entities", "不在库船舶数量"
-    elif registered:
-        kind, tool, target = "registered", "match_entities", "在库船舶数量"
-    else:
-        kind, tool, target = "total", "dedup_tracks", "船舶总数"
+    kind, tool, target = "total", "dedup_tracks", "船舶总数"
 
     scope = (
         f"范围：{time_range[0]} 至 {time_range[1]}"
@@ -130,7 +125,7 @@ def _time_range(text: str, time_anchor: str) -> list[str] | None:
 
 
 def statistics_answer(kind: str, result: dict[str, Any]) -> str | None:
-    """Use tool counts verbatim; never turn incomplete comparisons into a total."""
+    """Use deduplication counts verbatim; registry counts require agent verification."""
     if result.get("ok") is not True:
         return None
 
@@ -158,50 +153,7 @@ def statistics_answer(kind: str, result: dict[str, Any]) -> str | None:
             return f"{scope}共扫描 {track_count} 条轨迹；按当前可用特征去重结果为 {total}，但覆盖不完整，不能视为全量精确总数。"
         return f"{scope}共扫描 {track_count} 条轨迹，去重后船舶总数为 {total}。"
 
-    registered = count("inRegistryCount")
-    unregistered = count("unregisteredCount")
-    if registered is None or unregistered is None:
-        return None
-    if registered + unregistered != track_count:
-        return None
-    reason_names = {
-        "track_scan_incomplete": "轨迹扫描不完整",
-        "track_keyframe_vectors_missing": "部分轨迹关键帧缺少向量",
-        "registry_references_missing": "部分先验库实体没有参考图",
-        "registry_entries_without_references": "部分先验库实体没有参考图",
-        "registry_reference_vectors_missing": "部分先验库参考图缺少向量",
-        "track_registry_comparison_incomplete": "部分轨迹未完成全库比较",
-    }
-    reasons = result.get("coverageReasons")
-    gaps = (
-        "、".join(
-            reason_names.get(str(item), str(item))
-            for item in reasons
-            if str(item) not in {"vlm_verification_uncertain", "vlm_verification_failed"}
-        )
-        if isinstance(reasons, list)
-        else ""
-    )
-    suffix = f"覆盖缺口：{gaps}。" if gaps else ""
-    uncertain = count("vlmUncertainCount") or 0
-    failed = count("vlmFailedCount") or 0
-    if kind == "registered":
-        answer = f"{scope}{registered} 条轨迹经 embedding 筛选并由 VLM 确认为在库。"
-        if result.get("coverageComplete") is not True:
-            answer += "统计或核验覆盖不完整，结果可能受影响。"
-        if uncertain:
-            answer += f"另有 {uncertain} 条 embedding 候选经 VLM 核验仍不确定，按规则计入不在库。"
-        if failed:
-            answer += f"另有 {failed} 条 embedding 候选核验失败，按规则计入不在库。"
-        return answer + suffix
-    answer = f"{scope}共有 {unregistered} 条轨迹计为不在库；仅 VLM 确认匹配的轨迹计为在库。"
-    if uncertain:
-        answer += f"其中 {uncertain} 条 embedding 候选经 VLM 核验仍不确定，按规则计入不在库。"
-    if failed:
-        answer += f"其中 {failed} 条 embedding 候选核验失败，按规则计入不在库。"
-    if result.get("coverageComplete") is not True:
-        answer += "统计或核验覆盖不完整，结果可能受影响。"
-    return answer + suffix
+    return None
 
 
 def find_tool_result(state: dict[str, Any], request: dict[str, Any]) -> dict[str, Any] | None:

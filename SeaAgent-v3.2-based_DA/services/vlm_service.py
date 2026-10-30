@@ -135,7 +135,6 @@ class AgentLLMService:
         retries: int = 1,
         *,
         recover_verification_decision: bool = False,
-        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         content.extend({"type": "image_url", "image_url": {"url": _data_url(image)}} for image in images)
@@ -143,7 +142,7 @@ class AgentLLMService:
         url = f"{self.settings['base_url'].rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self.settings.get('api_key', '')}", "Content-Type": "application/json"}
         last_error: Exception | None = None
-        timeout = float(timeout_seconds or self.settings.get("timeout_seconds", 60))
+        timeout = float(self.settings.get("timeout_seconds", 60))
         # 本机 vLLM 不走代理：shell 里的 ALL_PROXY 可能是 httpx 不认的 socks:// scheme，
         # 构造代理对象时就会抛 Unknown scheme（详见 config/net.py）。
         trust_env = not is_loopback_url(self.settings.get("base_url"))
@@ -188,9 +187,6 @@ class AgentLLMService:
         reference_images: list[str],
         candidate_images: list[str],
         reference_description: str | None = None,
-        *,
-        retries: int = 1,
-        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         description = str(reference_description or "").strip()
         if description:
@@ -210,9 +206,7 @@ class AgentLLMService:
         result = self.complete_json(
             prompt,
             images,
-            retries=retries,
             recover_verification_decision=True,
-            timeout_seconds=timeout_seconds,
         )
         decision = str(result.get("decision", "uncertain")).lower()
         if decision not in {"match", "mismatch", "uncertain"}:

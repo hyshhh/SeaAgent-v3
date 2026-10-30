@@ -1529,9 +1529,9 @@ function renderEvidence(evidence) {
     coverageComplete: 'Search complete',
     searchedTrackCount: 'Tracks searched', unsearchableTrackCount: 'Unsearchable tracks',
     coverageReasons: 'Coverage reasons', appliedTimeRange: 'Applied time range',
-    candidateCount: 'Candidates', embeddingCandidateCount: 'Embedding candidates',
-    vlmMismatchCount: 'VLM mismatches', vlmUncertainCount: 'VLM uncertain', vlmFailedCount: 'VLM failures',
-    inRegistryCount: 'VLM confirmed in registry', unregisteredCount: 'Counted outside registry',
+    candidateCount: 'Candidates', embeddingCandidateCount: 'Requires VLM verification',
+    outsideRegistryCount: 'Below embedding exclusion', unresolvedTrackCount: 'Unresolved embedding tracks',
+    embeddingCoverageComplete: 'Embedding search complete', nextStep: 'Recommended next step',
     confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',
   };
   const coverageReasonLabels = {
@@ -1541,8 +1541,7 @@ function renderEvidence(evidence) {
     registry_entries_without_references: 'Registry entries lack references',
     registry_reference_vectors_missing: 'Registry vectors missing',
     track_registry_comparison_incomplete: 'Track comparison incomplete',
-    vlm_verification_uncertain: 'VLM verification uncertain',
-    vlm_verification_failed: 'VLM verification failed',
+    verification_candidates_truncated: 'Verification candidates truncated',
   };
   const statsToShow = queryByTool.length
     ? queryByTool.map((item) => ({ tool: item.tool, values: item.statistics || {} }))

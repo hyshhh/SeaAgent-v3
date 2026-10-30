@@ -25,12 +25,11 @@ TOOL_STATISTIC_KEYS = (
     "trackCount",
     "highThresholdShipCount",
     "lowThresholdShipCount",
-    "inRegistryCount",
-    "unregisteredCount",
+    "outsideRegistryCount",
     "embeddingCandidateCount",
-    "vlmMismatchCount",
-    "vlmUncertainCount",
-    "vlmFailedCount",
+    "unresolvedTrackCount",
+    "embeddingCoverageComplete",
+    "nextStep",
     "coverageComplete",
     "searchedTrackCount",
     "candidateCount",
@@ -200,6 +199,14 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
     rows: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     registry_matching = any(str(record.get("tool") or "") in REGISTRY_MATCH_TOOLS for record in records)
+    verifications: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if str(record.get("tool") or "") != "verify_vessel_images":
+            continue
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        track_id = str(result.get("trackId") or "")
+        if track_id:
+            verifications[track_id] = result
 
     def touch(track_id: Any) -> dict[str, Any] | None:
         value = str(track_id or "").strip()
@@ -250,16 +257,24 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             band = str(candidate.get("scoreBand") or candidate.get("band") or "")
             decision = str(candidate.get("verificationDecision") or "")
             classification = str(candidate.get("classification") or "")
+            verification = verifications.get(track_id, {})
+            if decision == "pending" and verification:
+                decision = str(verification.get("decision") or "uncertain")
+                classification = (
+                    "vlm_failed"
+                    if verification.get("ok") is False or verification.get("error")
+                    else f"vlm_{decision}"
+                )
             status = (
-                "VLM failed; counted outside registry"
+                "VLM failed; unresolved"
                 if classification == "vlm_failed"
                 else {
                     "match": "VLM confirmed in registry",
                     "mismatch": "VLM mismatch; counted outside registry",
-                    "uncertain": "VLM uncertain; counted outside registry",
-                    "pending": "VLM verification pending",
-                    "not_candidate": "Below embedding threshold; counted outside registry",
-                    "unsearchable": "Unsearchable; counted outside registry",
+                    "uncertain": "VLM uncertain; unresolved",
+                    "pending": "VLM verification required",
+                    "not_in_registry": "Below embedding exclusion; counted outside registry",
+                    "unresolved": "Embedding evidence unresolved",
                 }.get(decision, "Unconfirmed")
                 if decision
                 else {"match": "Threshold match", "mismatch": "Classified not in registry"}.get(
@@ -327,7 +342,7 @@ def build_evidence_payload(records: list[dict[str, Any]], *, limit: int = 60) ->
         "shipSegmentIds": segments,
         "registryReferenceIds": references,
         "trackIds": tracks,
-        "trackRows": _display_rows(successful, limit),
+        "trackRows": _display_rows(records, limit),
         "registryMatchUsed": any(str(record.get("tool") or "") in REGISTRY_MATCH_TOOLS for record in successful),
         "trackRowsTruncated": any(
             isinstance(record.get("result"), dict)

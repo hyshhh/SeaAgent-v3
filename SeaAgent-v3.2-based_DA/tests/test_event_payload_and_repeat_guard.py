@@ -163,31 +163,39 @@ def test_registry_assistance_result_keeps_matches_scores_and_coverage_for_reflec
     assert helper["candidateCount"] == 1
 
 
-def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path):
+def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evidence(tmp_path):
     state = SharedTaskState("count", artifact_dir=tmp_path, artifact_root=tmp_path)
     guard = RepeatToolCallMiddleware(state=state, scope="executor")
     full_result = {
         "ok": True,
+        "status": "verification_required",
         "trackCount": 2,
-        "inRegistryCount": 1,
-        "unregisteredCount": 1,
+        "outsideRegistryCount": 1,
         "embeddingCandidateCount": 1,
-        "vlmMismatchCount": 0,
-        "vlmUncertainCount": 0,
-        "vlmFailedCount": 0,
-        "coverageComplete": True,
+        "unresolvedTrackCount": 0,
+        "embeddingCoverageComplete": True,
+        "nextStep": "verify_vessel_images",
+        "recommendation": "Verify every candidate.",
+        "coverageReasons": [],
+        "appliedTimeRange": None,
         "matches": [
             {
                 "trackId": "t-1", "score": 0.91, "scoreBand": "match",
-                "classification": "vlm_confirmed", "verificationDecision": "match",
+                "classification": "verification_pending", "verificationDecision": "pending",
+                "matchedKeyframeId": "kf-1", "matchedRegistryReferenceId": "ref-1",
                 "matchedObject": {"hullNumber": "0857"},
             },
             {
                 "trackId": "t-2", "score": 0.42, "scoreBand": "mismatch",
-                "classification": "below_threshold", "verificationDecision": "not_candidate",
+                "classification": "below_exclusion", "verificationDecision": "not_in_registry",
                 "matchedObject": {"hullNumber": "003"},
             },
         ],
+        "verificationCandidates": [{
+            "trackId": "t-1", "score": 0.91, "scoreBand": "match",
+            "matchedKeyframeId": "kf-1", "matchedRegistryReferenceId": "ref-1",
+            "matchedObject": {"hullNumber": "0857"},
+        }],
     }
     message = guard.wrap_tool_call(
         _Request("match_entities", {}),
@@ -200,14 +208,21 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
 
     assert json.loads(message.content) == {
         "ok": True,
+        "status": "verification_required",
         "trackCount": 2,
-        "inRegistryCount": 1,
-        "unregisteredCount": 1,
+        "outsideRegistryCount": 1,
         "embeddingCandidateCount": 1,
-        "vlmMismatchCount": 0,
-        "vlmUncertainCount": 0,
-        "vlmFailedCount": 0,
-        "coverageComplete": True,
+        "unresolvedTrackCount": 0,
+        "embeddingCoverageComplete": True,
+        "nextStep": "verify_vessel_images",
+        "recommendation": "Verify every candidate.",
+        "coverageReasons": [],
+        "appliedTimeRange": None,
+        "verificationCandidates": [{
+            "trackId": "t-1", "score": 0.91, "scoreBand": "match",
+            "matchedKeyframeId": "kf-1", "matchedRegistryReferenceId": "ref-1",
+            "matchedObject": {"hullNumber": "0857"},
+        }],
     }
     assert message.artifact["full_result"] == json.loads(message.content)
     assert state.snapshot()["tool_results"][0]["result"] == json.loads(message.content)
@@ -225,14 +240,17 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
                 for item in full_result["matches"]
             ],
             "trackCount": 2,
-            "inRegistryCount": 1,
-            "unregisteredCount": 1,
+            "status": "verification_required",
+            "outsideRegistryCount": 1,
             "embeddingCandidateCount": 1,
-            "vlmMismatchCount": 0,
-            "vlmUncertainCount": 0,
-            "vlmFailedCount": 0,
-            "coverageComplete": True,
+            "unresolvedTrackCount": 0,
+            "embeddingCoverageComplete": True,
+            "nextStep": "verify_vessel_images",
+            "recommendation": "Verify every candidate.",
+            "coverageReasons": [],
+            "appliedTimeRange": None,
             "truncated": False,
+            "verificationCandidatesTruncated": False,
         },
     }]
     trace = _Trace(None, event_limit=4000, shared_state=state)
@@ -241,7 +259,7 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
     assert result["tool_records"][0]["result"] == json.loads(message.content)
     assert result["enrichedEvidence"]["trackIds"] == ["t-1", "t-2"]
     assert result["enrichedEvidence"]["displayGroups"][0]["score"] == 0.91
-    assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "VLM confirmed in registry"
+    assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "VLM verification required"
     assert state.evidence_artifact_results() == []
 
 
@@ -253,10 +271,9 @@ def test_statistics_model_results_keep_the_applied_time_range():
     cases = (
         ("dedup_tracks", {"trackCount": 0, "highThresholdShipCount": 0, "lowThresholdShipCount": 0}),
         ("match_entities", {
-            "trackCount": 0, "inRegistryCount": 0, "unregisteredCount": 0,
-            "embeddingCandidateCount": 0, "vlmMismatchCount": 0,
-            "vlmUncertainCount": 0, "vlmFailedCount": 0,
-            "coverageReasons": [],
+            "status": "complete", "trackCount": 0, "outsideRegistryCount": 0,
+            "embeddingCandidateCount": 0, "unresolvedTrackCount": 0,
+            "embeddingCoverageComplete": True, "coverageReasons": [],
         }),
     )
     for name, counts in cases:

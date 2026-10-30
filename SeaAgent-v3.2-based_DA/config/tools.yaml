@@ -31,7 +31,8 @@ tools:
     description: >-
       只核验一个已召回的轨迹候选，不搜索轨迹。参考证据三选一：用户图片 reference_image、用户描述 reference_description、
       先验库图片 reference_registry_reference_id；候选证据二选一：candidate_image 或候选的 matchedKeyframeId。
-      对不确定候选逐个调用。返回 decision（match、mismatch 或 uncertain）及最多三条依据；证据不足或只有颜色相似时返回 uncertain。
+      识别和统计任务的候选均逐条调用。返回 trackId、decision（match、mismatch 或 uncertain）及最多三条依据；
+      证据不足或只有颜色相似时返回 uncertain。
       若模型 JSON 格式异常但 decision 唯一明确，会标记 formatRecovered=true 且不返回依据；歧义结果仍报错。
     arguments:
       reference_image: {type: string, required: false, description: 用户提供的参考图片路径；与另外两种 reference 参数互斥。}
@@ -51,10 +52,13 @@ tools:
   - name: match_entities
     label: 实体先验库匹配统计
     description: >-
-      不去重；逐轨迹与先验库做 embedding 检索，仅对达到 image_match 阈值的候选调用 VLM。
-      仅 VLM match 计为在库；低于阈值、VLM mismatch/uncertain/failed 均按口径计为不在库，并分别报告核验情况。
-      返回 trackCount、inRegistryCount、unregisteredCount、embeddingCandidateCount、vlmMismatchCount、vlmUncertainCount、vlmFailedCount、coverageComplete、coverageReasons 和 appliedTimeRange；逐轨迹证据最多返回 60 条。
-      轨迹或向量不可检索时，仍计入不在库但将覆盖标记为不完整。省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange。
+      不去重；逐轨迹与先验库做 embedding 检索，不在工具内部调用 VLM。
+      返回 trackCount、outsideRegistryCount、embeddingCandidateCount、unresolvedTrackCount、embeddingCoverageComplete、
+      coverageReasons、appliedTimeRange，以及最多 60 个 verificationCandidates。
+      有候选时返回 status=verification_required、nextStep=verify_vessel_images 和 recommendation；
+      Agent 必须对每个候选使用 matchedRegistryReferenceId + matchedKeyframeId 调用 verify_vessel_images；多个候选可在同一回合并行调用。
+      仅 VLM match 计为在库，VLM mismatch 计为不在库，uncertain/失败保持未解决。
+      省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
 

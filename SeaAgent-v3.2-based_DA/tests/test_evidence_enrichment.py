@@ -95,9 +95,10 @@ def test_compact_count_fields_feed_frontend_statistics():
 def test_duplicate_statistics_from_tool_and_private_evidence_are_shown_once():
     result = {
         "trackCount": 214,
-        "inRegistryCount": 24,
-        "unregisteredCount": 0,
-        "coverageComplete": False,
+        "outsideRegistryCount": 180,
+        "embeddingCandidateCount": 34,
+        "unresolvedTrackCount": 0,
+        "embeddingCoverageComplete": False,
         "coverageReasons": ["track_keyframe_vectors_missing"],
     }
     payload = build_evidence_payload([
@@ -115,9 +116,10 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
     payload = build_evidence_payload([
         _record("match_entities", {
             "trackCount": 1,
-            "inRegistryCount": 1,
-            "unregisteredCount": 0,
-            "coverageComplete": True,
+            "outsideRegistryCount": 0,
+            "embeddingCandidateCount": 1,
+            "unresolvedTrackCount": 0,
+            "embeddingCoverageComplete": True,
         }),
         _record("match_entities", {
             "matches": [{
@@ -176,6 +178,59 @@ def test_evidence_rows_keep_one_keyframe_track_time_and_explicit_registry_match(
     }]
     assert payload["registryMatchUsed"] is True
     assert payload["trackRowsTruncated"] is True
+
+
+def test_candidate_evidence_uses_the_agent_vlm_result_for_its_track():
+    payload = build_evidence_payload([
+        _record("match_entities", {
+            "matches": [{
+                "trackId": "t-1",
+                "score": 0.81,
+                "scoreBand": "match",
+                "classification": "verification_pending",
+                "verificationDecision": "pending",
+                "matchedKeyframeId": "kf-1",
+                "matchedRegistryReferenceId": "ref-1",
+                "matchedObject": {"hullNumber": "0857"},
+            }],
+        }),
+        _record("verify_vessel_images", {
+            "ok": True,
+            "trackId": "t-1",
+            "decision": "match",
+            "keyframeId": "kf-1",
+            "registryReferenceId": "ref-1",
+        }),
+    ])
+
+    assert payload["trackRows"][0]["registryMatch"] == {
+        "status": "VLM confirmed in registry",
+        "score": 0.81,
+        "matchedObject": {"hullNumber": "0857"},
+        "verificationDecision": "match",
+    }
+
+
+def test_failed_candidate_verification_remains_visible_as_unresolved():
+    payload = build_evidence_payload([
+        _record("match_entities", {
+            "matches": [{
+                "trackId": "t-7",
+                "score": 0.73,
+                "scoreBand": "match",
+                "classification": "verification_pending",
+                "verificationDecision": "pending",
+            }],
+        }),
+        _record("verify_vessel_images", {
+            "ok": False,
+            "trackId": "t-7",
+            "decision": "uncertain",
+            "error": "tool_failed",
+        }, status="error"),
+    ])
+
+    assert payload["trackRows"][0]["registryMatch"]["status"] == "VLM failed; unresolved"
 
 
 def test_explicit_track_keyframe_wins_over_a_match_frame():

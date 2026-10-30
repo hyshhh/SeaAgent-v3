@@ -24,24 +24,24 @@ _MODEL_RESULT_FIELDS = {
         "ok", "status", "matches", "coverageComplete", "registryFound", "nextStep",
     ),
     "verify_vessel_images": (
-        "ok", "decision", "facts", "formatRecovered", "registryReferenceId", "keyframeId",
+        "ok", "decision", "trackId", "facts", "formatRecovered", "registryReferenceId", "keyframeId",
     ),
     "dedup_tracks": (
         "ok", "trackCount", "highThresholdShipCount", "lowThresholdShipCount",
         "coverageComplete", "appliedTimeRange",
     ),
     "match_entities": (
-        "ok", "trackCount", "inRegistryCount", "unregisteredCount",
-        "coverageComplete",
-        "embeddingCandidateCount", "vlmMismatchCount", "vlmUncertainCount", "vlmFailedCount",
-        "coverageReasons", "appliedTimeRange",
+        "ok", "status", "trackCount", "outsideRegistryCount", "embeddingCandidateCount",
+        "unresolvedTrackCount", "embeddingCoverageComplete", "nextStep", "recommendation",
+        "coverageReasons", "appliedTimeRange", "verificationCandidatesTruncated",
+        "verificationCandidates",
     ),
     "show_evidence": ("ok", "trackIds"),
 }
 _MATCH_FIELDS = (
     "trackId", "startTimeText", "endTimeText", "keyframeId", "score",
     "scoreBand", "registryReferenceIds", "matchedKeyframeId", "matchedRegistryReferenceId",
-    "classification", "verificationDecision", "verificationError",
+    "classification", "verificationDecision",
 )
 
 
@@ -59,7 +59,10 @@ def _model_result(name: str, result: Any) -> Any:
     if name not in _MODEL_RESULT_FIELDS or not isinstance(result, dict):
         return result
     if result.get("ok") is False:
-        fields = ("ok", "error", "errorType", "tool", "timeoutSeconds", "hint", "decision", "registryReferenceId", "keyframeId")
+        fields = (
+            "ok", "error", "errorType", "tool", "timeoutSeconds", "hint", "decision",
+            "trackId", "registryReferenceId", "keyframeId",
+        )
         compact = {key: result[key] for key in fields if result.get(key) is not None}
         if "hint" in compact:
             compact["hint"] = str(compact["hint"])[:400]
@@ -77,6 +80,26 @@ def _model_result(name: str, result: Any) -> Any:
             {key: match[key] for key in _MATCH_FIELDS if key in match}
             for match in matches[:6]
             if isinstance(match, dict)
+        ]
+    if name == "match_entities" and isinstance(compact.get("verificationCandidates"), list):
+        compact["verificationCandidates"] = [
+            {
+                **{
+                    key: candidate[key]
+                    for key in (
+                        "trackId", "score", "scoreBand", "matchedKeyframeId",
+                        "matchedRegistryReferenceId",
+                    )
+                    if key in candidate
+                },
+                **(
+                    {"matchedObject": candidate["matchedObject"]}
+                    if isinstance(candidate.get("matchedObject"), dict)
+                    else {}
+                ),
+            }
+            for candidate in compact["verificationCandidates"][:60]
+            if isinstance(candidate, dict)
         ]
     if isinstance(compact.get("facts"), list):
         compact["facts"] = [str(fact)[:160] for fact in compact["facts"][:3]]
@@ -275,14 +298,17 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                         **{
                             key: result[key]
                             for key in (
-                                "inRegistryCount", "unregisteredCount", "embeddingCandidateCount",
-                                "vlmMismatchCount", "vlmUncertainCount", "vlmFailedCount",
-                                "coverageComplete", "coverageReasons", "appliedTimeRange",
+                                "status", "outsideRegistryCount", "embeddingCandidateCount",
+                                "unresolvedTrackCount", "embeddingCoverageComplete", "nextStep",
+                                "recommendation", "coverageReasons", "appliedTimeRange",
                             )
                             if key in result
                         },
                         "truncated": bool(result.get("matchesTruncated"))
                         or len(result.get("matches", [])) > len(rows),
+                        "verificationCandidatesTruncated": bool(
+                            result.get("verificationCandidatesTruncated")
+                        ),
                     },
                 })
             except OSError:
