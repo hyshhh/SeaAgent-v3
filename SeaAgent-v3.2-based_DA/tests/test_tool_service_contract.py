@@ -24,7 +24,7 @@ def test_direct_recognition_returns_scored_candidates_not_all_tracks():
     )
     service._track_text_scores = lambda *_args: {
         "t-7": {
-            "embeddingScore": 0.91,
+            "score": 0.91,
             "scoreBand": "match",
             "matchedKeyframeIds": [],
         }
@@ -372,7 +372,6 @@ def test_registry_count_matches_each_track_without_deduplication():
             }],
             "registryCoverageComplete": True,
             "missingRegistryVectorCount": 0,
-            "unsearchableRegistryCount": 0,
         }
 
     service._match_images = match_images
@@ -651,7 +650,6 @@ def test_image_match_coverage_compares_registry_ids_not_only_their_count():
 
     assert result["registryCoverageComplete"] is False
     assert result["uncomparedTrackIds"] == ["t-1"]
-    assert result["unsearchableRegistryCount"] == 1
 
 
 def test_registry_count_verifies_only_the_gray_zone_without_calling_vlm():
@@ -701,7 +699,6 @@ def test_registry_count_verifies_only_the_gray_zone_without_calling_vlm():
         ],
         "registryCoverageComplete": True,
         "missingRegistryVectorCount": 0,
-        "unsearchableRegistryCount": 0,
     }
     service._verify_image_pair = lambda *_args, **_kwargs: (_ for _ in ()).throw(
         AssertionError("VLM calls must be made by verify_vessel_images, not match_entities")
@@ -783,7 +780,6 @@ def test_image_match_reports_registry_vector_gaps_without_searchable_track_frame
     )
 
     assert result["missingRegistryVectorCount"] == 1
-    assert result["unsearchableRegistryCount"] == 0
 
 
 def test_index_read_errors_fail_matching_instead_of_becoming_partial_counts():
@@ -874,7 +870,6 @@ def test_image_match_does_not_encode_or_persist_missing_vectors():
         "unscoredTrackIds": ["t-1"],
         "registryCoverageComplete": False,
         "missingRegistryVectorCount": 1,
-        "unsearchableRegistryCount": 1,
         "uncomparedTrackIds": ["t-1"],
     }
     assert service.vectors.keyframes.writes == 0

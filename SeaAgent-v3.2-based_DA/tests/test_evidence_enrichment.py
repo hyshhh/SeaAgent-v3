@@ -35,8 +35,8 @@ def test_display_groups_bind_keyframes_to_a_track_and_rank_by_score():
         _record("match_registry_tracks", {
             "ok": True,
             "matches": [
-                {"matchedTrackId": "t-1", "matchedKeyframeIds": ["kf-1"], "matchedRegistryReferenceIds": ["ref-1"], "embeddingScore": 0.61, "scoreBand": "uncertain"},
-                {"matchedTrackId": "t-2", "matchedKeyframeIds": ["kf-2"], "matchedRegistryReferenceIds": ["ref-2"], "embeddingScore": 0.88, "scoreBand": "match"},
+                {"matchedTrackId": "t-1", "matchedKeyframeIds": ["kf-1"], "registryReferenceIds": ["ref-1"], "score": 0.61, "scoreBand": "uncertain"},
+                {"matchedTrackId": "t-2", "matchedKeyframeIds": ["kf-2"], "registryReferenceIds": ["ref-2"], "score": 0.88, "scoreBand": "match"},
             ],
         }),
     ]

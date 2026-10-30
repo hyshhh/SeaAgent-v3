@@ -17,7 +17,6 @@ TRACK_ID_KEYS = ("trackIds", "shownTrackIds")
 REFERENCE_ID_KEYS = (
     "registryReferenceIds",
     "shownRegistryReferenceIds",
-    "matchedRegistryReferenceIds",
     "queryRegistryReferenceIds",
 )
 TOOL_STATISTIC_KEYS = (
@@ -174,7 +173,7 @@ def _display_groups(records: list[dict[str, Any]], limit: int) -> list[dict[str,
             group["keyframeIds"].extend(_collect_ids(candidate, KEYFRAME_ID_KEYS))
             group["shipSegmentIds"].extend(_collect_ids(candidate, SEGMENT_ID_KEYS))
             group["registryReferenceIds"].extend(_collect_ids(candidate, REFERENCE_ID_KEYS))
-            score = candidate.get("embeddingScore", candidate.get("score"))
+            score = candidate.get("score")
             if isinstance(score, (int, float)) and (group["score"] is None or score > group["score"]):
                 group["score"] = float(score)
                 match_object = candidate.get("matchedObject")
@@ -252,7 +251,7 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             copy_track_evidence(row, candidate)
             if tool not in REGISTRY_MATCH_TOOLS or not registry_matching:
                 continue
-            score = candidate.get("score", candidate.get("embeddingScore"))
+            score = candidate.get("score")
             score = float(score) if isinstance(score, (int, float)) else None
             object_value = candidate.get("matchedObject")
             band = str(candidate.get("scoreBand") or candidate.get("band") or "")

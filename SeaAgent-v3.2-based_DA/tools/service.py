@@ -271,11 +271,11 @@ class ToolService:
             score = values[0][0]
             scored.append({
                 "matchedTrackId": track_id,
-                "embeddingScore": round(score, 6),
+                "score": round(score, 6),
                 "scoreBand": self._band(score, "text"),
                 "matchedKeyframeIds": [item[1]["keyframeId"] for item in values[:2]],
             })
-        scored.sort(key=lambda item: float(item["embeddingScore"]), reverse=True)
+        scored.sort(key=lambda item: float(item["score"]), reverse=True)
         return {str(item["matchedTrackId"]): item for item in scored}
 
     # 2.7 按图像相似度给轨迹打分
@@ -309,12 +309,12 @@ class ToolService:
             scored.append(
                 {
                     "matchedTrackId": track_id,
-                    "embeddingScore": round(score, 6),
+                    "score": round(score, 6),
                     "scoreBand": self._band(score, "image"),
                     "matchedKeyframeIds": [item[1]["keyframeId"] for item in values[:2]],
                 }
             )
-        scored.sort(key=lambda item: float(item["embeddingScore"]), reverse=True)
+        scored.sort(key=lambda item: float(item["score"]), reverse=True)
         return {str(item["matchedTrackId"]): item for item in scored}
 
     # 2.8 轨迹识别的内部实现
@@ -380,9 +380,9 @@ class ToolService:
                 )
             )
             scored_items = [
-                (float(item["embeddingScore"]), item, mode)
+                (float(item["score"]), item, mode)
                 for item, mode in ((text_item, "text"), (image_item, "image"))
-                if item.get("embeddingScore") is not None
+                if item.get("score") is not None
             ]
             best_score, best_item, best_mode = max(
                 scored_items, default=(None, {}, "text"), key=lambda item: item[0] or 0
@@ -1209,19 +1209,10 @@ class ToolService:
                 reference_vectors = self._load_indexed_vectors(
                     references, vector_key="registryVectorId", index=self.vectors.registry
                 )
-                registry_ids = set(declared_registry_ids) | {
-                    str(item["registryId"]) for item in references
-                }
-                searchable_registry_ids = {
-                    str(item["registryId"])
-                    for item in references
-                    if item.get("registryVectorId") in reference_vectors
-                }
                 result.update({
                     "missingRegistryVectorCount": len(references) - sum(
                         item.get("registryVectorId") in reference_vectors for item in references
                     ),
-                    "unsearchableRegistryCount": len(registry_ids - searchable_registry_ids),
                     "uncomparedTrackIds": list(self._group(galleryImages, "trackId")),
                 })
             return result
@@ -1255,12 +1246,6 @@ class ToolService:
         missing_registry_vector_count = len(references) - sum(
             reference.get("registryVectorId") in reference_vectors for reference in references
         )
-        searchable_registry_ids = {
-            str(reference["registryId"])
-            for reference in references
-            if reference.get("registryVectorId") in reference_vectors
-        }
-        unsearchable_registry_ids = all_registry_ids - searchable_registry_ids
         best_by_track: dict[str, dict[str, Any]] = {}
         compared_by_track: dict[str, set[str]] = {str(track_id): set() for track_id in frames_by_track}
         for track_id, track_frames in frames_by_track.items():
@@ -1330,7 +1315,6 @@ class ToolService:
         if diagnostics:
             result.update({
                 "missingRegistryVectorCount": missing_registry_vector_count,
-                "unsearchableRegistryCount": len(unsearchable_registry_ids),
                 "uncomparedTrackIds": [
                     track_id for track_id, ids in compared_by_track.items()
                     if missing_registry_vector_count or not all_registry_ids.issubset(ids)
