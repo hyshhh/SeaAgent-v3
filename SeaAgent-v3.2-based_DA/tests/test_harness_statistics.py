@@ -57,35 +57,41 @@ def test_complex_or_filtered_statistics_remain_with_planner(question):
     assert plan_statistics(question, ANCHOR) is None
 
 
-def test_incomplete_unregistered_result_never_reports_zero_as_the_total():
+def test_unregistered_result_uses_vlm_confirmation_rule_and_reports_coverage_gap():
     answer = statistics_answer(
         "unregistered",
         {
             "ok": True,
             "trackCount": 214,
             "inRegistryCount": 24,
-            "unregisteredCount": 0,
-            "unclassifiedTrackCount": 190,
+            "unregisteredCount": 190,
+            "embeddingCandidateCount": 24,
+            "vlmMismatchCount": 3,
+            "vlmUncertainCount": 1,
+            "vlmFailedCount": 0,
             "coverageComplete": False,
             "coverageReasons": ["registry_entries_without_references"],
             "appliedTimeRange": None,
         },
     )
 
-    assert "无法确定不在库船舶的准确数量" in answer
-    assert "190 条未分类" in answer
+    assert "190 条轨迹计为不在库" in answer
+    assert "1 条 embedding 候选经 VLM 核验仍不确定" in answer
     assert "先验库实体没有参考图" in answer
+    assert answer.count("核验仍不确定") == 1
 
 
-def test_registered_result_labels_embedding_and_incomplete_coverage():
+def test_registered_result_counts_only_vlm_confirmed_matches():
     answer = statistics_answer(
         "registered",
         {
             "ok": True,
             "trackCount": 214,
             "inRegistryCount": 24,
-            "unregisteredCount": 0,
-            "unclassifiedTrackCount": 190,
+            "unregisteredCount": 190,
+            "embeddingCandidateCount": 24,
+            "vlmMismatchCount": 3,
+            "vlmUncertainCount": 1,
             "coverageComplete": False,
             "coverageReasons": ["registry_entries_without_references"],
             "appliedTimeRange": None,
@@ -93,9 +99,8 @@ def test_registered_result_labels_embedding_and_incomplete_coverage():
     )
 
     assert "24 条轨迹" in answer
-    assert "不代表 VLM 已确认" in answer
-    assert "190 条轨迹未分类" in answer
-    assert "匹配数量可能偏低" in answer
+    assert "VLM 确认为在库" in answer
+    assert "统计或核验覆盖不完整" in answer
 
 
 def test_total_result_preserves_dedup_range_and_coverage_status():
@@ -156,13 +161,15 @@ class _Tool:
                 "ok": True,
                 "trackCount": 214,
                 "inRegistryCount": 24,
-                "unregisteredCount": 0,
-                "unclassifiedTrackCount": 190,
+                "unregisteredCount": 190,
+                "embeddingCandidateCount": 24,
+                "vlmMismatchCount": 3,
+                "vlmUncertainCount": 1,
                 "coverageComplete": False,
                 "coverageReasons": ["registry_entries_without_references"],
                 "appliedTimeRange": None,
             },
-            "24 条轨迹",
+            "24 条轨迹经 embedding 筛选并由 VLM 确认为在库",
         ),
         (
             "视频中有多少艘不在库船？",
@@ -171,13 +178,15 @@ class _Tool:
                 "ok": True,
                 "trackCount": 214,
                 "inRegistryCount": 24,
-                "unregisteredCount": 0,
-                "unclassifiedTrackCount": 190,
+                "unregisteredCount": 190,
+                "embeddingCandidateCount": 24,
+                "vlmMismatchCount": 3,
+                "vlmUncertainCount": 1,
                 "coverageComplete": False,
                 "coverageReasons": ["registry_entries_without_references"],
                 "appliedTimeRange": None,
             },
-            "无法确定不在库船舶的准确数量",
+            "190 条轨迹计为不在库",
         ),
     ],
 )

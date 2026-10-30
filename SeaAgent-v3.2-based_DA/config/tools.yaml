@@ -51,8 +51,10 @@ tools:
   - name: match_entities
     label: 实体先验库匹配统计
     description: >-
-      将时间范围内的每条轨迹分别与先验库图片匹配，不做轨迹去重；任一关键帧分数达到确认阈值即计为达到在库匹配阈值，不代表 VLM 已确认。
-      返回 trackCount、inRegistryCount、unregisteredCount、unclassifiedTrackCount、coverageComplete、coverageReasons 和 appliedTimeRange。只有完整比较所有库项且最高分不高于排除阈值才计为不在库；灰区分数、缺失向量或未比较轨迹归为未分类。coverageComplete 还要求轨迹扫描完整、轨迹可检索、先验库向量可用且每条轨迹完成与全部先验库实体比较。省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange，供核对。
+      不去重；逐轨迹与先验库做 embedding 检索，仅对达到 image_match 阈值的候选调用 VLM。
+      仅 VLM match 计为在库；低于阈值、VLM mismatch/uncertain/failed 均按口径计为不在库，并分别报告核验情况。
+      返回 trackCount、inRegistryCount、unregisteredCount、embeddingCandidateCount、vlmMismatchCount、vlmUncertainCount、vlmFailedCount、coverageComplete、coverageReasons 和 appliedTimeRange；逐轨迹证据最多返回 60 条。
+      轨迹或向量不可检索时，仍计入不在库但将覆盖标记为不完整。省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
 

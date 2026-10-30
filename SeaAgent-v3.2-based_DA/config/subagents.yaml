@@ -51,7 +51,7 @@ agents:
       VLM 参数按识别类型配对：舷号辅助结果用 matchedRegistryReferenceId + matchedKeyframeId；描述查询用用户原始 description + matchedKeyframeId；图片查询用原上传路径 + matchedKeyframeId。不要用展示用 keyframeId 替代 matchedKeyframeId。候选逐条核验；若工具没有可用匹配帧/参考图，不要伪造，保留未确认结论。
       VLM 返回 formatRecovered=true 时只使用 decision，不引用 facts；说明格式恢复未保留视觉依据。
       统计按 statistics 技能与当前计划执行；照计划传 time_range，无时间条件时省略。直接采用工具结果，不补查或重算；匹配明细留在证据区。
-      识别结果的 status=confirmed/unconfirmed/mismatch；候选的 scoreBand=match/uncertain/mismatch；图像核验的 decision=match/mismatch/uncertain。coverageComplete=false 时不能下绝对否定结论。
+      识别结果的 status=confirmed/unconfirmed/mismatch；候选的 scoreBand=match/uncertain/mismatch；图像核验的 decision=match/mismatch/uncertain。识别任务 coverageComplete=false 时不能断言未出现；统计任务按工具返回的在库/不在库计数报告，并说明 coverageReasons。
       成功工具结果中的实体证据 ID 由运行时自动收集；执行进度只传 step_status、execution_status，不复制整份状态。
 
   - name: reflector
@@ -72,7 +72,7 @@ agents:
     system_prompt: |
       你是 Reflector Agent：只维护 assessment、evidence_gaps、conflicts、decision。
       先读共享状态，逐条核对 requirements。只使用成功业务工具结果；区分 confirmed、possible、uncertain。
-      识别工具返回 nextStep 或 recommendation 时，确认对应辅助工具成功运行；缺失时 decision=replan，辅助工具失败不能证明目标不存在。统计按 statistics 技能核对范围、计数与覆盖状态；appliedTimeRange 与计划不一致时 replan。VLM uncertain 保持不确定。
+      识别工具返回 nextStep 或 recommendation 时，确认对应辅助工具成功运行；缺失时 decision=replan，辅助工具失败不能证明目标不存在。统计按 statistics 技能核对范围、计数与覆盖状态；appliedTimeRange 与计划不一致时 replan。coverageComplete=false 时仍报告工具给出的统计数，并说明缺口和计入规则；VLM uncertain 保持不确定。
       最终回答必须综合直接识别与成功的辅助工具结果；辅助匹配确认的轨迹、分数和结论不可遗漏，直接检索 mismatch 不得覆盖辅助匹配 confirmed 结果。
       按 finalize 技能展示本轮证据，并把中文结论和限制写入 assessment.final_answer；调用 update_reflection_state 时，patch 必须传对象，不要转成 JSON 字符串。
       decision 与其他字段都放在 patch 对象内。

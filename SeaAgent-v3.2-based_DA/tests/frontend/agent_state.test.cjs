@@ -191,25 +191,26 @@ test('compact count result metadata remains visible in the evidence panel', () =
   assert.match(html, /Search complete: No/);
 });
 
-test('registry count metadata distinguishes matched tracks from raw tracks', () => {
+test('registry count metadata follows VLM-confirmed two-way classification', () => {
   const ui = page();
   ui.run(`renderEvidence({ statistics: { queryByTool: [{
     tool: 'match_entities',
     statistics: {
-      trackCount: 24, inRegistryCount: 6, unregisteredCount: 16, unclassifiedTrackCount: 2,
-      coverageComplete: false, trackScanComplete: true, trackCoverageComplete: true,
-      registryCoverageComplete: false, coverageReasons: ['registry_reference_vectors_missing'],
-      unsearchableRegistryCount: 1, appliedTimeRange: ['2026-10-27T00:00:00+08:00', '2026-10-27T23:59:59+08:00']
+      trackCount: 24, inRegistryCount: 6, unregisteredCount: 18, embeddingCandidateCount: 8,
+      vlmMismatchCount: 2, vlmUncertainCount: 1, vlmFailedCount: 1,
+      coverageComplete: false, coverageReasons: ['vlm_verification_failed'],
+      appliedTimeRange: ['2026-10-27T00:00:00+08:00', '2026-10-27T23:59:59+08:00']
     }
   }] } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /Tracks matched: 24/);
-  assert.match(html, /Tracks above match threshold: 6/);
-  assert.match(html, /Tracks classified not in registry: 16/);
-  assert.match(html, /Unclassified tracks: 2/);
-  assert.match(html, /Registry match complete: No/);
-  assert.match(html, /Registry vectors missing/);
-  assert.match(html, /Unsearchable registry entities: 1/);
+  assert.match(html, /VLM confirmed in registry: 6/);
+  assert.match(html, /Counted outside registry: 18/);
+  assert.match(html, /Embedding candidates: 8/);
+  assert.match(html, /VLM mismatches: 2/);
+  assert.match(html, /VLM uncertain: 1/);
+  assert.match(html, /VLM failures: 1/);
+  assert.match(html, /VLM verification failed/);
   assert.match(html, /Applied time range: 2026-10-27T00:00:00\+08:00, 2026-10-27T23:59:59\+08:00/);
 });
 

@@ -32,18 +32,16 @@ _MODEL_RESULT_FIELDS = {
     ),
     "match_entities": (
         "ok", "trackCount", "inRegistryCount", "unregisteredCount",
-        "coverageComplete", "trackScanComplete", "trackCoverageComplete",
-        "registryCoverageComplete", "searchableTrackCount", "unsearchableTrackCount",
-        "unclassifiedTrackCount",
-        "registryCount", "registryReferenceCount", "registryWithoutReferencesCount",
-        "missingRegistryVectorCount", "unsearchableRegistryCount",
-        "uncomparedTrackCount", "coverageReasons", "appliedTimeRange",
+        "coverageComplete",
+        "embeddingCandidateCount", "vlmMismatchCount", "vlmUncertainCount", "vlmFailedCount",
+        "coverageReasons", "appliedTimeRange",
     ),
     "show_evidence": ("ok", "trackIds"),
 }
 _MATCH_FIELDS = (
-    "trackId", "startTimeText", "endTimeText", "keyframeId", "hullNumber", "description", "score",
+    "trackId", "startTimeText", "endTimeText", "keyframeId", "score",
     "scoreBand", "registryReferenceIds", "matchedKeyframeId", "matchedRegistryReferenceId",
+    "classification", "verificationDecision", "verificationError",
 )
 
 
@@ -259,7 +257,11 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                 rows = [
                     {
                         field: item[field]
-                        for field in ("trackId", "startTime", "endTime", "startTimeText", "endTimeText", "keyframeId", "score", "scoreBand", "matchedObject")
+                        for field in (
+                            "trackId", "startTime", "endTime", "startTimeText", "endTimeText",
+                            "keyframeId", "score", "scoreBand", "matchedObject",
+                            "classification", "verificationDecision", "verificationError",
+                        )
                         if field in item
                     }
                     for item in result.get("matches", [])[:60]
@@ -273,17 +275,14 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                         **{
                             key: result[key]
                             for key in (
-                                "inRegistryCount", "unregisteredCount", "unclassifiedTrackCount",
-                                "coverageComplete", "trackScanComplete", "trackCoverageComplete",
-                                "registryCoverageComplete", "searchableTrackCount",
-                                "unsearchableTrackCount", "registryCount", "registryReferenceCount",
-                                "registryWithoutReferencesCount", "missingRegistryVectorCount",
-                                "unsearchableRegistryCount",
-                                "uncomparedTrackCount", "coverageReasons", "appliedTimeRange",
+                                "inRegistryCount", "unregisteredCount", "embeddingCandidateCount",
+                                "vlmMismatchCount", "vlmUncertainCount", "vlmFailedCount",
+                                "coverageComplete", "coverageReasons", "appliedTimeRange",
                             )
                             if key in result
                         },
-                        "truncated": len(result.get("matches", [])) > len(rows),
+                        "truncated": bool(result.get("matchesTruncated"))
+                        or len(result.get("matches", [])) > len(rows),
                     },
                 })
             except OSError:

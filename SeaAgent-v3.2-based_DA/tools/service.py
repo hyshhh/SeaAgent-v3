@@ -9,6 +9,8 @@ import subprocess
 import threading
 import uuid
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -29,6 +31,9 @@ class ToolService:
     IDENTIFICATION_TIMEOUT_SECONDS = 60
     STATISTICS_TIMEOUT_SECONDS = 120
     EVIDENCE_TIMEOUT_SECONDS = 120
+    REGISTRY_VLM_TIMEOUT_SECONDS = 30
+    REGISTRY_VLM_TOTAL_SECONDS = 105
+    REGISTRY_VLM_WORKERS = 8
     TOOL_TIMEOUTS: ClassVar[dict[str, int]] = {
         "recognize_tracks": IDENTIFICATION_TIMEOUT_SECONDS,
         "match_registry_tracks": IDENTIFICATION_TIMEOUT_SECONDS,
@@ -552,6 +557,120 @@ class ToolService:
     # ------------------------------------------------------------------ #
     # 四、视觉核验                                                             #
     # ------------------------------------------------------------------ #
+    def _verify_image_pair(
+        self,
+        reference: str,
+        candidate: str,
+        reference_description: str | None = None,
+        *,
+        timeout_seconds: float | None = None,
+        retries: int = 1,
+    ) -> dict[str, Any]:
+        options = (
+            {"retries": retries, "timeout_seconds": timeout_seconds}
+            if timeout_seconds is not None
+            else {}
+        )
+        if reference_description:
+            if not Path(candidate).is_file():
+                return {"ok": False, "error": "image_not_found", "decision": "uncertain"}  # 文件路径不存在
+            result = self.llm.verify(
+                [],
+                [candidate],
+                reference_description=reference_description,
+                **options,
+            )
+        else:
+            if not Path(reference).is_file() or not Path(candidate).is_file():
+                return {"ok": False, "error": "image_not_found", "decision": "uncertain"}  # 文件路径不存在
+            result = self.llm.verify(
+                [reference],
+                [candidate],
+                **options,
+            )
+        facts = result.get("facts") or []
+        facts = facts if isinstance(facts, list) else [facts]
+        response = {
+            "ok": True,  # 调用成功
+            "decision": result.get("decision", "uncertain"),  # 视觉模型的核验结论
+            "facts": [str(fact).strip()[:200] for fact in facts[:3] if str(fact).strip()],  # 限长的可见依据
+        }
+        if result.get("formatRecovered"):
+            response["formatRecovered"] = True
+        return response
+
+    def _verify_registry_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        frames_by_id: dict[str, dict[str, Any]],
+        references_by_id: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        if not candidates:
+            return {}
+        executor = ThreadPoolExecutor(
+            max_workers=min(self.REGISTRY_VLM_WORKERS, len(candidates)),
+            thread_name_prefix="sea-registry-vlm",
+        )
+        futures = {}
+        verified: dict[str, dict[str, Any]] = {}
+        completed = set()
+        for item in candidates:
+            track_id = str(item["matchedTrackId"])
+            frame_id = str(item.get("bestMatchedKeyframeId") or "")
+            reference_id = str(item.get("bestMatchedRegistryReferenceId") or "")
+            frame = frames_by_id.get(frame_id)
+            reference = references_by_id.get(reference_id)
+            if not frame or not reference:
+                verified[track_id] = {
+                    "decision": "uncertain",
+                    "error": "verification_evidence_missing",
+                }
+                continue
+            futures[executor.submit(
+                self._verify_image_pair,
+                str(reference.get("imagePath") or ""),
+                str(frame.get("keyframePath") or ""),
+                timeout_seconds=self.REGISTRY_VLM_TIMEOUT_SECONDS,
+                retries=0,
+            )] = track_id
+
+        try:
+            for future in as_completed(futures, timeout=self.REGISTRY_VLM_TOTAL_SECONDS):
+                completed.add(future)
+                track_id = futures[future]
+                try:
+                    result = future.result()
+                except Exception as error:  # noqa: BLE001 - failed candidate remains unresolved.
+                    result = {
+                        "decision": "uncertain",
+                        "error": f"{type(error).__name__}: {str(error)[:160]}",
+                    }
+                if result.get("ok") is not True:
+                    result = {
+                        "decision": "uncertain",
+                        "error": str(result.get("error") or "verification_failed"),
+                    }
+                decision = str(result.get("decision") or "uncertain").lower()
+                verified[track_id] = {
+                    **result,
+                    "decision": decision if decision in {"match", "mismatch", "uncertain"} else "uncertain",
+                }
+        except FuturesTimeoutError:
+            for future, track_id in futures.items():
+                if future not in completed:
+                    future.cancel()
+                    verified.setdefault(
+                        track_id,
+                        {"decision": "uncertain", "error": "vlm_verification_timeout"},
+                    )
+            executor.shutdown(wait=False, cancel_futures=True)
+            return verified
+        except Exception:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        executor.shutdown(wait=True)
+        return verified
+
     # 4.1 用视觉模型核验船舶图像
     def verify_vessel_images(
         self,
@@ -586,23 +705,9 @@ class ToolService:
                 candidate = str(frame.get("keyframePath") or "") if frame else ""
                 if not candidate:
                     return {"ok": False, "error": "keyframe_not_found", "decision": "uncertain"}  # 关键帧编号查不到图片
-            if description:
-                if not Path(candidate).is_file():
-                    return {"ok": False, "error": "image_not_found", "decision": "uncertain"}
-                result = self.llm.verify([], [candidate], reference_description=description)
-            elif not Path(reference).is_file() or not Path(candidate).is_file():
-                return {"ok": False, "error": "image_not_found", "decision": "uncertain"}  # 文件路径不存在
-            else:
-                result = self.llm.verify([reference], [candidate])
-            facts = result.get("facts") or []
-            facts = facts if isinstance(facts, list) else [facts]
-            response = {
-                "ok": True,  # 调用成功
-                "decision": result.get("decision", "uncertain"),  # 视觉模型的核验结论
-                "facts": [str(fact).strip()[:200] for fact in facts[:3] if str(fact).strip()],  # 限长的可见依据
-            }
-            if result.get("formatRecovered"):
-                response["formatRecovered"] = True
+            response = self._verify_image_pair(reference, candidate, description or None)
+            if not response.get("ok"):
+                return response
             if reference_id:
                 response["registryReferenceId"] = reference_id  # 使用的库参考图编号
             if keyframe_id:
@@ -712,28 +817,22 @@ class ToolService:
                 by_track.setdefault(str(match["matchedTrackId"]), []).append(match)
 
             track_ids = {str(track["trackId"]) for track in tracks}
-            uncompared_track_ids = (
+            unsearchable_track_ids = (
                 set(visual.get("uncomparedTrackIds", [])) | set(missing)
             ) & track_ids
             if tracks and registry_items and not references:
-                uncompared_track_ids.update(track_ids)
+                unsearchable_track_ids.update(track_ids)
             in_registry = 0
             matches = []
             threshold = float(self.settings["image_match"])
+            embedding_candidates = []
             for track in tracks:
                 track_id = str(track["trackId"])
                 candidates = by_track.get(track_id, [])
                 best = max(candidates, key=lambda item: float(item["maxEmbeddingScore"])) if candidates else None
                 score = float(best["maxEmbeddingScore"]) if best else None
-                registered = score is not None and score >= threshold
-                if registered:
-                    in_registry += 1
-                band = (
-                    "match" if registered
-                    else "uncertain" if registry_items and track_id in uncompared_track_ids
-                    else self._band(score, "image") if score is not None
-                    else "mismatch"
-                )
+                if score is not None and score >= threshold and best:
+                    embedding_candidates.append(best)
                 match_object = None
                 if best:
                     registry_id = str(best["matchedRegistryId"])
@@ -748,14 +847,67 @@ class ToolService:
                     track,
                     [],
                     score=score,
-                    band=band,
+                    band=(
+                        "uncertain"
+                        if track_id in missing or (score is not None and score >= threshold)
+                        else "mismatch"
+                    ),
                     reference_ids=best.get("matchedRegistryReferenceIds", []) if best else [],
                 )
                 if keyframe_id := first_keyframes.get(track_id):
                     detail["keyframeId"] = keyframe_id
                 detail["matchedObject"] = match_object
                 detail["trackIds"] = [track_id]
+                if score is not None and score >= threshold:
+                    detail["classification"] = "verification_pending"
+                    detail["verificationDecision"] = "pending"
+                elif track_id in unsearchable_track_ids:
+                    detail["classification"] = "unsearchable"
+                    detail["verificationDecision"] = "unsearchable"
+                else:
+                    detail["classification"] = "below_threshold"
+                    detail["verificationDecision"] = "not_candidate"
                 matches.append(detail)
+
+            frame_records = self._flatten_frames(frames)
+            frames_by_id = {str(frame.get("keyframeId")): frame for frame in frame_records}
+            references_by_id = {
+                str(reference.get("referenceId")): reference
+                for reference in references
+                if reference.get("referenceId")
+            }
+            verifications = self._verify_registry_candidates(
+                embedding_candidates, frames_by_id, references_by_id
+            )
+            for detail in matches:
+                track_id = str(detail["trackId"])
+                verification = verifications.get(track_id)
+                if verification is None:
+                    if detail["verificationDecision"] in {"not_candidate", "unsearchable"}:
+                        continue
+                    detail["scoreBand"] = "uncertain"
+                    detail["classification"] = "vlm_failed"
+                    detail["verificationDecision"] = "uncertain"
+                    detail["verificationError"] = "verification_result_missing"
+                    continue
+                decision = verification["decision"]
+                detail["verificationDecision"] = decision
+                if verification.get("facts"):
+                    detail["verificationFacts"] = verification["facts"]
+                if verification.get("error"):
+                    detail["verificationError"] = str(verification["error"])[:120]
+                if decision == "match":
+                    detail["scoreBand"] = "match"
+                    detail["classification"] = "vlm_confirmed"
+                    in_registry += 1
+                elif decision == "mismatch":
+                    detail["scoreBand"] = "mismatch"
+                    detail["classification"] = "vlm_mismatch"
+                else:
+                    detail["scoreBand"] = "uncertain"
+                    detail["classification"] = (
+                        "vlm_failed" if verification.get("error") else "vlm_uncertain"
+                    )
 
             registry_coverage = (
                 not tracks
@@ -763,7 +915,7 @@ class ToolService:
                 or bool(
                     references
                     and visual.get("registryCoverageComplete")
-                    and not uncompared_track_ids
+                    and not missing
                 )
             )
             track_coverage = scan_complete and not missing
@@ -786,31 +938,36 @@ class ToolService:
                 and not registry_without_references_count
             ):
                 coverage_reasons.append("track_registry_comparison_incomplete")
-            unclassified_track_ids = {
-                item["trackId"] for item in matches if item["scoreBand"] == "uncertain"
-            }
+            uncertain_verification_count = sum(
+                item.get("verificationDecision") == "uncertain" and not item.get("verificationError")
+                for item in matches
+            )
+            failed_verification_count = sum(
+                bool(item.get("verificationError")) for item in matches
+            )
+            mismatch_verification_count = sum(
+                item.get("verificationDecision") == "mismatch" for item in matches
+            )
+            if uncertain_verification_count:
+                coverage_reasons.append("vlm_verification_uncertain")
+            if failed_verification_count:
+                coverage_reasons.append("vlm_verification_failed")
+            verification_complete = not uncertain_verification_count and not failed_verification_count
+            registry_coverage = registry_coverage and verification_complete
+            display_matches = matches[: self.MAX_EVIDENCE_TRACKS]
             return {
                 "ok": True,
                 "trackCount": len(tracks),
                 "inRegistryCount": in_registry,
-                "unregisteredCount": len(tracks) - in_registry - len(unclassified_track_ids),
-                "unclassifiedTrackCount": len(unclassified_track_ids),
+                "unregisteredCount": len(tracks) - in_registry,
                 "coverageComplete": track_coverage and registry_coverage,
-                "trackScanComplete": scan_complete,
-                "trackCoverageComplete": track_coverage,
-                "registryCoverageComplete": registry_coverage,
-                "searchableTrackCount": len(tracks) - len(missing),
-                "unsearchableTrackCount": len(missing),
-                "registryCount": len(registry_items),
-                "registryReferenceCount": len(references),
-                "registryWithoutReferencesCount": registry_without_references_count,
-                "missingRegistryVectorCount": visual.get("missingRegistryVectorCount", 0),
-                "unsearchableRegistryCount": visual.get(
-                    "unsearchableRegistryCount", registry_without_references_count
-                ),
-                "uncomparedTrackCount": len(uncompared_track_ids),
+                "embeddingCandidateCount": len(embedding_candidates),
+                "vlmMismatchCount": mismatch_verification_count,
+                "vlmUncertainCount": uncertain_verification_count,
+                "vlmFailedCount": failed_verification_count,
                 "coverageReasons": coverage_reasons,
-                "matches": matches,
+                "matches": display_matches,
+                "matchesTruncated": len(matches) > len(display_matches),
                 "appliedTimeRange": self._format_time_range(scope) if scope else None,
             }
 

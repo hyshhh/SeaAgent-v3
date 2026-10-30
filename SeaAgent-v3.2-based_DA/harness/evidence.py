@@ -27,21 +27,14 @@ TOOL_STATISTIC_KEYS = (
     "lowThresholdShipCount",
     "inRegistryCount",
     "unregisteredCount",
+    "embeddingCandidateCount",
+    "vlmMismatchCount",
+    "vlmUncertainCount",
+    "vlmFailedCount",
     "coverageComplete",
     "searchedTrackCount",
     "candidateCount",
     "unsearchableTrackCount",
-    "trackScanComplete",
-    "trackCoverageComplete",
-    "registryCoverageComplete",
-    "searchableTrackCount",
-    "unclassifiedTrackCount",
-    "registryCount",
-    "registryReferenceCount",
-    "registryWithoutReferencesCount",
-    "missingRegistryVectorCount",
-    "unsearchableRegistryCount",
-    "uncomparedTrackCount",
     "coverageReasons",
     "appliedTimeRange",
 )
@@ -255,15 +248,31 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
             score = float(score) if isinstance(score, (int, float)) else None
             object_value = candidate.get("matchedObject")
             band = str(candidate.get("scoreBand") or candidate.get("band") or "")
-            status = {
-                "match": "Threshold match",
-                "mismatch": "Classified not in registry",
-            }.get(band, "Unconfirmed")
+            decision = str(candidate.get("verificationDecision") or "")
+            classification = str(candidate.get("classification") or "")
+            status = (
+                "VLM failed; counted outside registry"
+                if classification == "vlm_failed"
+                else {
+                    "match": "VLM confirmed in registry",
+                    "mismatch": "VLM mismatch; counted outside registry",
+                    "uncertain": "VLM uncertain; counted outside registry",
+                    "pending": "VLM verification pending",
+                    "not_candidate": "Below embedding threshold; counted outside registry",
+                    "unsearchable": "Unsearchable; counted outside registry",
+                }.get(decision, "Unconfirmed")
+                if decision
+                else {"match": "Threshold match", "mismatch": "Classified not in registry"}.get(
+                    band, "Unconfirmed"
+                )
+            )
             match = {
                 "status": status,
                 "score": score,
                 "matchedObject": object_value if isinstance(object_value, dict) else None,
             }
+            if decision:
+                match["verificationDecision"] = decision
             row["registryMatch"] = match
 
     return [rows[track_id] for track_id in order[:limit]]

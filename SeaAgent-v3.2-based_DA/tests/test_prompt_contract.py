@@ -74,7 +74,7 @@ def test_count_skills_map_user_intent_to_configured_tools():
 
     assert "dedup_tracks" in planning and "match_entities" in planning
     assert "registered count" in intent and "total count" in intent
-    assert "inRegistryCount" in statistics and "unclassifiedTrackCount" in statistics
+    assert "inRegistryCount" in statistics and "unregisteredCount" in statistics
     assert "match_entities" in agents["planner"]["system_prompt"]
     assert "statistics" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
@@ -90,7 +90,7 @@ def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     assert "Count-only plans must not include recognition steps" in acceptance
     assert "Do not ask for a time range" in time_scope
     assert "all stored trajectories" in time_scope
-def test_statistics_prompts_keep_threshold_and_unclassified_semantics_consistent():
+def test_statistics_prompts_keep_embedding_and_vlm_semantics_consistent():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     agents = {item["name"]: item for item in role_config["agents"]}
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
@@ -99,10 +99,15 @@ def test_statistics_prompts_keep_threshold_and_unclassified_semantics_consistent
 
     assert "statistics" in agents["executor"]["system_prompt"]
     assert "statistics" in agents["reflector"]["skills"]
-    for field in ("inRegistryCount", "unregisteredCount", "unclassifiedTrackCount", "coverageComplete", "coverageReasons"):
+    for field in (
+        "inRegistryCount", "unregisteredCount", "embeddingCandidateCount",
+        "vlmMismatchCount", "vlmUncertainCount", "vlmFailedCount",
+        "coverageComplete", "coverageReasons",
+    ):
         assert field in statistics
         assert field in match_entities["description"]
-    assert "not VLM confirmation" in statistics
+    assert "unclassifiedTrackCount" not in statistics
+    assert "only VLM `match` counts as registered" in statistics
 def test_planner_and_question_presets_cover_the_six_request_types():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")

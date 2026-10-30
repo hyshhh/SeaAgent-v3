@@ -74,7 +74,6 @@ def test_compact_count_fields_feed_frontend_statistics():
             "highThresholdShipCount": 12,
             "lowThresholdShipCount": 10,
             "coverageComplete": False,
-            "trackCoverageComplete": False,
             "coverageReasons": ["track_keyframe_vectors_missing"],
             "appliedTimeRange": ["2026-10-27T00:00:00+08:00", "2026-10-27T23:59:59+08:00"],
         }),
@@ -87,7 +86,6 @@ def test_compact_count_fields_feed_frontend_statistics():
             "highThresholdShipCount": 12,
             "lowThresholdShipCount": 10,
             "coverageComplete": False,
-            "trackCoverageComplete": False,
             "coverageReasons": ["track_keyframe_vectors_missing"],
             "appliedTimeRange": ["2026-10-27T00:00:00+08:00", "2026-10-27T23:59:59+08:00"],
         },
@@ -99,7 +97,6 @@ def test_duplicate_statistics_from_tool_and_private_evidence_are_shown_once():
         "trackCount": 214,
         "inRegistryCount": 24,
         "unregisteredCount": 0,
-        "unclassifiedTrackCount": 190,
         "coverageComplete": False,
         "coverageReasons": ["track_keyframe_vectors_missing"],
     }
@@ -128,6 +125,8 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
                 "trackIds": ["t-1", "t-2"],
                 "score": 0.83,
                 "scoreBand": "match",
+                "classification": "vlm_confirmed",
+                "verificationDecision": "match",
                 "matchedObject": {"hullNumber": "0857"},
                 "keyframeIds": ["kf-1"],
                 "registryReferenceIds": ["ref-1"],
@@ -141,6 +140,7 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
     assert payload["registryReferenceIds"] == ["ref-1"]
     assert payload["displayGroups"][0]["score"] == 0.83
     assert payload["displayGroups"][0]["matchedObject"]["hullNumber"] == "0857"
+    assert payload["trackRows"][0]["registryMatch"]["status"] == "VLM confirmed in registry"
 
 
 def test_evidence_rows_keep_one_keyframe_track_time_and_explicit_registry_match():

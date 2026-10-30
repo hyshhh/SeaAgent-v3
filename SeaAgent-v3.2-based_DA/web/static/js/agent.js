@@ -1510,7 +1510,7 @@ function renderEvidence(evidence) {
       const name = object.hullNumber || object.registryId || '';
       const score = Number.isFinite(Number(match?.score)) ? ` · ${Number(match.score).toFixed(3)}` : '';
       const status = match?.status || 'Unconfirmed';
-      const statusClass = status === 'Threshold match' ? 'is-threshold-match' : status === 'Classified not in registry' ? 'is-unregistered' : 'is-unconfirmed';
+      const statusClass = status === 'VLM confirmed in registry' ? 'is-threshold-match' : status.includes('counted outside registry') ? 'is-unregistered' : 'is-unconfirmed';
       matchCell = `<span class="qa-registry-status ${statusClass}">${escapeHtml(status)}</span>${name ? `<span class="qa-registry-object">${escapeHtml(name)}${escapeHtml(score)}</span>` : score ? `<span class="qa-registry-object">${escapeHtml(score.slice(3))}</span>` : ''}`;
     }
     return `<tr><td class="qa-evidence-track-id">${escapeHtml(trackId)}</td><td>${escapeHtml(time)}</td><td class="qa-evidence-frame-cell">${keyframe}</td><td class="qa-evidence-registry-cell">${matchCell}</td></tr>`;
@@ -1528,16 +1528,10 @@ function renderEvidence(evidence) {
     trackCount: 'Raw tracks', highThresholdShipCount: 'High-threshold entities', lowThresholdShipCount: 'Low-threshold entities',
     coverageComplete: 'Search complete',
     searchedTrackCount: 'Tracks searched', unsearchableTrackCount: 'Unsearchable tracks',
-    searchableTrackCount: 'Searchable tracks', trackScanComplete: 'Track scan complete',
-    trackCoverageComplete: 'Track coverage complete', registryCoverageComplete: 'Registry match complete',
-    unclassifiedTrackCount: 'Unclassified tracks',
-    registryCount: 'Registry entities', registryReferenceCount: 'Registry references',
-    registryWithoutReferencesCount: 'Registry entries without references',
-    missingRegistryVectorCount: 'Missing registry vectors', unsearchableRegistryCount: 'Unsearchable registry entities',
-    uncomparedTrackCount: 'Uncompared tracks',
     coverageReasons: 'Coverage reasons', appliedTimeRange: 'Applied time range',
-    candidateCount: 'Candidates',
-    inRegistryCount: 'Tracks above match threshold', unregisteredCount: 'Tracks classified not in registry',
+    candidateCount: 'Candidates', embeddingCandidateCount: 'Embedding candidates',
+    vlmMismatchCount: 'VLM mismatches', vlmUncertainCount: 'VLM uncertain', vlmFailedCount: 'VLM failures',
+    inRegistryCount: 'VLM confirmed in registry', unregisteredCount: 'Counted outside registry',
     confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',
   };
   const coverageReasonLabels = {
@@ -1547,6 +1541,8 @@ function renderEvidence(evidence) {
     registry_entries_without_references: 'Registry entries lack references',
     registry_reference_vectors_missing: 'Registry vectors missing',
     track_registry_comparison_incomplete: 'Track comparison incomplete',
+    vlm_verification_uncertain: 'VLM verification uncertain',
+    vlm_verification_failed: 'VLM verification failed',
   };
   const statsToShow = queryByTool.length
     ? queryByTool.map((item) => ({ tool: item.tool, values: item.statistics || {} }))

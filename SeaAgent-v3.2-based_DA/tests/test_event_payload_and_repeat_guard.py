@@ -171,10 +171,22 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
         "trackCount": 2,
         "inRegistryCount": 1,
         "unregisteredCount": 1,
+        "embeddingCandidateCount": 1,
+        "vlmMismatchCount": 0,
+        "vlmUncertainCount": 0,
+        "vlmFailedCount": 0,
         "coverageComplete": True,
         "matches": [
-            {"trackId": "t-1", "score": 0.91, "scoreBand": "match", "matchedObject": {"hullNumber": "0857"}},
-            {"trackId": "t-2", "score": 0.42, "scoreBand": "mismatch", "matchedObject": {"hullNumber": "003"}},
+            {
+                "trackId": "t-1", "score": 0.91, "scoreBand": "match",
+                "classification": "vlm_confirmed", "verificationDecision": "match",
+                "matchedObject": {"hullNumber": "0857"},
+            },
+            {
+                "trackId": "t-2", "score": 0.42, "scoreBand": "mismatch",
+                "classification": "below_threshold", "verificationDecision": "not_candidate",
+                "matchedObject": {"hullNumber": "003"},
+            },
         ],
     }
     message = guard.wrap_tool_call(
@@ -191,6 +203,10 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
         "trackCount": 2,
         "inRegistryCount": 1,
         "unregisteredCount": 1,
+        "embeddingCandidateCount": 1,
+        "vlmMismatchCount": 0,
+        "vlmUncertainCount": 0,
+        "vlmFailedCount": 0,
         "coverageComplete": True,
     }
     assert message.artifact["full_result"] == json.loads(message.content)
@@ -199,12 +215,22 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
         "tool": "match_entities",
         "result": {
             "matches": [
-                {key: item[key] for key in ("trackId", "score", "scoreBand", "matchedObject")}
+                {
+                    key: item[key]
+                    for key in (
+                        "trackId", "score", "scoreBand", "matchedObject",
+                        "classification", "verificationDecision",
+                    )
+                }
                 for item in full_result["matches"]
             ],
             "trackCount": 2,
             "inRegistryCount": 1,
             "unregisteredCount": 1,
+            "embeddingCandidateCount": 1,
+            "vlmMismatchCount": 0,
+            "vlmUncertainCount": 0,
+            "vlmFailedCount": 0,
             "coverageComplete": True,
             "truncated": False,
         },
@@ -215,7 +241,7 @@ def test_registry_count_hides_match_details_from_model_and_shared_state(tmp_path
     assert result["tool_records"][0]["result"] == json.loads(message.content)
     assert result["enrichedEvidence"]["trackIds"] == ["t-1", "t-2"]
     assert result["enrichedEvidence"]["displayGroups"][0]["score"] == 0.91
-    assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "Threshold match"
+    assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "VLM confirmed in registry"
     assert state.evidence_artifact_results() == []
 
 
@@ -228,7 +254,8 @@ def test_statistics_model_results_keep_the_applied_time_range():
         ("dedup_tracks", {"trackCount": 0, "highThresholdShipCount": 0, "lowThresholdShipCount": 0}),
         ("match_entities", {
             "trackCount": 0, "inRegistryCount": 0, "unregisteredCount": 0,
-            "unclassifiedTrackCount": 0, "trackScanComplete": True,
+            "embeddingCandidateCount": 0, "vlmMismatchCount": 0,
+            "vlmUncertainCount": 0, "vlmFailedCount": 0,
             "coverageReasons": [],
         }),
     )

@@ -160,10 +160,9 @@ def statistics_answer(kind: str, result: dict[str, Any]) -> str | None:
 
     registered = count("inRegistryCount")
     unregistered = count("unregisteredCount")
-    unclassified = count("unclassifiedTrackCount")
-    if registered is None or unregistered is None or unclassified is None:
+    if registered is None or unregistered is None:
         return None
-    if registered + unregistered + unclassified != track_count:
+    if registered + unregistered != track_count:
         return None
     reason_names = {
         "track_scan_incomplete": "轨迹扫描不完整",
@@ -174,21 +173,35 @@ def statistics_answer(kind: str, result: dict[str, Any]) -> str | None:
         "track_registry_comparison_incomplete": "部分轨迹未完成全库比较",
     }
     reasons = result.get("coverageReasons")
-    gaps = "、".join(reason_names.get(str(item), str(item)) for item in reasons) if isinstance(reasons, list) else ""
-    suffix = f"覆盖缺口：{gaps}。" if gaps else ""
-    if kind == "registered":
-        answer = f"{scope}{registered} 条轨迹达到先验库图像 embedding 匹配阈值（不代表 VLM 已确认）。"
-        if unclassified:
-            answer += f"另有 {unclassified} 条轨迹未分类。"
-        if result.get("coverageComplete") is not True:
-            answer += "匹配覆盖不完整，匹配数量可能偏低。"
-        return answer + suffix
-    if result.get("coverageComplete") is True and unclassified == 0:
-        return f"{scope}共有 {unregistered} 条轨迹未匹配到先验库图像。"
-    return (
-        f"{scope}无法确定不在库船舶的准确数量：当前可判定不在库的轨迹为 {unregistered} 条，"
-        f"另有 {unclassified} 条未分类。{suffix}"
+    gaps = (
+        "、".join(
+            reason_names.get(str(item), str(item))
+            for item in reasons
+            if str(item) not in {"vlm_verification_uncertain", "vlm_verification_failed"}
+        )
+        if isinstance(reasons, list)
+        else ""
     )
+    suffix = f"覆盖缺口：{gaps}。" if gaps else ""
+    uncertain = count("vlmUncertainCount") or 0
+    failed = count("vlmFailedCount") or 0
+    if kind == "registered":
+        answer = f"{scope}{registered} 条轨迹经 embedding 筛选并由 VLM 确认为在库。"
+        if result.get("coverageComplete") is not True:
+            answer += "统计或核验覆盖不完整，结果可能受影响。"
+        if uncertain:
+            answer += f"另有 {uncertain} 条 embedding 候选经 VLM 核验仍不确定，按规则计入不在库。"
+        if failed:
+            answer += f"另有 {failed} 条 embedding 候选核验失败，按规则计入不在库。"
+        return answer + suffix
+    answer = f"{scope}共有 {unregistered} 条轨迹计为不在库；仅 VLM 确认匹配的轨迹计为在库。"
+    if uncertain:
+        answer += f"其中 {uncertain} 条 embedding 候选经 VLM 核验仍不确定，按规则计入不在库。"
+    if failed:
+        answer += f"其中 {failed} 条 embedding 候选核验失败，按规则计入不在库。"
+    if result.get("coverageComplete") is not True:
+        answer += "统计或核验覆盖不完整，结果可能受影响。"
+    return answer + suffix
 
 
 def find_tool_result(state: dict[str, Any], request: dict[str, Any]) -> dict[str, Any] | None:
