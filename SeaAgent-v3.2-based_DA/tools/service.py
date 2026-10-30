@@ -40,6 +40,7 @@ class ToolService:
     MAX_RETURNED_MATCHES = 10
     MAX_FRAMES_PER_TRACK = 3
     MAX_EVIDENCE_TRACKS = 60
+    MAX_DEDUP_CANDIDATES = 120
 
     # ------------------------------------------------------------------ #
     # 一、服务初始化与执行守卫                                                       #
@@ -590,20 +591,37 @@ class ToolService:
         reference_image: str | None = None,
         reference_description: str | None = None,
         reference_registry_reference_id: str | None = None,
+        reference_keyframe_id: str | None = None,
         candidate_image: str | None = None,
         candidate_keyframe_id: str | None = None,
+        pair_id: str | None = None,
     ) -> dict[str, Any]:
         def verify() -> dict[str, Any]:
             reference = str(reference_image or "").strip()
             description = str(reference_description or "").strip()
             reference_id = str(reference_registry_reference_id or "").strip()
+            reference_keyframe = str(reference_keyframe_id or "").strip()
             candidate = str(candidate_image or "").strip()
             keyframe_id = str(candidate_keyframe_id or "").strip()
+            verification_pair_id = str(pair_id or "").strip()
             track_id = ""
-            if sum(bool(value) for value in (reference, description, reference_id)) != 1:
+            reference_track_id = ""
+            if sum(bool(value) for value in (reference, description, reference_id, reference_keyframe)) != 1:
                 return {"ok": False, "error": "one_reference_required", "decision": "uncertain"}
             if bool(candidate) == bool(keyframe_id):
                 return {"ok": False, "error": "one_candidate_required", "decision": "uncertain"}
+            if reference_keyframe:
+                frame = self.repository.get_keyframe(reference_keyframe)
+                reference = str(frame.get("keyframePath") or "") if frame else ""
+                if not reference:
+                    return {
+                        "ok": False,
+                        "error": "reference_keyframe_not_found",
+                        "decision": "uncertain",
+                        "referenceKeyframeId": reference_keyframe,
+                        **({"pairId": verification_pair_id} if verification_pair_id else {}),
+                    }
+                reference_track_id = str(frame.get("trackId") or "")
             if keyframe_id:
                 frame = self.repository.get_keyframe(keyframe_id)
                 candidate = str(frame.get("keyframePath") or "") if frame else ""
@@ -617,8 +635,12 @@ class ToolService:
                     }  # 关键帧编号查不到图片
                 track_id = str(frame.get("trackId") or "")
             context = {
+                **({"pairId": verification_pair_id} if verification_pair_id else {}),
                 **({"trackId": track_id} if track_id else {}),
+                **({"candidateTrackId": track_id} if reference_keyframe and track_id else {}),
+                **({"referenceTrackId": reference_track_id} if reference_track_id else {}),
                 **({"registryReferenceId": reference_id} if reference_id else {}),
+                **({"referenceKeyframeId": reference_keyframe} if reference_keyframe else {}),
                 **({"keyframeId": keyframe_id} if keyframe_id else {}),
             }
             if reference_id:
@@ -645,7 +667,15 @@ class ToolService:
             if not response.get("ok"):
                 return {**response, **context}
             response.update(context)  # 统计核验时用于把 VLM 结论关联回轨迹和证据
-            response["referenceType"] = "description" if description else "registry" if reference_id else "image"
+            response["referenceType"] = (
+                "description"
+                if description
+                else "registry"
+                if reference_id
+                else "keyframe"
+                if reference_keyframe
+                else "image"
+            )
             return response
 
         return self._run_tool("verify_vessel_images", verify)
@@ -657,6 +687,8 @@ class ToolService:
     def _dedup_track_analysis(
         self,
         time_range: tuple[str | float, str | float] | None = None,
+        confirmed_pair_ids: set[str] | None = None,
+        resolved_pair_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         scope, problem = self._validate_time_range(time_range)
         if problem:
@@ -666,6 +698,8 @@ class ToolService:
         dedup = self._deduplicate_tracks(
             tracks,
             {track_id: {"keyframes": values} for track_id, values in frames.items()},
+            confirmed_pair_ids=confirmed_pair_ids,
+            resolved_pair_ids=resolved_pair_ids,
         )
         return {
             "ok": True,
@@ -673,13 +707,22 @@ class ToolService:
             "firstKeyframes": first_keyframes,
             "appliedTimeRange": self._format_time_range(scope) if scope else None,
             **dedup,
-            "coverageComplete": scan_complete and not missing,
+            "coverageComplete": scan_complete and not missing and dedup["status"] == "complete",
         }
 
     # 5.2 统计全部实体
-    def dedup_tracks(self, time_range: tuple[str | float, str | float] | None = None) -> dict[str, Any]:
+    def dedup_tracks(
+        self,
+        time_range: tuple[str | float, str | float] | None = None,
+        confirmed_pair_ids: list[str] | None = None,
+        resolved_pair_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         def dedup() -> dict[str, Any]:
-            result = self._dedup_track_analysis(time_range)
+            result = self._dedup_track_analysis(
+                time_range,
+                set(confirmed_pair_ids or ()) if confirmed_pair_ids is not None else None,
+                set(resolved_pair_ids or ()) if resolved_pair_ids is not None else None,
+            )
             if not result.get("ok"):
                 return result
             tracks = result.get("tracks", [])
@@ -695,13 +738,21 @@ class ToolService:
                 key: result[key]
                 for key in (
                     "ok",
+                    "status",
                     "trackCount",
-                    "highThresholdShipCount",
-                    "lowThresholdShipCount",
+                    "exactShipCount",
+                    "fuzzyShipCount",
+                    "duplicateCandidateCount",
+                    "unresolvedDuplicateCount",
                     "coverageComplete",
                     "appliedTimeRange",
+                    "nextStep",
+                    "recommendation",
+                    "duplicateCandidatesTruncated",
                 )
+                if key in result
             } | {
+                "duplicateCandidates": result.get("duplicateCandidates", []),
                 "trackRows": track_rows,
                 "trackRowsTruncated": len(tracks) > len(display_tracks),
             }
@@ -1391,6 +1442,8 @@ class ToolService:
         self,
         tracks: list[dict[str, Any]],
         keyframes_by_track: dict[str, dict[str, Any]],
+        confirmed_pair_ids: set[str] | None = None,
+        resolved_pair_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         candidates: dict[str, list[dict[str, Any]]] = {}
         for track in tracks:
@@ -1422,32 +1475,90 @@ class ToolService:
                 reverse=True,
             )[:3]
         pair_scores: dict[tuple[str, str], float] = {}
+        pair_details: dict[tuple[str, str], dict[str, Any]] = {}
         track_ids = list(track_map)
         for index, left_id in enumerate(track_ids):
             for right_id in track_ids[index + 1:]:
                 if self._overlap(track_map[left_id], track_map[right_id]) or not selected[left_id] or not selected[right_id]:
                     continue
-                scores = []
+                scores: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
                 for left in selected[left_id]:
                     for right in selected[right_id]:
                         left_vector = vectors.get(int(left["keyframeVectorId"]))
                         right_vector = vectors.get(int(right["keyframeVectorId"]))
                         if left_vector is not None and right_vector is not None:
-                            scores.append(float(np.dot(left_vector, right_vector)))
+                            scores.append((float(np.dot(left_vector, right_vector)), left, right))
                 if scores:
-                    pair_scores[tuple(sorted((left_id, right_id)))] = float(np.mean(sorted(scores, reverse=True)[:3]))
+                    key = tuple(sorted((left_id, right_id)))
+                    pair_scores[key] = float(np.mean(sorted((item[0] for item in scores), reverse=True)[:3]))
+                    best_score, left_frame, right_frame = max(scores, key=lambda item: item[0])
+                    pair_details[key] = {
+                        "pairId": f"{key[0]}::{key[1]}",
+                        "referenceTrackId": left_id,
+                        "candidateTrackId": right_id,
+                        "score": round(float(pair_scores[key]), 6),
+                        "referenceKeyframeId": str(left_frame.get("keyframeId") or ""),
+                        "candidateKeyframeId": str(right_frame.get("keyframeId") or ""),
+                        "bestFrameScore": round(best_score, 6),
+                    }
         high = float(self.settings["dedup_high"])
         low = float(self.settings["dedup_low"])
-        high_groups = self._complete_link(track_ids, track_map, pair_scores, high)
         low_groups = self._complete_link(track_ids, track_map, pair_scores, low)
-        # 高阈值只接受确定合并，因此对应保守（较大）船数；低阈值纳入待确认合并，对应最小船数。
-        return {
+        # 高阈值候选必须先由 VLM 确认；低阈值只用于模糊分组。
+        high_pairs = [
+            detail
+            for key, detail in pair_details.items()
+            if pair_scores[key] >= high
+        ]
+        high_pairs.sort(key=lambda item: float(item["score"]), reverse=True)
+        display_pairs = high_pairs[: self.MAX_DEDUP_CANDIDATES]
+        high_pair_ids = {str(item["pairId"]) for item in high_pairs}
+        verification_started = confirmed_pair_ids is not None or resolved_pair_ids is not None
+        confirmed = set(confirmed_pair_ids or ()) & high_pair_ids if verification_started else set()
+        resolved = set(resolved_pair_ids or ()) & high_pair_ids if verification_started else set()
+        if verification_started:
+            confirmed_scores = {
+                key: score
+                for key, score in pair_scores.items()
+                if pair_details[key]["pairId"] in confirmed
+            }
+            exact_groups = self._complete_link(track_ids, track_map, confirmed_scores, high)
+            exact_count: int | None = len(exact_groups)
+        elif not high_pairs:
+            exact_count = len(track_ids)
+        else:
+            exact_count = None
+        unresolved_pair_count = (
+            len(high_pair_ids - resolved)
+            if verification_started
+            else len(high_pair_ids)
+        )
+        candidates_truncated = len(high_pairs) > len(display_pairs)
+        status = (
+            "verification_required"
+            if high_pairs and not verification_started
+            else "complete"
+            if unresolved_pair_count == 0 and not candidates_truncated
+            else "incomplete"
+        )
+        result = {
             "trackCount": len(tracks),
-            "highThresholdShipCount": len(high_groups),
-            "lowThresholdShipCount": len(low_groups),
-            "highGroups": high_groups,
-            "lowGroups": low_groups,
+            "status": status,
+            "exactShipCount": exact_count,
+            "fuzzyShipCount": len(low_groups),
+            "duplicateCandidateCount": len(high_pairs),
+            "unresolvedDuplicateCount": unresolved_pair_count,
+            "duplicateCandidates": display_pairs,
+            "duplicateCandidatesTruncated": candidates_truncated,
         }
+        if high_pairs and not verification_started:
+            result["nextStep"] = "verify_vessel_images"
+            result["recommendation"] = (
+                "对 duplicateCandidates 中每个轨迹对调用 verify_vessel_images，"
+                "使用同一 pairId、referenceKeyframeId 和 candidateKeyframeId；"
+                "随后将 VLM match 的 pairId 作为 confirmedPairIds、match/mismatch 的 pairId 作为 resolvedPairIds 再调用 dedup_tracks 收尾。"
+            )
+        return result
 
     # ------------------------------------------------------------------ #
     # 十一、通用工具                                                            #

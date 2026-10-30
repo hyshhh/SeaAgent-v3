@@ -30,25 +30,33 @@ tools:
   - name: verify_vessel_images
     label: VLM 候选核验
     description: >-
-      只核验一个已召回的轨迹候选，不搜索轨迹。参考证据三选一：用户图片 reference_image、用户描述 reference_description、
-      先验库图片 reference_registry_reference_id；候选证据二选一：candidate_image 或候选的 matchedKeyframeId。
-      识别和统计任务的候选均逐条调用。返回 trackId、decision（match、mismatch 或 uncertain）及最多三条依据；
+      只核验一个已召回的轨迹候选或一对待去重轨迹，不搜索轨迹。参考证据四选一：用户图片 reference_image、
+      用户描述 reference_description、先验库图片 reference_registry_reference_id、轨迹关键帧 reference_keyframe_id；
+      候选证据二选一：candidate_image 或候选关键帧 candidate_keyframe_id。
+      识别、先验库统计和去重候选均逐条调用。返回 pairId、trackId、decision（match、mismatch 或 uncertain）及最多三条依据；
       证据不足或只有颜色相似时返回 uncertain。
       若模型 JSON 格式异常但 decision 唯一明确，会标记 formatRecovered=true 且不返回依据；歧义结果仍报错。
     arguments:
       reference_image: {type: string, required: false, description: 用户提供的参考图片路径；与另外两种 reference 参数互斥。}
-      reference_description: {type: string, required: false, description: 用户原始外观描述；与另外两种 reference 参数互斥。}
-      reference_registry_reference_id: {type: string, required: false, description: 先验库辅助识别结果中的 matchedRegistryReferenceId；与另外两种 reference 参数互斥。}
+      reference_description: {type: string, required: false, description: 用户原始外观描述；与其他 reference 参数互斥。}
+      reference_registry_reference_id: {type: string, required: false, description: 先验库辅助识别结果中的 matchedRegistryReferenceId；与其他 reference 参数互斥。}
+      reference_keyframe_id: {type: string, required: false, description: 去重候选中的 referenceKeyframeId；与其他 reference 参数互斥。}
       candidate_image: {type: string, required: false, description: 待核验图片的本地路径；与 candidate_keyframe_id 二选一。}
       candidate_keyframe_id: {type: string, required: false, description: 候选的 matchedKeyframeId；与 candidate_image 二选一。}
+      pair_id: {type: string, required: false, description: 去重候选的稳定 pairId，用于把 VLM 结果关联回轨迹对。}
 
   - name: dedup_tracks
     label: 轨迹去重统计
     description: >-
-      在时间范围内按视觉相似度去重，只返回原始轨迹数、高阈值实体数和低阈值实体数。高阈值数为保守上界，低阈值数为合并后的下界。
+      两阶段轨迹去重。首次调用返回 duplicateCandidates、duplicateCandidateCount、fuzzyShipCount、
+      status=verification_required 和 nextStep=verify_vessel_images；高阈值候选必须逐对调用 VLM。
+      VLM match 的 pairId 作为 confirmedPairIds，VLM match/mismatch 的 pairId 作为 resolvedPairIds，再次调用本工具收尾。
+      收尾返回 exactShipCount 与 fuzzyShipCount；exact 只合并 VLM 确认的高阈值轨迹对，fuzzy 使用低阈值 embedding 分组。
       省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange，供核对。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
+      confirmed_pair_ids: {type: string_list, required: false, description: 首次调用后 VLM decision=match 的 pairId 列表。}
+      resolved_pair_ids: {type: string_list, required: false, description: 首次调用后 VLM decision=match 或 mismatch 的 pairId 列表。}
 
   - name: match_entities
     label: 实体先验库匹配统计

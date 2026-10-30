@@ -44,7 +44,10 @@ def test_tool_names_and_arguments_match_service_methods():
 def test_vlm_schema_accepts_registry_reference_or_local_reference():
     tool = {tool.name: tool for tool in build_tools(load_config(), Service())}["verify_vessel_images"]
     schema = tool.args_schema.model_json_schema()
-    assert {"reference_image", "reference_registry_reference_id", "candidate_image", "candidate_keyframe_id"} <= set(schema["properties"])
+    assert {
+        "reference_image", "reference_registry_reference_id", "reference_keyframe_id",
+        "candidate_image", "candidate_keyframe_id", "pair_id",
+    } <= set(schema["properties"])
     assert "reference_image" not in schema.get("required", [])
 
 

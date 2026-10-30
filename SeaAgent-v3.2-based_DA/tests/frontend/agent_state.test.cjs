@@ -169,12 +169,12 @@ test('shared state groups render fields for every role and runtime section', () 
 test('evidence statistics render even when the query returns no visual items', () => {
   const ui = page();
   ui.run(`renderEvidence({ statistics: {
-    queryByTool: [{ tool: 'dedup_tracks', statistics: { trackCount: 0, highThresholdShipCount: 0, lowThresholdShipCount: 0 } }],
+    queryByTool: [{ tool: 'dedup_tracks', statistics: { trackCount: 0, exactShipCount: 0, fuzzyShipCount: 0, duplicateCandidateCount: 0, unresolvedDuplicateCount: 0 } }],
     display: { trackCount: 0, keyframeCount: 0, clipCount: 0, registryReferenceCount: 0 }
   } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /No track evidence available/);
-  assert.match(html, /High-threshold entities: 0/);
+  assert.match(html, /Exact deduplication: 0/);
   assert.doesNotMatch(html, /keyframes/i);
 });
 
@@ -182,12 +182,12 @@ test('compact count result metadata remains visible in the evidence panel', () =
   const ui = page();
   ui.run(`renderEvidence({ statistics: { queryByTool: [{
     tool: 'dedup_tracks',
-    statistics: { trackCount: 20, highThresholdShipCount: 12, lowThresholdShipCount: 10, coverageComplete: false }
+    statistics: { trackCount: 20, exactShipCount: 12, fuzzyShipCount: 10, duplicateCandidateCount: 2, unresolvedDuplicateCount: 0, coverageComplete: false }
   }] } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /Raw tracks: 20/);
-  assert.match(html, /High-threshold entities: 12/);
-  assert.match(html, /Low-threshold entities: 10/);
+  assert.match(html, /Exact deduplication: 12/);
+  assert.match(html, /Fuzzy deduplication: 10/);
   assert.match(html, /Search complete: No/);
 });
 

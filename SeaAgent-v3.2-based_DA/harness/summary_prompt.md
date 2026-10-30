@@ -2,6 +2,7 @@
 - 保留用户的时间原文、本轮固定锚点解析出的绝对范围及工具结果的 appliedTimeRange；旧 QA 时间仅在用户明确指向旧问题时复用，不得覆盖本轮范围。
 - 原样保留 trackId、keyframeId、clipId、registryId 和舷号。
 - 保留 matchedKeyframeId、matchedRegistryReferenceId 及未完成的识别或统计 nextStep/recommendation；不得用展示用 keyframeId 替代匹配关键帧 ID。
+- 保留去重候选 pairId、referenceKeyframeId、candidateKeyframeId，以及已确认和已解决 pairId；去重收尾必须使用这些 ID。
 - 分开记录直接识别与先验库辅助匹配的 status、候选 trackId 和分数；辅助匹配 confirmed 不得被直接识别 mismatch 覆盖。
 - 保留用户的范围、在库/未在库、去重及计数口径。
 - 记录已证实结论、证据 ID、未解决缺口和原定下一步。

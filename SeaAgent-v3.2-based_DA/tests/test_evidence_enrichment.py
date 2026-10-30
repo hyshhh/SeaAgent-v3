@@ -70,9 +70,12 @@ def test_compact_count_fields_feed_frontend_statistics():
     payload = build_evidence_payload([
         _record("dedup_tracks", {
             "ok": True,
+            "status": "complete",
             "trackCount": 20,
-            "highThresholdShipCount": 12,
-            "lowThresholdShipCount": 10,
+            "exactShipCount": 12,
+            "fuzzyShipCount": 10,
+            "duplicateCandidateCount": 2,
+            "unresolvedDuplicateCount": 0,
             "coverageComplete": False,
             "coverageReasons": ["track_keyframe_vectors_missing"],
             "appliedTimeRange": ["2026-10-27T00:00:00+08:00", "2026-10-27T23:59:59+08:00"],
@@ -82,9 +85,12 @@ def test_compact_count_fields_feed_frontend_statistics():
     assert payload["statistics"]["queryByTool"] == [{
         "tool": "dedup_tracks",
         "statistics": {
+            "status": "complete",
             "trackCount": 20,
-            "highThresholdShipCount": 12,
-            "lowThresholdShipCount": 10,
+            "exactShipCount": 12,
+            "fuzzyShipCount": 10,
+            "duplicateCandidateCount": 2,
+            "unresolvedDuplicateCount": 0,
             "coverageComplete": False,
             "coverageReasons": ["track_keyframe_vectors_missing"],
             "appliedTimeRange": ["2026-10-27T00:00:00+08:00", "2026-10-27T23:59:59+08:00"],

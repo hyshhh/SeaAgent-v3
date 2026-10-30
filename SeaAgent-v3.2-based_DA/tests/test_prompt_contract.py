@@ -13,6 +13,7 @@ def test_retrieval_uses_the_configured_narrow_gray_zone():
     retrieval = load_config()["pipeline"]["retrieval"]
     assert retrieval["image_exclude"] == 0.65
     assert retrieval["image_match"] == 0.72
+    assert retrieval["dedup_low"] == 0.75
 
 
 def test_all_business_tools_are_exposed_as_compact_workflows():
@@ -43,6 +44,7 @@ def test_prompts_and_skills_match_the_new_recognition_flow():
     assert "verify_images" in prompt
     verify = next(item for item in config["tools"] if item["name"] == "verify_vessel_images")
     assert "reference_registry_reference_id" in verify["description"]
+    assert "reference_keyframe_id" in verify["description"]
 
 
 def test_prompt_settings_expose_only_configured_prompts():
@@ -82,6 +84,10 @@ def test_count_skills_map_user_intent_to_configured_tools():
     assert "registered count" in intent and "total count" in intent
     assert "verificationCandidates" in statistics
     assert "verify_vessel_images" in statistics
+    assert "duplicateCandidates" in statistics
+    assert "exactShipCount" in statistics and "fuzzyShipCount" in statistics
+    finalize = (ROOT / "skills/answer/finalize/SKILL.md").read_text(encoding="utf-8")
+    assert "按精确去重为 X 艘，模糊去重为 Y 艘" in finalize
     assert "match_entities" in agents["planner"]["system_prompt"]
     assert "statistics" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning

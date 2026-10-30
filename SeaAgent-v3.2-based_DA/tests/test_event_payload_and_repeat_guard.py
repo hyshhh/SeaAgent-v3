@@ -272,7 +272,11 @@ def test_statistics_model_results_keep_the_applied_time_range():
         "2026-10-27T23:59:59.999999+08:00",
     ]
     cases = (
-        ("dedup_tracks", {"trackCount": 0, "highThresholdShipCount": 0, "lowThresholdShipCount": 0}),
+        ("dedup_tracks", {
+            "status": "complete", "trackCount": 0, "exactShipCount": 0,
+            "fuzzyShipCount": 0, "duplicateCandidateCount": 0,
+            "unresolvedDuplicateCount": 0,
+        }),
         ("match_entities", {
             "status": "complete", "trackCount": 0, "embeddingConfirmedCount": 0,
             "outsideRegistryCount": 0, "grayCandidateCount": 0, "unresolvedTrackCount": 0,
@@ -292,6 +296,48 @@ def test_statistics_model_results_keep_the_applied_time_range():
         )
 
         assert json.loads(message.content)["appliedTimeRange"] == applied_range
+
+
+def test_dedup_first_pass_sends_pair_candidates_to_the_agent(tmp_path):
+    state = SharedTaskState("count", artifact_dir=tmp_path, artifact_root=tmp_path)
+    guard = RepeatToolCallMiddleware(state=state, scope="executor")
+    result = {
+        "ok": True,
+        "status": "verification_required",
+        "trackCount": 2,
+        "fuzzyShipCount": 1,
+        "duplicateCandidateCount": 1,
+        "unresolvedDuplicateCount": 1,
+        "duplicateCandidates": [{
+            "pairId": "t-1::t-2",
+            "referenceTrackId": "t-1",
+            "candidateTrackId": "t-2",
+            "score": 0.91,
+            "referenceKeyframeId": "kf-1",
+            "candidateKeyframeId": "kf-2",
+            "bestFrameScore": 0.96,
+        }],
+        "duplicateCandidatesTruncated": False,
+        "coverageComplete": False,
+        "nextStep": "verify_vessel_images",
+        "recommendation": "Verify candidates.",
+        "appliedTimeRange": None,
+        "trackRows": [],
+        "trackRowsTruncated": False,
+    }
+    message = guard.wrap_tool_call(
+        _Request("dedup_tracks", {}),
+        lambda request: ToolMessage(
+            content=json.dumps(result),
+            name="dedup_tracks",
+            tool_call_id=request.tool_call["id"],
+        ),
+    )
+
+    compact = json.loads(message.content)
+    assert compact["nextStep"] == "verify_vessel_images"
+    assert compact["duplicateCandidates"][0] == result["duplicateCandidates"][0]
+    assert "exactShipCount" not in compact
 
 
 def test_tool_error_keeps_error_type_for_model_debugging():

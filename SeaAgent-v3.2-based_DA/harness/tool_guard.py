@@ -24,11 +24,14 @@ _MODEL_RESULT_FIELDS = {
         "ok", "status", "matches", "coverageComplete", "registryFound", "nextStep",
     ),
     "verify_vessel_images": (
-        "ok", "decision", "trackId", "facts", "formatRecovered", "registryReferenceId", "keyframeId",
+        "ok", "decision", "pairId", "trackId", "referenceTrackId", "candidateTrackId",
+        "facts", "formatRecovered", "registryReferenceId", "referenceKeyframeId", "keyframeId",
     ),
     "dedup_tracks": (
-        "ok", "trackCount", "highThresholdShipCount", "lowThresholdShipCount",
-        "coverageComplete", "appliedTimeRange",
+        "ok", "status", "trackCount", "exactShipCount", "fuzzyShipCount",
+        "duplicateCandidateCount", "unresolvedDuplicateCount", "duplicateCandidates",
+        "duplicateCandidatesTruncated", "coverageComplete", "nextStep", "recommendation",
+        "appliedTimeRange",
     ),
     "match_entities": (
         "ok", "status", "trackCount", "embeddingConfirmedCount", "outsideRegistryCount", "grayCandidateCount",
@@ -61,7 +64,8 @@ def _model_result(name: str, result: Any) -> Any:
     if result.get("ok") is False:
         fields = (
             "ok", "error", "errorType", "tool", "timeoutSeconds", "hint", "decision",
-            "trackId", "registryReferenceId", "keyframeId",
+            "pairId", "trackId", "referenceTrackId", "candidateTrackId",
+            "registryReferenceId", "referenceKeyframeId", "keyframeId",
         )
         compact = {key: result[key] for key in fields if result.get(key) is not None}
         if "hint" in compact:
@@ -99,6 +103,16 @@ def _model_result(name: str, result: Any) -> Any:
                 ),
             }
             for candidate in compact["verificationCandidates"][:60]
+            if isinstance(candidate, dict)
+        ]
+    if name == "dedup_tracks" and isinstance(compact.get("duplicateCandidates"), list):
+        fields = (
+            "pairId", "referenceTrackId", "candidateTrackId", "score",
+            "referenceKeyframeId", "candidateKeyframeId", "bestFrameScore",
+        )
+        compact["duplicateCandidates"] = [
+            {key: candidate[key] for key in fields if key in candidate}
+            for candidate in compact["duplicateCandidates"][:120]
             if isinstance(candidate, dict)
         ]
     if isinstance(compact.get("facts"), list):
@@ -320,6 +334,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                     "tool": name,
                     "result": {
                         "trackRows": result.get("trackRows", [])[:60],
+                        "duplicateCandidates": result.get("duplicateCandidates", [])[:120],
                         "truncated": bool(result.get("trackRowsTruncated")),
                     },
                 })

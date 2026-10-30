@@ -161,6 +161,42 @@ def test_vlm_can_resolve_a_registry_reference_id_and_track_keyframe(tmp_path):
     assert result["trackId"] == "t-1"
 
 
+def test_vlm_can_compare_two_track_keyframes_for_deduplication(tmp_path):
+    first_path = tmp_path / "first.jpg"
+    second_path = tmp_path / "second.jpg"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+
+    class Repository:
+        def get_keyframe(self, keyframe_id):
+            return {
+                "kf-1": {"trackId": "t-1", "keyframePath": str(first_path)},
+                "kf-2": {"trackId": "t-2", "keyframePath": str(second_path)},
+            }[keyframe_id]
+
+    class VLM:
+        def verify(self, reference, candidate):
+            assert reference == [str(first_path)]
+            assert candidate == [str(second_path)]
+            return {"decision": "match", "facts": ["same vessel"]}
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service.llm = VLM()
+
+    result = service.verify_vessel_images(
+        reference_keyframe_id="kf-1",
+        candidate_keyframe_id="kf-2",
+        pair_id="t-1::t-2",
+    )
+
+    assert result["decision"] == "match"
+    assert result["pairId"] == "t-1::t-2"
+    assert result["referenceTrackId"] == "t-1"
+    assert result["candidateTrackId"] == "t-2"
+    assert result["referenceType"] == "keyframe"
+
+
 def test_vlm_failure_keeps_the_statistics_candidate_identity(tmp_path):
     reference_path = tmp_path / "reference.jpg"
     candidate_path = tmp_path / "candidate.jpg"
@@ -217,12 +253,25 @@ def test_dedup_tool_returns_counts_and_bounded_display_rows():
     service = ToolService.__new__(ToolService)
     service._dedup_track_analysis = lambda *_args, **_kwargs: {
         "ok": True,
+        "status": "verification_required",
         "coverageComplete": False,
-        "highGroups": [["t-1"], ["t-2"]],
-        "lowGroups": [["t-1", "t-2"]],
         "trackCount": 2,
-        "highThresholdShipCount": 2,
-        "lowThresholdShipCount": 1,
+        "exactShipCount": None,
+        "fuzzyShipCount": 1,
+        "duplicateCandidateCount": 1,
+        "unresolvedDuplicateCount": 1,
+        "duplicateCandidates": [{
+            "pairId": "t-1::t-2",
+            "referenceTrackId": "t-1",
+            "candidateTrackId": "t-2",
+            "score": 0.9,
+            "referenceKeyframeId": "kf-1",
+            "candidateKeyframeId": "kf-2",
+            "bestFrameScore": 0.95,
+        }],
+        "duplicateCandidatesTruncated": False,
+        "nextStep": "verify_vessel_images",
+        "recommendation": "Verify candidates.",
         "appliedTimeRange": None,
         "tracks": [_track("t-1")],
         "firstKeyframes": {"t-1": "kf-first"},
@@ -232,11 +281,26 @@ def test_dedup_tool_returns_counts_and_bounded_display_rows():
 
     assert result == {
         "ok": True,
+        "status": "verification_required",
         "trackCount": 2,
-        "highThresholdShipCount": 2,
-        "lowThresholdShipCount": 1,
+        "exactShipCount": None,
+        "fuzzyShipCount": 1,
+        "duplicateCandidateCount": 1,
+        "unresolvedDuplicateCount": 1,
         "coverageComplete": False,
         "appliedTimeRange": None,
+        "nextStep": "verify_vessel_images",
+        "recommendation": "Verify candidates.",
+        "duplicateCandidatesTruncated": False,
+        "duplicateCandidates": [{
+            "pairId": "t-1::t-2",
+            "referenceTrackId": "t-1",
+            "candidateTrackId": "t-2",
+            "score": 0.9,
+            "referenceKeyframeId": "kf-1",
+            "candidateKeyframeId": "kf-2",
+            "bestFrameScore": 0.95,
+        }],
         "trackRows": [{
             "trackId": "t-1",
             "scoreBand": "mismatch",
@@ -256,10 +320,15 @@ def test_dedup_count_reports_the_applied_time_range():
     service = ToolService.__new__(ToolService)
     service._dedup_track_analysis = lambda *_args, **_kwargs: {
         "ok": True,
+        "status": "complete",
         "coverageComplete": True,
         "trackCount": 0,
-        "highThresholdShipCount": 0,
-        "lowThresholdShipCount": 0,
+        "exactShipCount": 0,
+        "fuzzyShipCount": 0,
+        "duplicateCandidateCount": 0,
+        "unresolvedDuplicateCount": 0,
+        "duplicateCandidates": [],
+        "duplicateCandidatesTruncated": False,
         "appliedTimeRange": requested,
         "tracks": [],
         "firstKeyframes": {},
@@ -317,15 +386,42 @@ def test_track_deduplication_uses_instance_safe_overlap_check():
         },
     )
 
-    assert result["highGroups"] == [["t-1"], ["t-2"]]
-    assert result["lowGroups"] == [["t-1"], ["t-2"]]
-    assert result == {
-        "trackCount": 2,
-        "highGroups": [["t-1"], ["t-2"]],
-        "lowGroups": [["t-1"], ["t-2"]],
-        "highThresholdShipCount": 2,
-        "lowThresholdShipCount": 2,
+    assert result["status"] == "complete"
+    assert result["exactShipCount"] == 2
+    assert result["fuzzyShipCount"] == 2
+    assert result["duplicateCandidateCount"] == 0
+
+
+def test_dedup_requires_vlm_confirmation_before_an_exact_merge():
+    service = ToolService.__new__(ToolService)
+    service.settings = {"dedup_high": 0.82, "dedup_low": 0.75}
+    service.vectors = type("Vectors", (), {"keyframes": object()})()
+    service._load_indexed_vectors = lambda *_args, **_kwargs: {1: [1.0], 2: [1.0]}
+    tracks = [
+        {**_track("t-1"), "startTime": 1.0, "endTime": 2.0},
+        {**_track("t-2"), "startTime": 3.0, "endTime": 4.0},
+    ]
+    frames = {
+        "t-1": {"keyframes": [{"keyframeId": "kf-1", "keyframeVectorId": 1}]},
+        "t-2": {"keyframes": [{"keyframeId": "kf-2", "keyframeVectorId": 2}]},
     }
+
+    pending = service._deduplicate_tracks(tracks, frames)
+    pair_id = pending["duplicateCandidates"][0]["pairId"]
+    confirmed = service._deduplicate_tracks(
+        tracks, frames, confirmed_pair_ids={pair_id}, resolved_pair_ids={pair_id}
+    )
+    rejected = service._deduplicate_tracks(
+        tracks, frames, confirmed_pair_ids=set(), resolved_pair_ids={pair_id}
+    )
+
+    assert pending["status"] == "verification_required"
+    assert pending["exactShipCount"] is None
+    assert pending["fuzzyShipCount"] == 1
+    assert confirmed["exactShipCount"] == 1
+    assert rejected["exactShipCount"] == 2
+    assert confirmed["unresolvedDuplicateCount"] == 0
+    assert rejected["unresolvedDuplicateCount"] == 0
 
 
 def test_registry_count_matches_each_track_without_deduplication():

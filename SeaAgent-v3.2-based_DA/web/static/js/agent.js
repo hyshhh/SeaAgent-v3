@@ -1525,7 +1525,8 @@ function renderEvidence(evidence) {
   const queryByTool = Array.isArray(statistics.queryByTool) ? statistics.queryByTool : [];
   const statLabels = {
     status: 'Recognition status',
-    trackCount: 'Raw tracks', highThresholdShipCount: 'High-threshold entities', lowThresholdShipCount: 'Low-threshold entities',
+    trackCount: 'Raw tracks', exactShipCount: 'Exact deduplication', fuzzyShipCount: 'Fuzzy deduplication',
+    duplicateCandidateCount: 'Duplicate pairs to verify', unresolvedDuplicateCount: 'Unresolved duplicate pairs',
     coverageComplete: 'Search complete',
     searchedTrackCount: 'Tracks searched', unsearchableTrackCount: 'Unsearchable tracks',
     coverageReasons: 'Coverage reasons', appliedTimeRange: 'Applied time range',

@@ -58,7 +58,7 @@ pipeline:
     image_match: 0.72
     image_exclude: 0.65
     dedup_high: 0.82
-    dedup_low: 0.72
+    dedup_low: 0.75
   evidence:
     clip_width: 640
     clip_height: 360

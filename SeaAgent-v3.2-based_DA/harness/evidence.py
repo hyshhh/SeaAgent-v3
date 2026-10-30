@@ -22,8 +22,10 @@ REFERENCE_ID_KEYS = (
 TOOL_STATISTIC_KEYS = (
     "status",
     "trackCount",
-    "highThresholdShipCount",
-    "lowThresholdShipCount",
+    "exactShipCount",
+    "fuzzyShipCount",
+    "duplicateCandidateCount",
+    "unresolvedDuplicateCount",
     "embeddingConfirmedCount",
     "outsideRegistryCount",
     "grayCandidateCount",
