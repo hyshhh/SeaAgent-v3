@@ -1,0 +1,126 @@
+{
+  "source_tracks": 214,
+  "source_frames": 571,
+  "reconstructed_vectors": 571,
+  "sampled_tracks": 214,
+  "sampled_candidate_frames": 257,
+  "candidate_stride_seconds": 5.0,
+  "samples": 263,
+  "history_pool_size": 3,
+  "splits": {
+    "train": {
+      "samples": 192,
+      "tracks": 156,
+      "sources": 39
+    },
+    "validation": {
+      "samples": 23,
+      "tracks": 19,
+      "sources": 9
+    },
+    "test": {
+      "samples": 48,
+      "tracks": 39,
+      "sources": 8
+    }
+  },
+  "domains": {
+    "public": 236,
+    "self_collected": 16,
+    "unknown": 11
+  },
+  "label_balance": {
+    "ah_label": {
+      "0": 1,
+      "1": 262
+    },
+    "ch_label": {
+      "0": 140,
+      "1": 123
+    }
+  },
+  "label_reasons": {
+    "admission_reason": {
+      "new_readable_hull_number": 23,
+      "pool_initialization": 214,
+      "redundant_or_uninformative": 1,
+      "visual_novelty": 25
+    },
+    "completeness_reason": {
+      "insufficient_identity_evidence": 140,
+      "readable_hull_number": 113,
+      "visual_view_diversity": 10
+    }
+  },
+  "source_isolation": {
+    "train": [
+      "Open/105.mp4",
+      "Open/112.mp4",
+      "Open/113.mp4",
+      "Open/115.mp4",
+      "Open/116.mp4",
+      "Open/118.mp4",
+      "Open/121.mp4",
+      "Open/17.mp4",
+      "Open/2.mp4",
+      "Open/23.mp4",
+      "Open/31.mp4",
+      "Open/4.mp4",
+      "Open/41.mp4",
+      "Open/45.mp4",
+      "Open/46.mp4",
+      "Open/47.mp4",
+      "Open/48.mp4",
+      "Open/59.mp4",
+      "Open/65.mp4",
+      "Open/7.mp4",
+      "Open/71.mp4",
+      "Open/73.mp4",
+      "Open/75.mp4",
+      "Open/76.mp4",
+      "Open/81.mp4",
+      "Open/85.mp4",
+      "Open/89.mp4",
+      "Open/9.mp4",
+      "Open/94.mp4",
+      "Open/99.mp4",
+      "track/14",
+      "track/15",
+      "track/16",
+      "track/18",
+      "track/19",
+      "track/2",
+      "track/543",
+      "track/544",
+      "track/545"
+    ],
+    "validation": [
+      "Open/102.mp4",
+      "Open/108.mp4",
+      "Open/110.mp4",
+      "Open/12.mp4",
+      "Open/33.mp4",
+      "Open/35.mp4",
+      "Open/80.mp4",
+      "Open/97.mp4",
+      "track/546"
+    ],
+    "test": [
+      "Open/1.mp4",
+      "Open/111.mp4",
+      "Open/117.mp4",
+      "Open/19.mp4",
+      "Open/25.mp4",
+      "YZ/003 (10).mp4",
+      "YZ/other (7).mp4",
+      "track/1"
+    ]
+  },
+  "hashes": {
+    "manifest_sha256": "c24fe22362b8adce8ee3dd9ed545a1ea033bc4297ca6298e91f90a91c61b9c80",
+    "train_sha256": "939950cdf7221fd6035406e0e116670282b1708b6271a170e3fce243a8455ddd",
+    "validation_sha256": "3ae824787d41a4656654101db9783b3978e3c9120076a878330a0c40dbb01405",
+    "test_sha256": "322f1ff9ea1c55886c6f9e0ff45b331520fc1a93a64b0e8d9f5419997f42324f"
+  },
+  "label_protocol": "deterministic proxy labels; not human annotations"
+}

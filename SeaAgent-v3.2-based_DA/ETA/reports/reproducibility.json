@@ -1,0 +1,9 @@
+{
+  "differences": [],
+  "left_run": "artifacts/ablation-eta-20261030T151427Z",
+  "maximum_relative_difference": 0.0,
+  "right_run": "artifacts/eta-main-20261030T142058Z",
+  "timing_compared": false,
+  "tolerance": 0.05,
+  "verdict": "REPRODUCIBLE"
+}

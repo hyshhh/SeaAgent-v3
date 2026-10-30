@@ -1,0 +1,57 @@
+project:
+  name: eta-dpd-reproduction
+  seed: 42
+paths:
+  source_data_root: ../
+  processed_dir: data/processed
+  artifact_dir: artifacts
+  report_dir: reports
+data:
+  tracks_csv: data/memory/tracks.csv
+  keyframes_csv: data/memory/track_keyframes.csv
+  trajectories_dir: data/memory/trajectories
+  keyframe_index: data/indexes/keyframe_index.faiss
+  # The stored keyframe table is already a sparse memory; resampling at 5 s
+  # leaves only 43 later observations and makes the proxy AH target degenerate.
+  candidate_stride_seconds: 0.0
+  history_pool_size: 3
+  min_quality: 0.20
+  novelty_threshold: 0.10
+  completeness_similarity_max: 0.96
+  quality_coverage_min: 0.75
+  split:
+    mode: source_group
+    train: 0.70
+    validation: 0.15
+    test: 0.15
+model:
+  variant: eta
+  input_dim: 2048
+  hidden_dim: 256
+  tokens_per_frame: 8
+  stages: 2
+  layers_per_stage: 2
+  attention_heads: 4
+  ffn_dim: 1024
+  dropout: 0.10
+  heads_hidden: 128
+train:
+  epochs: 30
+  batch_size: 128
+  learning_rate: 0.0001
+  min_learning_rate: 0.000001
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  warmup_epochs: 2
+  grad_clip_norm: 1.0
+  num_workers: 0
+  device: auto
+  checkpoint_metric: auto
+evaluation:
+  batch_size: 256
+  latency_repeats: 100
+  stop_threshold: 0.80
+  stop_thresholds: [0.50, 0.70, 0.80, 0.90]
+  calibration_bins: 10
+  bootstrap_iterations: 1000

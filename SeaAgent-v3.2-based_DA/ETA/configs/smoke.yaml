@@ -1,0 +1,15 @@
+project:
+  name: eta-smoke
+paths:
+  processed_dir: artifacts/smoke/processed
+  artifact_dir: artifacts/smoke/runs
+  report_dir: artifacts/smoke/reports
+data:
+  history_pool_size: 3
+train:
+  epochs: 2
+  batch_size: 32
+  warmup_epochs: 0
+evaluation:
+  batch_size: 64
+  latency_repeats: 10

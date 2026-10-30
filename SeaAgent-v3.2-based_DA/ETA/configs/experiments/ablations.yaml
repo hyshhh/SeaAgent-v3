@@ -1,0 +1,13 @@
+variants:
+  - name: mlp_cur
+    variant: mlp_cur
+  - name: mlp_hist
+    variant: mlp_hist
+  - name: sa_dh
+    variant: sa_dh
+  - name: ca_only
+    variant: ca_only
+  - name: ca_sh
+    variant: ca_sh
+  - name: eta
+    variant: eta

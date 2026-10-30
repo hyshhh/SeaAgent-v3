@@ -1,0 +1,6 @@
+.gitattributes text eol=lf
+reports/*.json text eol=lf
+reports/*.md text eol=lf
+reports/*.csv text eol=lf
+reports/*.sha256 text eol=lf
+reports/*.png -text

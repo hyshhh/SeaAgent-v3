@@ -1,0 +1,13 @@
+artifacts/
+data/processed/
+data/interim/
+data/raw/
+*.pt
+*.pth
+*.npz
+*.faiss
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+reports/*.console.log
