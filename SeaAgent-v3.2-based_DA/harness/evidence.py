@@ -25,8 +25,9 @@ TOOL_STATISTIC_KEYS = (
     "trackCount",
     "highThresholdShipCount",
     "lowThresholdShipCount",
+    "embeddingConfirmedCount",
     "outsideRegistryCount",
-    "embeddingCandidateCount",
+    "grayCandidateCount",
     "unresolvedTrackCount",
     "embeddingCoverageComplete",
     "nextStep",
@@ -266,7 +267,9 @@ def _display_rows(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
                     else f"vlm_{decision}"
                 )
             status = (
-                "VLM failed; unresolved"
+                "Embedding confirmed in registry"
+                if classification == "embedding_confirmed"
+                else "VLM failed; unresolved"
                 if classification == "vlm_failed"
                 else {
                     "match": "VLM confirmed in registry",

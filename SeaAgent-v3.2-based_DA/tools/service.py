@@ -757,8 +757,10 @@ class ToolService:
                 unsearchable_track_ids.update(track_ids)
             matches = []
             verification_candidates = []
+            embedding_confirmed_count = 0
             excluded_count = 0
             unresolved_count = 0
+            match_threshold = float(self.settings["image_match"])
             exclusion_threshold = float(self.settings.get("image_exclude", 0.5))
             for track in tracks:
                 track_id = str(track["trackId"])
@@ -791,8 +793,12 @@ class ToolService:
                     detail["matchedRegistryReferenceId"] = str(
                         best.get("bestMatchedRegistryReferenceId") or ""
                     )
-                if score is not None and score > exclusion_threshold and best:
-                    detail["classification"] = "verification_pending"
+                if score is not None and score >= match_threshold and best:
+                    detail["classification"] = "embedding_confirmed"
+                    detail["verificationDecision"] = "match"
+                    embedding_confirmed_count += 1
+                elif score is not None and score > exclusion_threshold and best:
+                    detail["classification"] = "gray_verification_pending"
                     detail["verificationDecision"] = "pending"
                     verification_candidates.append(detail)
                 elif score is not None and track_id not in unsearchable_track_ids:
@@ -855,8 +861,9 @@ class ToolService:
                     else "incomplete"
                 ),
                 "trackCount": len(tracks),
+                "embeddingConfirmedCount": embedding_confirmed_count,
                 "outsideRegistryCount": excluded_count,
-                "embeddingCandidateCount": len(verification_candidates),
+                "grayCandidateCount": len(verification_candidates),
                 "unresolvedTrackCount": unresolved_count,
                 "embeddingCoverageComplete": embedding_coverage_complete,
                 "coverageReasons": coverage_reasons,
@@ -869,7 +876,7 @@ class ToolService:
             if verification_candidates:
                 result["nextStep"] = "verify_vessel_images"
                 result["recommendation"] = (
-                    "对 verificationCandidates 中每个候选调用一次 verify_vessel_images；"
+                    "仅对 verificationCandidates 中的灰区轨迹各调用一次 verify_vessel_images；"
                     "使用同一候选的 matchedRegistryReferenceId 和 matchedKeyframeId。"
                 )
             return result

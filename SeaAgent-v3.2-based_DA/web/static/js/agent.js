@@ -1510,7 +1510,7 @@ function renderEvidence(evidence) {
       const name = object.hullNumber || object.registryId || '';
       const score = Number.isFinite(Number(match?.score)) ? ` · ${Number(match.score).toFixed(3)}` : '';
       const status = match?.status || 'Unconfirmed';
-      const statusClass = status === 'VLM confirmed in registry' ? 'is-threshold-match' : status.includes('counted outside registry') ? 'is-unregistered' : 'is-unconfirmed';
+      const statusClass = status === 'Embedding confirmed in registry' || status === 'VLM confirmed in registry' ? 'is-threshold-match' : status.includes('counted outside registry') ? 'is-unregistered' : 'is-unconfirmed';
       matchCell = `<span class="qa-registry-status ${statusClass}">${escapeHtml(status)}</span>${name ? `<span class="qa-registry-object">${escapeHtml(name)}${escapeHtml(score)}</span>` : score ? `<span class="qa-registry-object">${escapeHtml(score.slice(3))}</span>` : ''}`;
     }
     return `<tr><td class="qa-evidence-track-id">${escapeHtml(trackId)}</td><td>${escapeHtml(time)}</td><td class="qa-evidence-frame-cell">${keyframe}</td><td class="qa-evidence-registry-cell">${matchCell}</td></tr>`;
@@ -1529,7 +1529,8 @@ function renderEvidence(evidence) {
     coverageComplete: 'Search complete',
     searchedTrackCount: 'Tracks searched', unsearchableTrackCount: 'Unsearchable tracks',
     coverageReasons: 'Coverage reasons', appliedTimeRange: 'Applied time range',
-    candidateCount: 'Candidates', embeddingCandidateCount: 'Requires VLM verification',
+    candidateCount: 'Candidates', embeddingConfirmedCount: 'Embedding confirmed in registry',
+    grayCandidateCount: 'Gray-zone candidates requiring VLM',
     outsideRegistryCount: 'Below embedding exclusion', unresolvedTrackCount: 'Unresolved embedding tracks',
     embeddingCoverageComplete: 'Embedding search complete', nextStep: 'Recommended next step',
     confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',

@@ -170,8 +170,9 @@ def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evide
         "ok": True,
         "status": "verification_required",
         "trackCount": 2,
+        "embeddingConfirmedCount": 0,
         "outsideRegistryCount": 1,
-        "embeddingCandidateCount": 1,
+        "grayCandidateCount": 1,
         "unresolvedTrackCount": 0,
         "embeddingCoverageComplete": True,
         "nextStep": "verify_vessel_images",
@@ -180,8 +181,8 @@ def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evide
         "appliedTimeRange": None,
         "matches": [
             {
-                "trackId": "t-1", "score": 0.91, "scoreBand": "match",
-                "classification": "verification_pending", "verificationDecision": "pending",
+                "trackId": "t-1", "score": 0.65, "scoreBand": "uncertain",
+                "classification": "gray_verification_pending", "verificationDecision": "pending",
                 "matchedKeyframeId": "kf-1", "matchedRegistryReferenceId": "ref-1",
                 "matchedObject": {"hullNumber": "0857"},
             },
@@ -192,7 +193,7 @@ def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evide
             },
         ],
         "verificationCandidates": [{
-            "trackId": "t-1", "score": 0.91, "scoreBand": "match",
+            "trackId": "t-1", "score": 0.65, "scoreBand": "uncertain",
             "matchedKeyframeId": "kf-1", "matchedRegistryReferenceId": "ref-1",
             "matchedObject": {"hullNumber": "0857"},
         }],
@@ -210,8 +211,9 @@ def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evide
         "ok": True,
         "status": "verification_required",
         "trackCount": 2,
+        "embeddingConfirmedCount": 0,
         "outsideRegistryCount": 1,
-        "embeddingCandidateCount": 1,
+        "grayCandidateCount": 1,
         "unresolvedTrackCount": 0,
         "embeddingCoverageComplete": True,
         "nextStep": "verify_vessel_images",
@@ -219,7 +221,7 @@ def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evide
         "coverageReasons": [],
         "appliedTimeRange": None,
         "verificationCandidates": [{
-            "trackId": "t-1", "score": 0.91, "scoreBand": "match",
+            "trackId": "t-1", "score": 0.65, "scoreBand": "uncertain",
             "matchedKeyframeId": "kf-1", "matchedRegistryReferenceId": "ref-1",
             "matchedObject": {"hullNumber": "0857"},
         }],
@@ -241,8 +243,9 @@ def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evide
             ],
             "trackCount": 2,
             "status": "verification_required",
+            "embeddingConfirmedCount": 0,
             "outsideRegistryCount": 1,
-            "embeddingCandidateCount": 1,
+            "grayCandidateCount": 1,
             "unresolvedTrackCount": 0,
             "embeddingCoverageComplete": True,
             "nextStep": "verify_vessel_images",
@@ -258,7 +261,7 @@ def test_registry_count_hands_candidates_to_the_agent_and_keeps_details_in_evide
     result = trace.result("thread", {"harness": {}})
     assert result["tool_records"][0]["result"] == json.loads(message.content)
     assert result["enrichedEvidence"]["trackIds"] == ["t-1", "t-2"]
-    assert result["enrichedEvidence"]["displayGroups"][0]["score"] == 0.91
+    assert result["enrichedEvidence"]["displayGroups"][0]["score"] == 0.65
     assert result["enrichedEvidence"]["trackRows"][0]["registryMatch"]["status"] == "VLM verification required"
     assert state.evidence_artifact_results() == []
 
@@ -271,8 +274,8 @@ def test_statistics_model_results_keep_the_applied_time_range():
     cases = (
         ("dedup_tracks", {"trackCount": 0, "highThresholdShipCount": 0, "lowThresholdShipCount": 0}),
         ("match_entities", {
-            "status": "complete", "trackCount": 0, "outsideRegistryCount": 0,
-            "embeddingCandidateCount": 0, "unresolvedTrackCount": 0,
+            "status": "complete", "trackCount": 0, "embeddingConfirmedCount": 0,
+            "outsideRegistryCount": 0, "grayCandidateCount": 0, "unresolvedTrackCount": 0,
             "embeddingCoverageComplete": True, "coverageReasons": [],
         }),
     )

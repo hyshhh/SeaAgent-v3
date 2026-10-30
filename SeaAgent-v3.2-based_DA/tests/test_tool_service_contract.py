@@ -383,11 +383,12 @@ def test_registry_count_matches_each_track_without_deduplication():
     result = service.match_entities()
 
     assert result["trackCount"] == 2
-    assert result["status"] == "verification_required"
+    assert result["status"] == "incomplete"
+    assert result["embeddingConfirmedCount"] == 1
     assert result["outsideRegistryCount"] == 0
-    assert result["embeddingCandidateCount"] == 1
+    assert result["grayCandidateCount"] == 0
     assert result["unresolvedTrackCount"] == 1
-    assert result["nextStep"] == "verify_vessel_images"
+    assert "nextStep" not in result
     assert result["matches"][0]["score"] == 0.73
     assert [item["trackId"] for item in result["matches"]] == ["t-1", "t-2"]
     assert result["matches"][0]["matchedObject"] == {
@@ -397,10 +398,10 @@ def test_registry_count_matches_each_track_without_deduplication():
         "keyframeId": "kf-1",
     }
     assert result["matches"][0]["scoreBand"] == "match"
-    assert result["matches"][0]["verificationDecision"] == "pending"
+    assert result["matches"][0]["classification"] == "embedding_confirmed"
+    assert result["matches"][0]["verificationDecision"] == "match"
     assert result["matches"][0]["keyframeId"] == "kf-1"
-    assert result["verificationCandidates"][0]["matchedKeyframeId"] == "kf-1"
-    assert result["verificationCandidates"][0]["matchedRegistryReferenceId"] == "ref-1"
+    assert result["verificationCandidates"] == []
 
 
 def test_registry_count_requires_vectors_for_every_selected_keyframe():
@@ -655,7 +656,7 @@ def test_image_match_coverage_compares_registry_ids_not_only_their_count():
     assert result["unsearchableRegistryCount"] == 1
 
 
-def test_registry_count_hands_off_high_and_gray_candidates_without_calling_vlm():
+def test_registry_count_verifies_only_the_gray_zone_without_calling_vlm():
     class Repository:
         def list_registry(self):
             return [{"registryId": "r-1", "hullNumber": "A01", "references": [{
@@ -712,17 +713,16 @@ def test_registry_count_hands_off_high_and_gray_candidates_without_calling_vlm()
 
     assert result["status"] == "verification_required"
     assert result["nextStep"] == "verify_vessel_images"
-    assert result["embeddingCandidateCount"] == 2
+    assert result["embeddingConfirmedCount"] == 1
+    assert result["grayCandidateCount"] == 1
     assert result["outsideRegistryCount"] == 1
     assert result["unresolvedTrackCount"] == 0
-    assert [item["trackId"] for item in result["verificationCandidates"]] == [
-        "t-high",
-        "t-gray",
-    ]
-    assert [item["scoreBand"] for item in result["verificationCandidates"]] == [
-        "match",
-        "uncertain",
-    ]
+    assert [item["trackId"] for item in result["verificationCandidates"]] == ["t-gray"]
+    assert result["verificationCandidates"][0]["scoreBand"] == "uncertain"
+    rows = {item["trackId"]: item for item in result["matches"]}
+    assert rows["t-high"]["classification"] == "embedding_confirmed"
+    assert rows["t-high"]["verificationDecision"] == "match"
+    assert rows["t-low"]["verificationDecision"] == "not_in_registry"
     assert all(
         item["verificationDecision"] == "pending"
         for item in result["verificationCandidates"]
@@ -760,8 +760,9 @@ def test_registry_count_marks_only_scores_at_or_below_exclusion_as_outside():
     result = service.match_entities()
 
     assert result["status"] == "complete"
+    assert result["embeddingConfirmedCount"] == 0
     assert result["outsideRegistryCount"] == 1
-    assert result["embeddingCandidateCount"] == 0
+    assert result["grayCandidateCount"] == 0
     assert result["unresolvedTrackCount"] == 0
     assert "nextStep" not in result
 

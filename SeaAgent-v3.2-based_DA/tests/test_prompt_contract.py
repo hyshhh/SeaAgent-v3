@@ -101,17 +101,18 @@ def test_statistics_prompts_keep_embedding_and_vlm_semantics_consistent():
     assert "statistics" in agents["executor"]["system_prompt"]
     assert "statistics" in agents["reflector"]["skills"]
     assert "verificationCandidates" in agents["executor"]["system_prompt"]
-    assert "VLM match 才计在库" in agents["reflector"]["system_prompt"]
+    assert "embeddingConfirmedCount" in agents["reflector"]["system_prompt"]
     for field in (
-        "outsideRegistryCount", "embeddingCandidateCount", "unresolvedTrackCount",
+        "embeddingConfirmedCount", "outsideRegistryCount", "grayCandidateCount", "unresolvedTrackCount",
         "embeddingCoverageComplete", "verificationCandidates", "nextStep",
         "coverageReasons",
     ):
         assert field in statistics
         assert field in match_entities["description"]
     assert "不在工具内部调用 VLM" in match_entities["description"]
-    assert "VLM `match` counts in registry" in statistics
-    assert "VLM `mismatch` counts outside registry" in statistics
+    assert "gray candidates" in statistics
+    assert "VLM `match` adds to `embeddingConfirmedCount`" in statistics
+    assert "VLM `mismatch` adds to `outsideRegistryCount`" in statistics
 def test_planner_and_question_presets_cover_the_six_request_types():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")

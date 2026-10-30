@@ -31,7 +31,7 @@ _MODEL_RESULT_FIELDS = {
         "coverageComplete", "appliedTimeRange",
     ),
     "match_entities": (
-        "ok", "status", "trackCount", "outsideRegistryCount", "embeddingCandidateCount",
+        "ok", "status", "trackCount", "embeddingConfirmedCount", "outsideRegistryCount", "grayCandidateCount",
         "unresolvedTrackCount", "embeddingCoverageComplete", "nextStep", "recommendation",
         "coverageReasons", "appliedTimeRange", "verificationCandidatesTruncated",
         "verificationCandidates",
@@ -298,7 +298,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                         **{
                             key: result[key]
                             for key in (
-                                "status", "outsideRegistryCount", "embeddingCandidateCount",
+                                "status", "embeddingConfirmedCount", "outsideRegistryCount", "grayCandidateCount",
                                 "unresolvedTrackCount", "embeddingCoverageComplete", "nextStep",
                                 "recommendation", "coverageReasons", "appliedTimeRange",
                             )

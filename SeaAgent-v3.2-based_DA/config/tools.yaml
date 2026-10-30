@@ -53,11 +53,12 @@ tools:
     label: 实体先验库匹配统计
     description: >-
       不去重；逐轨迹与先验库做 embedding 检索，不在工具内部调用 VLM。
-      返回 trackCount、outsideRegistryCount、embeddingCandidateCount、unresolvedTrackCount、embeddingCoverageComplete、
+      score ≥ image_match 直接计为在库；score ≤ image_exclude 直接计为不在库；仅灰区返回待核验候选。
+      返回 trackCount、embeddingConfirmedCount、outsideRegistryCount、grayCandidateCount、unresolvedTrackCount、embeddingCoverageComplete、
       coverageReasons、appliedTimeRange，以及最多 60 个 verificationCandidates。
       有候选时返回 status=verification_required、nextStep=verify_vessel_images 和 recommendation；
-      Agent 必须对每个候选使用 matchedRegistryReferenceId + matchedKeyframeId 调用 verify_vessel_images；多个候选可在同一回合并行调用。
-      仅 VLM match 计为在库，VLM mismatch 计为不在库，uncertain/失败保持未解决。
+      Agent 只需对灰区候选使用 matchedRegistryReferenceId + matchedKeyframeId 调用 verify_vessel_images；多个候选可在同一回合并行调用。
+      灰区 VLM match 计为在库，VLM mismatch 计为不在库，uncertain/失败保持未解决。
       省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}

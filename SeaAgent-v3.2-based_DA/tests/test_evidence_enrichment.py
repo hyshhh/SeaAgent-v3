@@ -95,8 +95,9 @@ def test_compact_count_fields_feed_frontend_statistics():
 def test_duplicate_statistics_from_tool_and_private_evidence_are_shown_once():
     result = {
         "trackCount": 214,
+        "embeddingConfirmedCount": 20,
         "outsideRegistryCount": 180,
-        "embeddingCandidateCount": 34,
+        "grayCandidateCount": 14,
         "unresolvedTrackCount": 0,
         "embeddingCoverageComplete": False,
         "coverageReasons": ["track_keyframe_vectors_missing"],
@@ -116,8 +117,9 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
     payload = build_evidence_payload([
         _record("match_entities", {
             "trackCount": 1,
+            "embeddingConfirmedCount": 0,
             "outsideRegistryCount": 0,
-            "embeddingCandidateCount": 1,
+            "grayCandidateCount": 1,
             "unresolvedTrackCount": 0,
             "embeddingCoverageComplete": True,
         }),
@@ -125,9 +127,9 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
             "matches": [{
                 "trackId": "t-1",
                 "trackIds": ["t-1", "t-2"],
-                "score": 0.83,
+                "score": 0.88,
                 "scoreBand": "match",
-                "classification": "vlm_confirmed",
+                "classification": "embedding_confirmed",
                 "verificationDecision": "match",
                 "matchedObject": {"hullNumber": "0857"},
                 "keyframeIds": ["kf-1"],
@@ -140,9 +142,9 @@ def test_external_registry_match_evidence_is_enriched_without_counting_as_model_
     assert payload["trackIds"] == ["t-1", "t-2"]
     assert payload["keyframeIds"] == ["kf-1"]
     assert payload["registryReferenceIds"] == ["ref-1"]
-    assert payload["displayGroups"][0]["score"] == 0.83
+    assert payload["displayGroups"][0]["score"] == 0.88
     assert payload["displayGroups"][0]["matchedObject"]["hullNumber"] == "0857"
-    assert payload["trackRows"][0]["registryMatch"]["status"] == "VLM confirmed in registry"
+    assert payload["trackRows"][0]["registryMatch"]["status"] == "Embedding confirmed in registry"
 
 
 def test_evidence_rows_keep_one_keyframe_track_time_and_explicit_registry_match():
@@ -185,9 +187,9 @@ def test_candidate_evidence_uses_the_agent_vlm_result_for_its_track():
         _record("match_entities", {
             "matches": [{
                 "trackId": "t-1",
-                "score": 0.81,
-                "scoreBand": "match",
-                "classification": "verification_pending",
+                "score": 0.65,
+                "scoreBand": "uncertain",
+                "classification": "gray_verification_pending",
                 "verificationDecision": "pending",
                 "matchedKeyframeId": "kf-1",
                 "matchedRegistryReferenceId": "ref-1",
@@ -205,10 +207,29 @@ def test_candidate_evidence_uses_the_agent_vlm_result_for_its_track():
 
     assert payload["trackRows"][0]["registryMatch"] == {
         "status": "VLM confirmed in registry",
-        "score": 0.81,
+        "score": 0.65,
         "matchedObject": {"hullNumber": "0857"},
         "verificationDecision": "match",
     }
+
+
+def test_embedding_confirmed_candidate_is_shown_without_a_vlm_result():
+    payload = build_evidence_payload([
+        _record("match_entities", {
+            "matches": [{
+                "trackId": "t-high",
+                "score": 0.88,
+                "scoreBand": "match",
+                "classification": "embedding_confirmed",
+                "verificationDecision": "match",
+                "matchedObject": {"hullNumber": "0857"},
+            }],
+        }),
+    ])
+
+    assert payload["trackRows"][0]["registryMatch"]["status"] == (
+        "Embedding confirmed in registry"
+    )
 
 
 def test_failed_candidate_verification_remains_visible_as_unresolved():
@@ -216,9 +237,9 @@ def test_failed_candidate_verification_remains_visible_as_unresolved():
         _record("match_entities", {
             "matches": [{
                 "trackId": "t-7",
-                "score": 0.73,
-                "scoreBand": "match",
-                "classification": "verification_pending",
+                "score": 0.65,
+                "scoreBand": "uncertain",
+                "classification": "gray_verification_pending",
                 "verificationDecision": "pending",
             }],
         }),

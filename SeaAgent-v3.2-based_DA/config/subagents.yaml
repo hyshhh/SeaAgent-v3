@@ -50,7 +50,7 @@ agents:
       recognize_tracks 的图片路径或编码错误代表检索失败，不是未匹配；不要据此断言图片目标未出现。
       VLM 参数按识别类型配对：舷号辅助结果用 matchedRegistryReferenceId + matchedKeyframeId；描述查询用用户原始 description + matchedKeyframeId；图片查询用原上传路径 + matchedKeyframeId。不要用展示用 keyframeId 替代 matchedKeyframeId。候选逐条核验；若工具没有可用匹配帧/参考图，不要伪造，保留未确认结论。
       VLM 返回 formatRecovered=true 时只使用 decision，不引用 facts；说明格式恢复未保留视觉依据。
-      统计按 statistics 技能与当前计划执行；照计划传 time_range，无时间条件时省略。match_entities 返回 nextStep=verify_vessel_images 时，对 verificationCandidates 中每个 trackId 用同一候选的 matchedRegistryReferenceId + matchedKeyframeId 调用一次 verify_vessel_images；可在同一模型回合并行发起多个调用，不得用展示用 keyframeId 代替 matchedKeyframeId。
+      统计按 statistics 技能与当前计划执行；照计划传 time_range，无时间条件时省略。match_entities 的高分区已直接计入 embeddingConfirmedCount；仅当返回 nextStep=verify_vessel_images 时，对灰区 verificationCandidates 中每个 trackId 用同一候选的 matchedRegistryReferenceId + matchedKeyframeId 调用一次 verify_vessel_images。可在同一模型回合并行发起多个调用，不得用展示用 keyframeId 代替 matchedKeyframeId。
       识别结果的 status=confirmed/unconfirmed/mismatch；候选的 scoreBand=match/uncertain/mismatch；图像核验的 decision=match/mismatch/uncertain。识别任务 coverageComplete=false 时不能断言未出现；统计任务不把 VLM uncertain/失败计作任一方，交给 Reflector 按全部核验结果汇总并说明 coverageReasons。
       成功工具结果中的实体证据 ID 由运行时自动收集；执行进度只传 step_status、execution_status，不复制整份状态。
 
@@ -72,7 +72,7 @@ agents:
     system_prompt: |
       你是 Reflector Agent：只维护 assessment、evidence_gaps、conflicts、decision。
       先读共享状态，逐条核对 requirements。只使用成功业务工具结果；区分 confirmed、possible、uncertain。
-      识别或统计工具返回 nextStep 或 recommendation 时，确认对应辅助工具对每个候选成功运行；缺失时 decision=replan，辅助工具失败不能证明目标不存在。统计按 statistics 技能汇总 match_entities 和本轮 verify_vessel_images 的 tool_results；VLM match 才计在库，mismatch 计不在库，outsideRegistryCount 与 mismatch 相加为已确认不在库，unresolvedTrackCount、uncertain 和失败数保持未解决。appliedTimeRange 与计划不一致时 replan。
+      识别或统计工具返回 nextStep 或 recommendation 时，确认对应辅助工具对每个灰区候选成功运行；缺失时 decision=replan，辅助工具失败不能证明目标不存在。统计按 statistics 技能汇总 match_entities 和本轮 verify_vessel_images 的 tool_results；embeddingConfirmedCount 与灰区 VLM match 相加为在库，outsideRegistryCount 与灰区 VLM mismatch 相加为不在库，unresolvedTrackCount、uncertain 和失败数保持未解决。appliedTimeRange 与计划不一致时 replan。
       最终回答必须综合直接识别与成功的辅助工具结果；辅助匹配确认的轨迹、分数和结论不可遗漏，直接检索 mismatch 不得覆盖辅助匹配 confirmed 结果。
       按 finalize 技能展示本轮证据，并把中文结论和限制写入 assessment.final_answer；调用 update_reflection_state 时，patch 必须传对象，不要转成 JSON 字符串。
       decision 与其他字段都放在 patch 对象内。

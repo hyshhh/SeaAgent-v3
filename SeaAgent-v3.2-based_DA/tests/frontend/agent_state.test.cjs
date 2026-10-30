@@ -191,12 +191,12 @@ test('compact count result metadata remains visible in the evidence panel', () =
   assert.match(html, /Search complete: No/);
 });
 
-test('registry count metadata shows the embedding candidate handoff', () => {
+test('registry count metadata shows confirmed and gray-zone counts', () => {
   const ui = page();
   ui.run(`renderEvidence({ statistics: { queryByTool: [{
     tool: 'match_entities',
     statistics: {
-      trackCount: 214, outsideRegistryCount: 190, embeddingCandidateCount: 24,
+      trackCount: 214, embeddingConfirmedCount: 14, outsideRegistryCount: 176, grayCandidateCount: 24,
       unresolvedTrackCount: 0, embeddingCoverageComplete: false,
       nextStep: 'verify_vessel_images',
       coverageReasons: ['registry_entries_without_references'],
@@ -205,8 +205,9 @@ test('registry count metadata shows the embedding candidate handoff', () => {
   }] } });`);
   const html = ui.elements.get('evidenceGallery').innerHTML;
   assert.match(html, /Tracks matched: 214/);
-  assert.match(html, /Below embedding exclusion: 190/);
-  assert.match(html, /Requires VLM verification: 24/);
+  assert.match(html, /Embedding confirmed in registry: 14/);
+  assert.match(html, /Below embedding exclusion: 176/);
+  assert.match(html, /Gray-zone candidates requiring VLM: 24/);
   assert.match(html, /Unresolved embedding tracks: 0/);
   assert.match(html, /Embedding search complete: No/);
   assert.match(html, /Recommended next step: verify_vessel_images/);
