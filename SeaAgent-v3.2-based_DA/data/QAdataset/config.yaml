@@ -1,0 +1,29 @@
+version: 1
+seed: 42
+question_count: 100
+
+distribution:
+  hull_number_lookup: 23
+  description_lookup: 23
+  image_lookup: 23
+  total_count: 11
+  registered_count: 10
+  unregistered_count: 10
+
+paths:
+  project_root: ../..
+  memory_dir: data/memory
+  registry_dir: data/registry
+  output_dir: dataset
+
+collection:
+  time_padding_seconds: 1.0
+  max_description_chars: 220
+  max_evidence_tracks: 3
+  registry_top_k: 10
+  registry_matches_per_hull: 4
+  count_window_seconds: 45
+
+verification:
+  registry_use_vlm: true
+  dedup_use_vlm: true

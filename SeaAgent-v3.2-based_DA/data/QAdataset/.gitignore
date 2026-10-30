@@ -1,0 +1,6 @@
+# Server-only generated dataset assets.
+dataset/questions.jsonl
+dataset/images/
+dataset/features/
+dataset/manifest.json
+collector/.cache/
