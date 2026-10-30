@@ -136,6 +136,51 @@ def test_planner_clarification_stops_before_executor_and_reflector(tmp_path):
     assert runtime.shared_state.snapshot()["task_status"] == "awaiting_input"
 
 
+def test_no_new_evidence_finishes_with_the_existing_partial_answer(tmp_path):
+    runtime = SeaVideoHarness.__new__(SeaVideoHarness)
+    runtime.config = {"harness": {"max_iterations": 4}}
+    runtime.shared_state = SharedTaskState("q")
+    runtime.state_store = SharedStateStore(tmp_path / "state.sqlite")
+    runtime._cancel = None
+    calls = {"planner": 0, "executor": 0, "reflector": 0}
+
+    def run_role(role, *_args):
+        calls[role] += 1
+        iteration = runtime.shared_state.snapshot()["iteration"]
+        if role == "planner" and iteration == 1:
+            runtime.shared_state.update(
+                "planner",
+                {
+                    "requirements": ["识别图片中的船"],
+                    "plan": [{"id": "step-1", "content": "run", "required_evidence": ["recognize_tracks"]}],
+                    "next_action": "execute step-1",
+                },
+            )
+        elif role == "executor" and iteration == 1:
+            runtime.shared_state.record_tool_result(
+                "executor", "recognize_tracks", "call-1", {"ok": True}, "completed"
+            )
+        elif role == "reflector":
+            runtime.shared_state.update(
+                "reflector",
+                {
+                    "assessment": {"final_answer": "已返回可用结果，另有 1 项未解决。"},
+                    "decision": "continue",
+                },
+            )
+        yield None
+        return {"state": "completed"}
+
+    runtime._run_agent_steps = run_role
+    outcome = runtime._consume_driver(
+        runtime._drive_multi_steps("q", "qa-test", _Trace(None, 4000))
+    )
+
+    assert outcome == {"state": "completed"}
+    assert runtime.shared_state.snapshot()["decision"] == "terminate"
+    assert calls == {"planner": 2, "executor": 2, "reflector": 2}
+
+
 def test_trace_accepts_root_level_updates_and_bounds_event_payloads():
     events = []
     trace = _Trace(events.append, event_limit=10, shared_state=SharedTaskState("问题"))

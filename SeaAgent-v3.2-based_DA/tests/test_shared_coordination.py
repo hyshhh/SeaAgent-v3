@@ -213,6 +213,28 @@ def test_reflection_assessment_text_becomes_a_final_answer_object():
     }
 
 
+def test_reflection_final_conclusion_is_promoted_to_final_answer():
+    state = SharedTaskState("q")
+    tools = {tool.name: tool for tool in build_state_tools(state)}
+
+    result = tools["update_reflection_state"].invoke(
+        {
+            "patch": {
+                "decision": "continue",
+                "assessment": {
+                    "direct_search": "3 个候选",
+                    "final_conclusion": "2 个候选不匹配，1 个仍未解决。",
+                },
+            }
+        }
+    )
+
+    assert result["ok"] is True
+    assessment = state.snapshot()["assessment"]
+    assert assessment["final_answer"] == "2 个候选不匹配，1 个仍未解决。"
+    assert assessment["final_conclusion"] == "2 个候选不匹配，1 个仍未解决。"
+
+
 def test_repeat_cache_is_scoped_to_the_agent_and_reload(tmp_path):
     store = SharedStateStore(tmp_path / "state.sqlite")
     state = store.load("t", "q")

@@ -668,6 +668,30 @@ class SeaVideoHarness:
                         time.sleep(delay)
 
     # 3.1.14 按规划、执行、反思闭环调度并校验状态提交
+    @staticmethod
+    def _plan_signature(state: dict[str, Any]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+        return tuple(
+            (
+                str(step.get("id") or ""),
+                str(step.get("content") or ""),
+                tuple(str(item) for item in (step.get("required_evidence") or [])),
+            )
+            for step in state.get("plan", [])
+            if isinstance(step, dict)
+        )
+
+    @staticmethod
+    def _new_successful_tool_results(
+        state: dict[str, Any], previous_call_ids: set[str]
+    ) -> list[dict[str, Any]]:
+        return [
+            record
+            for record in state.get("tool_results", [])
+            if isinstance(record, dict)
+            and str(record.get("callId") or "") not in previous_call_ids
+            and record.get("status") == "completed"
+        ]
+
     def _drive_multi_steps(
         self,
         question: str,
@@ -711,6 +735,14 @@ class SeaVideoHarness:
         iteration = current["iteration"] or 1
         all_roles = ["planner", "executor", "reflector"]
         while iteration <= max_iterations:
+            started_with_resume = resume_payload is not None
+            iteration_start = self.shared_state.snapshot()
+            previous_call_ids = {
+                str(record.get("callId") or "")
+                for record in iteration_start.get("tool_results", [])
+                if isinstance(record, dict)
+            }
+            plan_before = self._plan_signature(iteration_start)
             self.shared_state.runtime_update({"iteration": iteration, "pending_agent": start_role})
             roles = all_roles[all_roles.index(start_role) :]
             for role in roles:
@@ -754,6 +786,28 @@ class SeaVideoHarness:
                 self.state_store.save(thread_id, self.shared_state)  #共享状态写入Sql，task_status。并不是简单的写文件，而是带冲突检测
             current = self.shared_state.snapshot()
             decision = str(current.get("decision") or "replan").lower()  # 收尾还是再来一轮，由 reflector 决定
+            if decision in {"continue", "replan"} and not started_with_resume:
+                new_successes = self._new_successful_tool_results(current, previous_call_ids)
+                plan_changed = self._plan_signature(current) != plan_before
+                if not new_successes and not plan_changed:
+                    answer = str(current.get("assessment", {}).get("final_answer") or "").strip()
+                    if answer:
+                        self.shared_state.update("reflector", {"decision": "terminate"})
+                        self.shared_state.runtime_update(
+                            {"task_status": "completed", "pending_agent": None}
+                        )
+                        trace.event(
+                            {
+                                "type": "status",
+                                "title": "无新增证据",
+                                "message": "保留未解决项并返回当前可用结论",
+                            }
+                        )
+                        return {"state": "completed"}
+                    return {
+                        "state": "stalled",
+                        "reason": "本轮没有新增成功证据，Reflector 也未提交可用结论。",
+                    }
             if decision == "terminate":  #收尾检查，检查后收尾
                 if not str(current["assessment"].get("final_answer") or "").strip():
                     return {"state": "stalled", "reason": "Reflector 尚未提交最终回答"}

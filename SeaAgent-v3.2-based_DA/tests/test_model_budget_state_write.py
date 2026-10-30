@@ -170,7 +170,7 @@ def test_repeat_threshold_switches_next_model_request_to_closeout_tools():
     }
 
 
-def test_repeat_signature_normalizes_argument_order_and_is_scoped_by_role_and_iteration():
+def test_repeat_signature_normalizes_argument_order_and_is_scoped_by_role():
     state = SharedTaskState("q")
     guard = RepeatToolCallMiddleware(state=state, scope="executor")
     calls = []
@@ -183,7 +183,7 @@ def test_repeat_signature_normalizes_argument_order_and_is_scoped_by_role_and_it
 
     state.runtime_update({"iteration": 1})
     guard.wrap_tool_call(_call("get_track", {"b": 2, "a": 1}, "3"), handler)
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 def test_shared_state_read_cache_is_invalidated_by_new_tool_results():
@@ -208,8 +208,11 @@ def test_shared_state_read_cache_is_invalidated_by_new_tool_results():
     refreshed = guard.wrap_tool_call(_call("read_shared_state", call_id="r3"), read)
     assert len(reads) == 2
     assert json.loads(refreshed.content)["tool_results"][0]["tool"] == "get_track"
-    read_key = next(key for key in state.snapshot()["call_history"] if key.startswith("read_shared_state:"))
-    assert state.snapshot()["call_history"][read_key]["repeat_count"] == 1
+    read_keys = [
+        key for key in state.snapshot()["call_history"]
+        if key.startswith("read_shared_state:")
+    ]
+    assert len(read_keys) == 2
 
 
 def test_model_budget_transitions_to_status_only_closeout_then_stalls_if_unwritten():

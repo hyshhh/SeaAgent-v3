@@ -81,6 +81,15 @@ class _ReflectionPatch(_StatePatch):
         if isinstance(value, str):
             text = value.strip()
             return {"final_answer": text} if text else {}
+        if isinstance(value, dict):
+            normalized = dict(value)
+            if not str(normalized.get("final_answer") or "").strip():
+                for key in ("final_conclusion", "conclusion", "answer"):
+                    text = str(normalized.get(key) or "").strip()
+                    if text:
+                        normalized["final_answer"] = text
+                        break
+            return normalized
         return value
 
 

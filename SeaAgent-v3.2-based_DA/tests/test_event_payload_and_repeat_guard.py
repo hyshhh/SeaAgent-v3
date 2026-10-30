@@ -418,6 +418,30 @@ def test_successful_state_update_with_the_same_arguments_is_committed_once():
     assert state.snapshot()["role_write_counts"]["executor"] == 1
 
 
+def test_business_tool_result_is_reused_across_iterations():
+    state = SharedTaskState("q")
+    state.runtime_update({"iteration": 1})
+    guard = RepeatToolCallMiddleware(state=state, scope="executor")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return ToolMessage(
+            content=json.dumps({"ok": True, "status": "unconfirmed"}),
+            name="recognize_tracks",
+            tool_call_id=request.tool_call["id"],
+        )
+
+    arguments = {"image_path": "/tmp/query.jpg"}
+    first = guard.wrap_tool_call(_Request("recognize_tracks", arguments, "call-1"), handler)
+    state.runtime_update({"iteration": 2})
+    second = guard.wrap_tool_call(_Request("recognize_tracks", arguments, "call-2"), handler)
+
+    assert json.loads(first.content)["ok"] is True
+    assert second.artifact["replayed"] is True
+    assert len(calls) == 1
+
+
 def test_vlm_json_recovery_marker_is_visible_to_the_model():
     guard = RepeatToolCallMiddleware(state=SharedTaskState("q"), scope="executor")
     message = guard.wrap_tool_call(

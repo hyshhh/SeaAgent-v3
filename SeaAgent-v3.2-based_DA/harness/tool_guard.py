@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -151,6 +152,16 @@ def _signature(name: str, arguments: Any) -> str:
     return f"{name}:{normalized}"
 
 
+def _state_read_signature(state: dict[str, Any]) -> str:
+    volatile = {
+        "version", "iteration", "tool_calls", "call_history", "role_write_counts",
+        "model_requests", "closeout_required", "closeout_repair_used",
+    }
+    payload = {key: value for key, value in state.items() if key not in volatile}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
 def _error_payload(error: BaseException) -> dict[str, Any]:
     return {"ok": False, "errorType": type(error).__name__, "error": str(error)}
 
@@ -229,8 +240,12 @@ class RepeatToolCallMiddleware(AgentMiddleware):
             return None, _message(request, "Call cancelled or outside this agent's tool permissions.", status="error")
 
         snapshot = self.state.snapshot()
-        iteration = int(snapshot.get("iteration", 0))
-        key = f"{_signature(name, call.get('args') or {})}|agent={self.scope}|iteration={iteration}"
+        freshness = (
+            f"state={_state_read_signature(snapshot)}"
+            if name in {"read_shared_state", "show_evidence"}
+            else ""
+        )
+        key = f"{_signature(name, call.get('args') or {})}|agent={self.scope}|{freshness}"
         record = self.state.claim_tool_call(
             self.scope,
             key,
