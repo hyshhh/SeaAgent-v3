@@ -112,6 +112,32 @@ def test_state_tools_can_read_again_without_a_model_version_argument():
     ].args_schema.model_json_schema()["properties"]
 
 
+def test_executor_accepts_json_string_patch_and_ignores_runtime_collected_evidence_ids():
+    state = SharedTaskState("q")
+    state.update("planner", {"plan": [{"id": "step-1", "content": "count"}]})
+    tool = {
+        item.name: item for item in build_state_tools(state)
+    }["update_execution_state"]
+
+    result = tool.invoke(
+        {
+            "patch": json.dumps(
+                {
+                    "evidence_ids": ["track-1", "keyframe-1"],
+                    "execution_status": "success",
+                    "step_status": {"step-1": "completed"},
+                }
+            )
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["ignored_fields"] == ["evidence_ids"]
+    assert state.snapshot()["execution_status"] == "success"
+    assert state.snapshot()["step_status"] == {"step-1": "completed"}
+    assert state.snapshot()["evidence_ids"] == []
+
+
 def test_state_tool_schema_filters_full_snapshot_without_cross_role_writes():
     state = SharedTaskState("q")
     tools = {tool.name: tool for tool in build_state_tools(state)}

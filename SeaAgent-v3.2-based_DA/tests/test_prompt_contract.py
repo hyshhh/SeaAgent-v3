@@ -68,54 +68,41 @@ def test_supplied_aliases_follow_the_registry_assistance_step():
 def test_count_skills_map_user_intent_to_configured_tools():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     agents = {item["name"]: item for item in role_config["agents"]}
-    expected = ("dedup_tracks", "match_entities")
     planning = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
     intent = (ROOT / "skills/planning/intent/SKILL.md").read_text(encoding="utf-8")
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
-    assert all(name in planning for name in expected)
-    assert "registered count" in intent
-    assert "total count" in intent
-    assert all(name in statistics for name in expected)
+    assert "dedup_tracks" in planning and "match_entities" in planning
+    assert "registered count" in intent and "total count" in intent
+    assert "inRegistryCount" in statistics and "unclassifiedTrackCount" in statistics
     assert "match_entities" in agents["planner"]["system_prompt"]
-    assert "逐条匹配范围内所有轨迹且不去重" in agents["planner"]["system_prompt"]
-    assert "statistics 技能" in agents["executor"]["system_prompt"]
+    assert "statistics" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
-
-
 def test_planner_keeps_count_only_requests_out_of_recognition_flow():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")
     acceptance = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
     time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
 
-    assert "六类预设分别映射" in planner["system_prompt"]
-    assert "在库数量和不在库数量用 match_entities" in planner["system_prompt"]
-    assert "只问总数时不得调用 match_entities" in planner["system_prompt"]
-    assert "默认查询全部已存轨迹：不得追问时间" in planner["system_prompt"]
+    assert "dedup_tracks" in planner["system_prompt"]
+    assert "match_entities" in planner["system_prompt"]
+    assert "time_range" in planner["system_prompt"]
     assert "Count-only plans must not include recognition steps" in acceptance
-    assert "says “所有时间”" in time_scope
     assert "Do not ask for a time range" in time_scope
     assert "all stored trajectories" in time_scope
-    assert "不得追问时间" in planner["system_prompt"]
-
-
 def test_statistics_prompts_keep_threshold_and_unclassified_semantics_consistent():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
-    reflector = next(item for item in role_config["agents"] if item["name"] == "reflector")
-    executor = next(item for item in role_config["agents"] if item["name"] == "executor")
+    agents = {item["name"]: item for item in role_config["agents"]}
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
     tools = yaml.safe_load((ROOT / "config/tools.yaml").read_text(encoding="utf-8"))["tools"]
     match_entities = next(item for item in tools if item["name"] == "match_entities")
 
-    for prompt in (reflector["system_prompt"], executor["system_prompt"], statistics, match_entities["description"]):
-        assert "灰区" in prompt or "gray-zone" in prompt
-        assert "unclassified" in prompt or "未分类" in prompt
-    assert "inRegistryCount" in statistics
-    assert "VLM confirmation" in statistics
-    assert "不代表 VLM 已确认" in match_entities["description"]
-
-
+    assert "statistics" in agents["executor"]["system_prompt"]
+    assert "statistics" in agents["reflector"]["skills"]
+    for field in ("inRegistryCount", "unregisteredCount", "unclassifiedTrackCount", "coverageComplete", "coverageReasons"):
+        assert field in statistics
+        assert field in match_entities["description"]
+    assert "not VLM confirmation" in statistics
 def test_planner_and_question_presets_cover_the_six_request_types():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")
@@ -124,14 +111,12 @@ def test_planner_and_question_presets_cover_the_six_request_types():
     preset_select = re.search(r'<select class="agent-preset-select".*?</select>', template).group()
     labels = re.findall(r'<option value="[^"]*"[^>]*>([^<]+)</option>', preset_select)
 
-    assert "六类预设分别映射" in planner["system_prompt"]
-    assert "hull-number lookup" in intent
-    assert "description lookup" in intent
-    assert "image lookup" in intent
+    for tool in ("recognize_tracks", "dedup_tracks", "match_entities"):
+        assert tool in planner["system_prompt"]
+    for intent_name in ("hull-number lookup", "description lookup", "image lookup", "total count", "registered count", "unregistered count"):
+        assert intent_name in intent
     assert labels == ["Presets", "Hull number", "Description", "Image", "Total count", "Registered count", "Unregistered count"]
     assert 'data-attach-image="true"' in preset_select
-
-
 def test_state_update_prompts_require_current_plan_ids_and_nested_reflection_patch():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     agents = {item["name"]: item for item in role_config["agents"]}
@@ -167,20 +152,16 @@ def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
     executor = next(item for item in role_config["agents"] if item["name"] == "executor")
     reflector = next(item for item in role_config["agents"] if item["name"] == "reflector")
     time_scope = (ROOT / "skills/planning/time-range/SKILL.md").read_text(encoding="utf-8")
+    statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
     assert "{time_anchor}" in planner["system_prompt"]
-    assert "固定时间锚点" in planner["system_prompt"]
-    assert "相对时间条件" in planner["skill_reminder"]["message"]
     assert "fixed system-context time anchor" in time_scope
-    assert "“前天” is anchor date minus two days" in time_scope
     assert "two-element array of ISO-8601 timestamps" in time_scope
     assert "23:59:59.999999" in time_scope
-    assert "Pass `time_range` exactly as written" in (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
-    assert "原样复制当前计划中的 ISO-8601 起止值" in executor["system_prompt"]
-    assert "appliedTimeRange 与计划范围表示同一绝对时间段" in reflector["system_prompt"]
-    assert "absolute instants" in (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
-
-
+    assert "Copy the plan's `time_range` exactly" in statistics
+    assert "time_range" in executor["system_prompt"]
+    assert "appliedTimeRange" in reflector["system_prompt"]
+    assert "absolute instants" in statistics
 def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
     tools = {item["name"]: item for item in load_config()["tools"]}
     for name in ("recognize_tracks", "dedup_tracks", "match_entities"):

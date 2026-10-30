@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -9,8 +10,8 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta, timezone
-from types import TracebackType
+from datetime import datetime
+from types import SimpleNamespace, TracebackType
 from typing import Any, Self
 
 from config import project_root
@@ -25,12 +26,18 @@ from .shared_state import (
 )
 from .state_tools import build_state_tools
 from .state_write import AgentCloseoutComplete, MissingStateWrite
-from .tool_guard import AgentCancelled
+from .statistics import (
+    QA_TIMEZONE,
+    find_tool_result,
+    plan_statistics,
+    statistics_answer,
+)
+from .tool_guard import AgentCancelled, RepeatToolCallMiddleware
 from .tools import build_tools
 from .trace import _Trace
 
 logger = logging.getLogger(__name__)
-_QA_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+_QA_TIMEZONE = QA_TIMEZONE
 
 
 def _current_time_anchor() -> str:
@@ -663,6 +670,52 @@ class SeaVideoHarness:
                     else:
                         time.sleep(delay)
 
+    def _run_statistics_tool(
+        self,
+        request: dict[str, Any],
+        thread_id: str,
+        trace: _Trace,
+    ) -> dict[str, Any] | None:
+        """Run a plain count through its configured tool and the normal result guards."""
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        tool = next((item for item in self.tools if item.name == request["tool"]), None)
+        if tool is None or self.shared_state is None:
+            raise RuntimeError(f"统计工具未配置：{request['tool']}")
+
+        arguments = {}
+        if request["time_range"] is not None:
+            arguments["time_range"] = request["time_range"]
+        tool_call = {"name": request["tool"], "args": arguments, "id": uuid.uuid4().hex}
+        trace.consume(
+            {"messages": [AIMessage(content="", tool_calls=[tool_call])]},
+            agent_name="executor",
+        )
+        state = self.shared_state
+        guard = RepeatToolCallMiddleware(
+            state=state,
+            scope="executor",
+            persist=lambda: self.state_store.save(thread_id, state),
+            allowed_tools={request["tool"]},
+            cancelled=lambda: self._cancel is not None and self._cancel.is_set(),
+            model_timeout=self._model_timeout_seconds,
+        )
+
+        def invoke(_request: Any) -> Any:
+            result = tool.invoke(arguments)
+            content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+            failed = isinstance(result, dict) and result.get("ok") is False
+            return ToolMessage(
+                content=content,
+                name=request["tool"],
+                tool_call_id=tool_call["id"],
+                status="error" if failed else "success",
+            )
+
+        response = guard.wrap_tool_call(SimpleNamespace(tool_call=tool_call), invoke)
+        trace.consume({"messages": [response]}, agent_name="executor")
+        return find_tool_result(state.snapshot(), request)
+
     # 3.1.14 按规划、执行、反思闭环调度并校验状态提交
     def _drive_multi_steps(
         self,
@@ -680,6 +733,29 @@ class SeaVideoHarness:
         self._cancel = cancel
         start_role = current["pending_agent"] or "planner"
         continuing = bool(current["pending_agent"] and current["task_status"] == "running")
+        statistics_request = None
+        if (
+            resume_payload is None
+            and not continuing
+            and current["iteration"] == 0
+            and not current["plan"]
+            and start_role == "planner"
+        ):
+            statistics_request = plan_statistics(
+                question, str(current.get("time_anchor") or "")
+            )
+            if statistics_request:
+                self.shared_state.update(
+                    "planner",
+                    {
+                        key: statistics_request[key]
+                        for key in ("requirements", "plan", "next_action", "clarification")
+                    },
+                )
+                self.state_store.save(thread_id, self.shared_state)
+                trace.consume_state()
+                trace.consume_plan()
+                start_role = "executor"
         self.shared_state.runtime_update({"task_status": "running"})
         iteration = current["iteration"] or 1
         all_roles = ["planner", "executor", "reflector"]
@@ -694,9 +770,19 @@ class SeaVideoHarness:
                 payload = (
                     resume_payload if role == start_role and resume_payload is not None else None
                 )
-                outcome = yield from self._run_agent_steps(
-                    role, question, thread_id, trace, cancel, payload
-                )
+                statistics_result = None
+                if role == "executor" and statistics_request and iteration == 1:
+                    if cancel is not None and cancel.is_set():
+                        outcome = {"state": "cancelled"}
+                    else:
+                        statistics_result = self._run_statistics_tool(
+                            statistics_request, thread_id, trace
+                        )
+                        outcome = {"state": "completed"}
+                else:
+                    outcome = yield from self._run_agent_steps(
+                        role, question, thread_id, trace, cancel, payload
+                    )
                 role_state, action = {
                     "completed": ("completed", "阶段完成"),
                     "awaiting_confirmation": ("waiting", "等待人工确认"),
@@ -705,10 +791,55 @@ class SeaVideoHarness:
                     "stalled": ("failed", "阶段未完成"),
                     "error": ("failed", "阶段失败"),
                 }.get(outcome["state"], ("waiting", outcome["state"]))
-                trace.agent_status(role, role_state, iteration, action)
                 resume_payload = None  # 确认只消费一次，下一轮重新规划。
                 if outcome["state"] != "completed":
+                    trace.agent_status(role, role_state, iteration, action)
                     return outcome
+                if role == "executor" and statistics_request and iteration == 1:
+                    result = statistics_result
+                    step_id = statistics_request["plan"][0]["id"]
+                    answer = statistics_answer(statistics_request["kind"], result or {})
+                    succeeded = answer is not None
+                    self.shared_state.update(
+                        "executor",
+                        {
+                            "execution_status": "success" if succeeded else "failed",
+                            "step_status": {step_id: "completed" if succeeded else "failed"},
+                        },
+                    )
+                    if answer:
+                        self.shared_state.update(
+                            "reflector",
+                            {
+                                "assessment": {"final_answer": answer},
+                                "evidence_gaps": [],
+                                "conflicts": [],
+                                "decision": "terminate",
+                            },
+                        )
+                        self.shared_state.runtime_update(
+                            {"task_status": "completed", "pending_agent": None}
+                        )
+                        self.state_store.save(thread_id, self.shared_state)
+                        trace.agent_status("executor", "completed", iteration, "统计结果已核对")
+                        trace.consume_state()
+                        trace.consume_plan()
+                        return {"state": "completed"}
+                    reason = str(
+                        (result or {}).get("hint")
+                        or (result or {}).get("error")
+                        or "统计结果缺少有效计数，或时间范围与计划不一致。"
+                    )
+                    self.shared_state.runtime_update(
+                        {"task_status": "failed", "pending_agent": None}
+                    )
+                    self.state_store.save(thread_id, self.shared_state)
+                    trace.agent_status("executor", "failed", iteration, "统计结果不可用")
+                    return {
+                        "state": "error",
+                        "error": RuntimeError(f"{statistics_request['tool']} failed: {reason}"),
+                    }
+                trace.agent_status(role, role_state, iteration, action)
                 if role == "planner":
                     clarification = str(
                         self.shared_state.snapshot().get("clarification") or ""

@@ -113,7 +113,7 @@ def test_reflector_audits_and_lands_the_evidence():
         "update_reflection_state",
         "show_evidence",
     ]
-    assert reflector["skills"] == ["/skills/reflection", "/skills/answer"]
+    assert reflector["skills"] == ["/skills/reflection", "/skills/answer", "/skills/statistics"]
     assert "assessment.final_answer" in reflector["system_prompt"]
 
 
