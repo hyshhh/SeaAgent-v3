@@ -56,7 +56,7 @@ pipeline:
     text_match: 0.62
     text_exclude: 0.42
     image_match: 0.72
-    image_exclude: 0.52
+    image_exclude: 0.65
     dedup_high: 0.82
     dedup_low: 0.72
   evidence:

@@ -9,6 +9,12 @@ from config.settings import PROMPT_SETTING_SPECS
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_retrieval_uses_the_configured_narrow_gray_zone():
+    retrieval = load_config()["pipeline"]["retrieval"]
+    assert retrieval["image_exclude"] == 0.65
+    assert retrieval["image_match"] == 0.72
+
+
 def test_all_business_tools_are_exposed_as_compact_workflows():
     config = load_config()
     names = {item["name"] for item in config["tools"]}
