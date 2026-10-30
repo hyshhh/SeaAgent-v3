@@ -92,6 +92,7 @@ SETTING_SPECS: dict[str, dict[str, Any]] = {
     "pipeline.retrieval.image_match": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.image_exclude": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.dedup_high": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
+    "pipeline.retrieval.dedup_review": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.retrieval.dedup_low": {"type": "float", "min": 0.0, "max": 1.0, "step": 0.01},
     "pipeline.evidence.clip_width": {"type": "int", "min": 320, "max": 1280, "step": 16},
     "pipeline.evidence.clip_height": {"type": "int", "min": 180, "max": 720, "step": 2},
@@ -251,6 +252,8 @@ def _validate_relations(config: dict[str, Any]) -> None:
         raise ValueError("图像排除阈值必须小于图像匹配阈值")
     if retrieval["dedup_low"] >= retrieval["dedup_high"]:
         raise ValueError("去重低阈值必须小于去重高阈值")
+    if not retrieval["dedup_low"] < retrieval["dedup_review"] < retrieval["dedup_high"]:
+        raise ValueError("去重复核阈值必须位于去重低阈值和高阈值之间")
 
 
 def public_settings(config: dict[str, Any]) -> dict[str, Any]:

@@ -417,6 +417,7 @@
           <label>图像匹配阈值<input data-setting="pipeline.retrieval.image_match" type="number"><small>参考图与关键帧匹配的直接接受阈值。</small></label>
           <label>图像排除阈值<input data-setting="pipeline.retrieval.image_exclude" type="number"><small>参考图匹配低于该值时直接排除。</small></label>
           <label>去重高阈值<input data-setting="pipeline.retrieval.dedup_high" type="number"><small>跨轨迹相似度达到该值时合并。</small></label>
+          <label>去重灰区阈值<input data-setting="pipeline.retrieval.dedup_review" type="number"><small>灰区轨迹对需要 VLM 复核。</small></label>
           <label>去重低阈值<input data-setting="pipeline.retrieval.dedup_low" type="number"><small>低于该值时不合并。</small></label>
           <label class="settings-toggle">模型内部思考
             <input type="text" value="已强制关闭" disabled>

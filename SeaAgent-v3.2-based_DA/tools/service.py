@@ -1502,41 +1502,51 @@ class ToolService:
                         "bestFrameScore": round(best_score, 6),
                     }
         high = float(self.settings["dedup_high"])
+        review = float(self.settings["dedup_review"])
         low = float(self.settings["dedup_low"])
         low_groups = self._complete_link(track_ids, track_map, pair_scores, low)
-        # 高阈值候选必须先由 VLM 确认；低阈值只用于模糊分组。
-        high_pairs = [
+        automatic_exact_scores = {
+            key: score for key, score in pair_scores.items() if score >= high
+        }
+        automatic_exact_groups = self._complete_link(
+            track_ids, track_map, automatic_exact_scores, high
+        )
+        # 只有复核阈值与高阈值之间是精确匹配灰区；高阈值以上直接精确，低阈值只用于模糊分组。
+        review_pairs = [
             detail
             for key, detail in pair_details.items()
-            if pair_scores[key] >= high
+            if review <= pair_scores[key] < high
         ]
-        high_pairs.sort(key=lambda item: float(item["score"]), reverse=True)
-        display_pairs = high_pairs[: self.MAX_DEDUP_CANDIDATES]
-        high_pair_ids = {str(item["pairId"]) for item in high_pairs}
+        review_pairs.sort(key=lambda item: float(item["score"]), reverse=True)
+        display_pairs = review_pairs[: self.MAX_DEDUP_CANDIDATES]
+        review_pair_ids = {str(item["pairId"]) for item in review_pairs}
         verification_started = confirmed_pair_ids is not None or resolved_pair_ids is not None
-        confirmed = set(confirmed_pair_ids or ()) & high_pair_ids if verification_started else set()
-        resolved = set(resolved_pair_ids or ()) & high_pair_ids if verification_started else set()
+        confirmed = set(confirmed_pair_ids or ()) & review_pair_ids if verification_started else set()
+        resolved = set(resolved_pair_ids or ()) & review_pair_ids if verification_started else set()
         if verification_started:
-            confirmed_scores = {
-                key: score
-                for key, score in pair_scores.items()
-                if pair_details[key]["pairId"] in confirmed
+            exact_scores = {
+                **automatic_exact_scores,
+                **{
+                    key: score
+                    for key, score in pair_scores.items()
+                    if pair_details[key]["pairId"] in confirmed
+                },
             }
-            exact_groups = self._complete_link(track_ids, track_map, confirmed_scores, high)
+            exact_groups = self._complete_link(track_ids, track_map, exact_scores, review)
             exact_count: int | None = len(exact_groups)
-        elif not high_pairs:
-            exact_count = len(track_ids)
+        elif not review_pairs:
+            exact_count = len(automatic_exact_groups)
         else:
             exact_count = None
         unresolved_pair_count = (
-            len(high_pair_ids - resolved)
+            len(review_pair_ids - resolved)
             if verification_started
-            else len(high_pair_ids)
+            else len(review_pair_ids)
         )
-        candidates_truncated = len(high_pairs) > len(display_pairs)
+        candidates_truncated = len(review_pairs) > len(display_pairs)
         status = (
             "verification_required"
-            if high_pairs and not verification_started
+            if review_pairs and not verification_started
             else "complete"
             if unresolved_pair_count == 0 and not candidates_truncated
             else "incomplete"
@@ -1546,15 +1556,15 @@ class ToolService:
             "status": status,
             "exactShipCount": exact_count,
             "fuzzyShipCount": len(low_groups),
-            "duplicateCandidateCount": len(high_pairs),
+            "duplicateCandidateCount": len(review_pairs),
             "unresolvedDuplicateCount": unresolved_pair_count,
             "duplicateCandidates": display_pairs,
             "duplicateCandidatesTruncated": candidates_truncated,
         }
-        if high_pairs and not verification_started:
+        if review_pairs and not verification_started:
             result["nextStep"] = "verify_vessel_images"
             result["recommendation"] = (
-                "对 duplicateCandidates 中每个轨迹对调用 verify_vessel_images，"
+                "仅对精确匹配灰区 duplicateCandidates 中每个轨迹对调用 verify_vessel_images，"
                 "使用同一 pairId、referenceKeyframeId 和 candidateKeyframeId；"
                 "随后将 VLM match 的 pairId 作为 confirmedPairIds、match/mismatch 的 pairId 作为 resolvedPairIds 再调用 dedup_tracks 收尾。"
             )

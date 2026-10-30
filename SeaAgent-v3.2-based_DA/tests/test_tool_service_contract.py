@@ -1,3 +1,4 @@
+import math
 import threading
 import time
 
@@ -374,7 +375,7 @@ def test_first_keyframe_is_selected_by_time_without_requiring_an_embedding():
 
 def test_track_deduplication_uses_instance_safe_overlap_check():
     service = ToolService.__new__(ToolService)
-    service.settings = {"dedup_high": 0.9, "dedup_low": 0.8}
+    service.settings = {"dedup_high": 0.9, "dedup_review": 0.85, "dedup_low": 0.8}
     service.vectors = type("Vectors", (), {"keyframes": object()})()
     service._load_indexed_vectors = lambda *_args, **_kwargs: {1: [1.0], 2: [1.0]}
 
@@ -394,9 +395,12 @@ def test_track_deduplication_uses_instance_safe_overlap_check():
 
 def test_dedup_requires_vlm_confirmation_before_an_exact_merge():
     service = ToolService.__new__(ToolService)
-    service.settings = {"dedup_high": 0.82, "dedup_low": 0.75}
+    service.settings = {"dedup_high": 0.82, "dedup_review": 0.80, "dedup_low": 0.75}
     service.vectors = type("Vectors", (), {"keyframes": object()})()
-    service._load_indexed_vectors = lambda *_args, **_kwargs: {1: [1.0], 2: [1.0]}
+    service._load_indexed_vectors = lambda *_args, **_kwargs: {
+        1: [1.0, 0.0],
+        2: [0.81, math.sqrt(1 - 0.81**2)],
+    }
     tracks = [
         {**_track("t-1"), "startTime": 1.0, "endTime": 2.0},
         {**_track("t-2"), "startTime": 3.0, "endTime": 4.0},
@@ -422,6 +426,29 @@ def test_dedup_requires_vlm_confirmation_before_an_exact_merge():
     assert rejected["exactShipCount"] == 2
     assert confirmed["unresolvedDuplicateCount"] == 0
     assert rejected["unresolvedDuplicateCount"] == 0
+
+
+def test_dedup_at_or_above_high_threshold_is_exact_without_vlm():
+    service = ToolService.__new__(ToolService)
+    service.settings = {"dedup_high": 0.82, "dedup_review": 0.80, "dedup_low": 0.75}
+    service.vectors = type("Vectors", (), {"keyframes": object()})()
+    service._load_indexed_vectors = lambda *_args, **_kwargs: {1: [1.0], 2: [1.0]}
+    tracks = [
+        {**_track("t-1"), "startTime": 1.0, "endTime": 2.0},
+        {**_track("t-2"), "startTime": 3.0, "endTime": 4.0},
+    ]
+    frames = {
+        "t-1": {"keyframes": [{"keyframeId": "kf-1", "keyframeVectorId": 1}]},
+        "t-2": {"keyframes": [{"keyframeId": "kf-2", "keyframeVectorId": 2}]},
+    }
+
+    result = service._deduplicate_tracks(tracks, frames)
+
+    assert result["status"] == "complete"
+    assert result["exactShipCount"] == 1
+    assert result["fuzzyShipCount"] == 1
+    assert result["duplicateCandidateCount"] == 0
+    assert "nextStep" not in result
 
 
 def test_registry_count_matches_each_track_without_deduplication():

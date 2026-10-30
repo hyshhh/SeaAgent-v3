@@ -49,9 +49,10 @@ tools:
     label: 轨迹去重统计
     description: >-
       两阶段轨迹去重。首次调用返回 duplicateCandidates、duplicateCandidateCount、fuzzyShipCount、
-      status=verification_required 和 nextStep=verify_vessel_images；高阈值候选必须逐对调用 VLM。
+      低阈值到复核阈值为模糊匹配，复核阈值到高阈值为精确匹配灰区，高阈值以上直接精确匹配。
+      只有灰区 duplicateCandidates 需要逐对调用 VLM；status=verification_required 和 nextStep=verify_vessel_images。
       VLM match 的 pairId 作为 confirmedPairIds，VLM match/mismatch 的 pairId 作为 resolvedPairIds，再次调用本工具收尾。
-      收尾返回 exactShipCount 与 fuzzyShipCount；exact 只合并 VLM 确认的高阈值轨迹对，fuzzy 使用低阈值 embedding 分组。
+      收尾返回 exactShipCount 与 fuzzyShipCount；exact 合并高阈值直接匹配和 VLM 确认的灰区轨迹对，fuzzy 使用低阈值 embedding 分组。
       省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange，供核对。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}

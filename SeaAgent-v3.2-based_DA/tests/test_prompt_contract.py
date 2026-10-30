@@ -14,6 +14,10 @@ def test_retrieval_uses_the_configured_narrow_gray_zone():
     assert retrieval["image_exclude"] == 0.65
     assert retrieval["image_match"] == 0.72
     assert retrieval["dedup_low"] == 0.75
+    assert retrieval["dedup_review"] == 0.80
+    assert retrieval["dedup_high"] == 0.82
+    template = (ROOT / "web/templates/index.html").read_text(encoding="utf-8")
+    assert 'data-setting="pipeline.retrieval.dedup_review"' in template
 
 
 def test_all_business_tools_are_exposed_as_compact_workflows():
@@ -87,7 +91,7 @@ def test_count_skills_map_user_intent_to_configured_tools():
     assert "duplicateCandidates" in statistics
     assert "exactShipCount" in statistics and "fuzzyShipCount" in statistics
     finalize = (ROOT / "skills/answer/finalize/SKILL.md").read_text(encoding="utf-8")
-    assert "按精确去重为 X 艘，模糊去重为 Y 艘" in finalize
+    assert "按照模糊匹配为 A 艘、精确匹配为 B 艘" in finalize
     assert "match_entities" in agents["planner"]["system_prompt"]
     assert "statistics" in agents["executor"]["system_prompt"]
     assert "count_ships" not in planning
