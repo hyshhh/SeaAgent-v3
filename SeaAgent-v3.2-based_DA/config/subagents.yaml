@@ -57,8 +57,8 @@ agents:
 
   - name: reflector
     description: 审查封装工具结果是否满足需求，汇总证据并决定继续、重规划或结束。
-    model_request_budget: 6
-    closeout_request_budget: 2
+    model_request_budget: 8
+    closeout_request_budget: 3
     tools: [read_shared_state, update_reflection_state, show_evidence]
     skills: [reflection, answer, statistics]
     task_prompt: |

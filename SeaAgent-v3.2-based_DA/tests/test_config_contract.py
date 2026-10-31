@@ -58,8 +58,8 @@ def test_role_prompts_skill_reminders_and_budgets_are_explicit():
     tools = build_tools(config, _Service()) + build_state_tools(SharedTaskState(""))
     agents = _load_subagents(config, tools, FilesystemPermission)
     assert [agent["name"] for agent in agents] == ["planner", "executor", "reflector"]
-    assert [agent["model_request_budget"] for agent in agents] == [4, 12, 6]
-    assert [agent["closeout_request_budget"] for agent in agents] == [2, 2, 2]
+    assert [agent["model_request_budget"] for agent in agents] == [4, 12, 8]
+    assert [agent["closeout_request_budget"] for agent in agents] == [2, 2, 3]
     for agent in agents:
         assert "{question}" in agent["task_prompt"]
         assert agent["system_prompt"].strip()
