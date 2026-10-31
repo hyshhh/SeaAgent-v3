@@ -130,12 +130,14 @@ def test_statistics_prompts_keep_embedding_and_vlm_semantics_consistent():
     assert "不在工具内部调用 VLM" in match_entities["description"]
     assert "gray candidates" in statistics
     assert "VLM `match` adds to `registered`" in statistics
-    assert "VLM `mismatch` adds to `unregistered`" in statistics
+    assert "VLM `mismatch` confirms the remaining tracks are not registered" in statistics
+    assert "total = trackCount" in statistics
     assert "registered = embeddingConfirmedCount + gray VLM match" in statistics
-    assert "unregistered = outsideRegistryCount + gray VLM mismatch" in statistics
-    assert "总数：{total}；在库船：{registered}；不在库船：{unregistered}" in statistics
+    assert "unregistered = total - registered" in statistics
+    assert "总数：{total}" in statistics
     reflector = agents["reflector"]["system_prompt"]
-    assert "总数 = 在库船 + 不在库船" in reflector
+    assert "总数 = trackCount" in reflector
+    assert "不在库船 = 总数 - 在库船" in reflector
     assert "无论用户问在库还是不在库" in reflector
 def test_planner_and_question_presets_cover_the_six_request_types():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
@@ -179,7 +181,8 @@ def test_summarization_preserves_separate_direct_and_assisted_match_findings():
     assert "辅助匹配 confirmed 不得被直接识别 mismatch 覆盖" in summary
     assert "工具结果的 appliedTimeRange" in summary
     assert "总数、在库船、不在库船" in summary
-    assert "总数 = 在库船 + 不在库船" in summary
+    assert "总数 = trackCount" in summary
+    assert "不在库船 = 总数 - 在库船" in summary
 
 
 def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
@@ -208,6 +211,8 @@ def test_registered_and_unregistered_questions_share_the_same_result_contract():
     finalize = (ROOT / "skills/answer/finalize/SKILL.md").read_text(encoding="utf-8")
     planning = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
 
-    assert "总数：N；在库船：M；不在库船：K" in finalize
+    assert "总数：N" in finalize
+    assert "在库船：M" in finalize
+    assert "不在库船：K" in finalize
     assert "Both question phrasings must produce the same three values" in finalize
     assert "registered and unregistered counts both use the same `match_entities` pipeline" in planning

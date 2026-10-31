@@ -71,8 +71,8 @@ tools:
       有候选时返回 status=verification_required、nextStep=verify_vessel_images 和 recommendation；
       Agent 只需对灰区候选使用 matchedRegistryReferenceId + matchedKeyframeId 调用 verify_vessel_images；多个候选可在同一回合并行调用。
       灰区 VLM match 计为在库，VLM mismatch 计为不在库，uncertain/失败保持未解决。
-      灰区核验完成后统一计算：在库船 = embeddingConfirmedCount + VLM match；不在库船 = outsideRegistryCount + VLM mismatch；总数 = 在库船 + 不在库船。
-      两类问题最终都返回同一组结果：总数、在库船、不在库船。
+      灰区核验完成后统一计算：总数 = trackCount；在库船 = embeddingConfirmedCount + VLM match；不在库船 = 总数 - 在库船。
+      两类问题最终都说明同一组结果：总数、在库船、不在库船；outsideRegistryCount 只作诊断，不可替代“总数 - 在库船”。
       省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange。
     arguments:
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天。"}
