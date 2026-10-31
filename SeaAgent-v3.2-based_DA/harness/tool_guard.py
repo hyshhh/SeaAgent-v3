@@ -1,4 +1,4 @@
-"""Count tool calls, replay exact repeats, and enter closeout on the fourth call."""
+"""Count tool calls, replay exact repeats, and bound concurrent read-only tools."""
 
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ from .shared_state import STATE_TOOLS, SharedTaskState
 
 REPEAT_LIMIT = 4
 VLM_TOOL_NAME = "verify_vessel_images"
+CONCURRENT_TOOL_NAMES = frozenset(
+    {VLM_TOOL_NAME, "read_file", "read_shared_state"}
+)
 REPEAT_HINT = (
     "该工具与参数已调用过。请使用返回结果或调整参数；不要重复相同调用。"
 )
@@ -56,50 +59,53 @@ _MATCH_FIELDS = (
 
 
 class ToolConcurrencyGate:
-    """Allow only VLM checks to overlap, with a shared hard limit."""
+    """Allow concurrent-safe reads to overlap within one shared hard limit."""
 
-    def __init__(self, vlm_limit: int = 5) -> None:
-        self.vlm_limit = max(1, int(vlm_limit))
+    def __init__(self, concurrency_limit: int = 15) -> None:
+        self.concurrency_limit = max(1, int(concurrency_limit))
         self._condition = threading.Condition()
-        self._active_vlm = 0
-        self._active_other = 0
+        self._active_concurrent = 0
+        self._active_exclusive = 0
 
     def _acquire(self, tool_name: str) -> bool:
-        is_vlm = tool_name == VLM_TOOL_NAME
+        is_concurrent = tool_name in CONCURRENT_TOOL_NAMES
         with self._condition:
-            if is_vlm:
-                while self._active_other or self._active_vlm >= self.vlm_limit:
+            if is_concurrent:
+                while (
+                    self._active_exclusive
+                    or self._active_concurrent >= self.concurrency_limit
+                ):
                     self._condition.wait()
-                self._active_vlm += 1
+                self._active_concurrent += 1
             else:
-                while self._active_other or self._active_vlm:
+                while self._active_exclusive or self._active_concurrent:
                     self._condition.wait()
-                self._active_other += 1
-        return is_vlm
+                self._active_exclusive += 1
+        return is_concurrent
 
-    def _release(self, is_vlm: bool) -> None:
+    def _release(self, is_concurrent: bool) -> None:
         with self._condition:
-            if is_vlm:
-                self._active_vlm -= 1
+            if is_concurrent:
+                self._active_concurrent -= 1
             else:
-                self._active_other -= 1
+                self._active_exclusive -= 1
             self._condition.notify_all()
 
     @contextmanager
     def slot(self, tool_name: str):
-        is_vlm = self._acquire(tool_name)
+        is_concurrent = self._acquire(tool_name)
         try:
             yield
         finally:
-            self._release(is_vlm)
+            self._release(is_concurrent)
 
     @asynccontextmanager
     async def async_slot(self, tool_name: str):
-        is_vlm = await asyncio.to_thread(self._acquire, tool_name)
+        is_concurrent = await asyncio.to_thread(self._acquire, tool_name)
         try:
             yield
         finally:
-            self._release(is_vlm)
+            self._release(is_concurrent)
 
 
 def _payload(response: Any) -> Any:

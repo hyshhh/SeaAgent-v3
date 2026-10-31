@@ -208,13 +208,13 @@ def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
         assert "省略 time_range 表示全部监控时间" in tools[name]["description"]
 
 
-def test_vlm_candidate_verification_has_a_twelve_call_concurrency_limit():
+def test_concurrent_read_tools_share_a_fifteen_call_limit():
     tools = {item["name"]: item for item in load_config()["tools"]}
     statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
 
-    assert "最多 12 个 VLM 核验并发执行" in tools["match_entities"]["description"]
-    assert "at most 12 concurrent VLM checks" in statistics
-    assert "其他工具保持串行" in tools["match_entities"]["description"]
+    assert "共用最多 15 个并发槽位" in tools["match_entities"]["description"]
+    assert "share at most 15 concurrent slots" in statistics
+    assert "其他工具保持独占串行" in tools["match_entities"]["description"]
     assert "并行调用" not in tools["match_entities"]["description"]
 
 

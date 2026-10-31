@@ -39,10 +39,10 @@ _TOOL_CONCURRENCY_GATES: dict[int, ToolConcurrencyGate] = {}
 _TOOL_CONCURRENCY_GATES_LOCK = threading.Lock()
 
 
-def _shared_tool_concurrency_gate(vlm_limit: int) -> ToolConcurrencyGate:
+def _shared_tool_concurrency_gate(concurrency_limit: int) -> ToolConcurrencyGate:
     with _TOOL_CONCURRENCY_GATES_LOCK:
         return _TOOL_CONCURRENCY_GATES.setdefault(
-            vlm_limit, ToolConcurrencyGate(vlm_limit)
+            concurrency_limit, ToolConcurrencyGate(concurrency_limit)
         )
 
 
@@ -302,11 +302,11 @@ class SeaVideoHarness:
         self._thread_id: str | None = None
         self._cancel: Any = None
         self._stale_checkpoint_roles: set[str] = set()
-        self.vlm_tool_concurrency = max(
-            1, int(harness.get("vlm_tool_concurrency", 12))
+        self.tool_concurrency_limit = max(
+            1, int(harness.get("concurrent_tool_limit", 15))
         )
         self.tool_concurrency_gate = _shared_tool_concurrency_gate(
-            self.vlm_tool_concurrency
+            self.tool_concurrency_limit
         )
         self._prepare_specs()
 
@@ -622,12 +622,12 @@ class SeaVideoHarness:
                         "configurable": {"thread_id": agent_thread},
                         "max_concurrency": getattr(
                             self,
-                            "vlm_tool_concurrency",
+                            "tool_concurrency_limit",
                             max(
                                 1,
                                 int(
                                     self.config.get("harness", {}).get(
-                                        "vlm_tool_concurrency", 12
+                                        "concurrent_tool_limit", 15
                                     )
                                 ),
                             ),

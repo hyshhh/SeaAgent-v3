@@ -222,7 +222,7 @@ def test_real_graph_runs_tool_batches_without_a_total_tool_limit(tmp_path):
     assert result["shared_state"]["step_status"] == {"step-1": "completed"}
 
 
-def test_real_graph_only_runs_vlm_batches_concurrently(tmp_path):
+def test_real_graph_runs_vlm_batches_concurrently(tmp_path):
     service = _Service()
     runtime = _runtime(tmp_path, service, executor_model_budget=12, batch_vlm=True)
 
@@ -232,7 +232,7 @@ def test_real_graph_only_runs_vlm_batches_concurrently(tmp_path):
     assert service.verify_queries == 9
     assert 2 <= service.max_active_verify <= 12
     assert service.max_active_queries == 0
-    assert runtime.vlm_tool_concurrency == 12
+    assert runtime.tool_concurrency_limit == 15
 
 
 def test_real_graph_iteration_limit_does_not_start_a_summary_request(tmp_path):
