@@ -28,6 +28,7 @@ http://127.0.0.1:8000
 evaluation:
   api_url: http://127.0.0.1:8000
   timeout_seconds: 900
+  attempts: 2
   output_dir: results
 ```
 
@@ -53,6 +54,19 @@ python data/QAdataset/evaluator/evaluate.py \
   --limit 1 \
   --overwrite
 ```
+
+从已有 QA 文件续跑，只重试空 answer：
+
+```bash
+/home/lab-203/anaconda3/bin/conda run --no-capture-output -n seaagent \
+python data/QAdataset/evaluator/evaluate.py \
+  --dataset data/QAdataset/dataset/questions.jsonl \
+  --output data/QAdataset/results/SeaQA-100.csv \
+  --resume
+```
+
+每题默认最多尝试两次。已有的非空 `answer` 在 `--resume` 时直接复用，
+不会重复调用 Agent。
 
 省略 `--output` 时，结果默认写入：
 
@@ -117,7 +131,8 @@ ground_truth.unresolved_entities
 - 每题独立会话，避免上下文跨题影响答案；
 - 使用流式接口读取执行事件，直到 `complete`、`confirm` 或 `error`；
 - 每完成一题立即刷新 CSV，中断时保留已完成结果；
-- 单题失败不会中断整批评测。
+- 单题失败不会中断整批评测；
+- 空 answer 会在同一题内有限重试，`--resume` 可继续补齐未完成题。
 
 ## 自测
 
@@ -133,6 +148,8 @@ python data/QAdataset/evaluator/test_evaluate.py
 - CSV 表头严格为 `ID,answer,question`；
 - 每题只写一行；
 - 只保存 Agent answer；
+- 失败题会重试并只保留最终成功答案；
+- `--resume` 会复用已有答案并只补跑空行；
 - 不把真值发送给 Agent；
 - 图片会转换为 data URL；
 - 可以读取 Agent 流式接口的终局事件。
