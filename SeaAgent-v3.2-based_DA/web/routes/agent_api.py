@@ -90,15 +90,11 @@ def _save_query_image(data_url: str | None) -> tuple[str | None, str | None]:
     return str(path), image_id
 
 
-def _resolve_query_image(body: AgentQuery, repository=None) -> tuple[str | None, str | None]:
+def _resolve_query_image(body: AgentQuery) -> tuple[str | None, str | None]:
     if body.image:
         path, image_id = _save_query_image(body.image)
     else:
         image_id = body.image_id
-        if not image_id and body.session_id and repository is not None:
-            turns = (repository.get_session(body.session_id) or {}).get("turns", [])
-            if turns and turns[-1].get("state") == "awaiting_input":
-                image_id = turns[-1].get("imageId")
         if not image_id:
             return None, None
         path = _query_image_path(image_id)
@@ -148,9 +144,7 @@ async def query_agent(body: AgentQuery, request: Request):
     session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     cancel = _begin_run(request, session_id)
     try:
-        image_path, image_id = await run_in_threadpool(
-            _resolve_query_image, body, getattr(request.app.state, "repository", None)
-        )
+        image_path, image_id = await run_in_threadpool(_resolve_query_image, body)
         return await run_in_threadpool(
             _answer_controller,
             _controller(request),
@@ -222,9 +216,7 @@ async def stream_agent_query(body: AgentQuery, request: Request):
     session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     cancel = _begin_run(request, session_id)
     try:
-        image_path, image_id = await run_in_threadpool(
-            _resolve_query_image, body, getattr(request.app.state, "repository", None)
-        )
+        image_path, image_id = await run_in_threadpool(_resolve_query_image, body)
     except Exception:
         request.app.state.agent_runs.pop(session_id, None)
         raise

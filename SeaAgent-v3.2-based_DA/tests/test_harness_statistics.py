@@ -17,14 +17,18 @@ def test_plain_total_count_uses_deterministic_route():
 
 
 @pytest.mark.parametrize(
-    "question",
+    ("question", "kind"),
     [
-        "视频中有多少艘在库船？",
-        "视频中有多少艘不在库船？",
+        ("视频中有多少艘在库船？", "registered"),
+        ("视频中有多少艘不在库船？", "unregistered"),
     ],
 )
-def test_registry_counts_stay_with_skill_driven_agents(question):
-    assert plan_statistics(question, ANCHOR) is None
+def test_plain_registry_counts_receive_a_fixed_plan(question, kind):
+    request = plan_statistics(question, ANCHOR)
+
+    assert request["kind"] == kind
+    assert request["tool"] == "match_entities"
+    assert request["plan"][0]["required_evidence"] == ["match_entities"]
 
 
 def test_relative_date_is_bound_to_fixed_anchor_as_iso_day_range():

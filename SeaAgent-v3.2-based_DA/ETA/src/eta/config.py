@@ -47,7 +47,12 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     if not source_root.is_absolute():
         source_root = (ETA_ROOT / source_root).resolve()
     config["paths"]["source_data_root"] = str(source_root)
-    for key in ("processed_dir", "artifact_dir", "report_dir"):
+    for key in (
+        "processed_dir",
+        "embedding_cache_dir",
+        "artifact_dir",
+        "report_dir",
+    ):
         item = Path(str(config["paths"][key]))
         if not item.is_absolute():
             item = ETA_ROOT / item

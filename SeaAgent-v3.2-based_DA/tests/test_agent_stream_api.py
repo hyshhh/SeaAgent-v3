@@ -208,7 +208,7 @@ def test_query_image_ids_reject_path_traversal():
     assert error.value.status_code == 404
 
 
-def test_awaiting_input_reuses_the_saved_query_image(tmp_path, monkeypatch):
+def test_awaiting_input_does_not_reuse_a_stale_query_image(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_api, "project_root", lambda: tmp_path)
     image_id = "b" * 32 + ".png"
     path = tmp_path / "data" / "memory" / "query_images" / image_id
@@ -220,8 +220,8 @@ def test_awaiting_input_reuses_the_saved_query_image(tmp_path, monkeypatch):
             return {"turns": [{"state": "awaiting_input", "imageId": image_id}]}
 
     image_path, resolved_id = agent_api._resolve_query_image(
-        AgentQuery(question="补充日期", sessionId="session-1"), Repository()
+        AgentQuery(question="补充日期", sessionId="session-1")
     )
 
-    assert image_path == str(path)
-    assert resolved_id == image_id
+    assert image_path is None
+    assert resolved_id is None

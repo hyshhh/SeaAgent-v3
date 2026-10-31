@@ -1,4 +1,4 @@
-"""TEA dataset construction."""
+"""ETA dataset construction."""
 
 from .builder import FeatureDataset, build_dataset
 

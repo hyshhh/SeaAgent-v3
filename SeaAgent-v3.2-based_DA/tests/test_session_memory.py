@@ -3,6 +3,7 @@ import csv
 import json
 import threading
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 from fastapi import HTTPException
@@ -31,8 +32,8 @@ def _repository(tmp_path):
 class _FakeRuntime:
     """只记录 thread_id：会话续接的全部证据就是这个 id 是否被复用。"""
 
-    threads = []
-    questions = []
+    threads: ClassVar[list] = []
+    questions: ClassVar[list] = []
 
     def __init__(self, config, service, model=None, event_handler=None):
         self.event_handler = event_handler
@@ -308,7 +309,7 @@ def test_resume_updates_the_same_pending_qa_without_appending_a_turn(agent, monk
 
 def test_only_pending_confirmation_keeps_temporary_run_state(agent, monkeypatch):
     class _CleanupRuntime(_FakeRuntime):
-        discarded = []
+        discarded: ClassVar[list] = []
         pending = False
 
         def run(self, question, thread_id=None, **_kwargs):
@@ -356,6 +357,29 @@ def test_planner_clarification_stops_and_user_reply_continues_same_qa(agent, mon
     assert turns[0]["answer"] == "已按补充范围查到 2 条轨迹。"
     assert turns[0]["clarificationResponse"] == "2025-10-21 14:00 到 14:10"
     assert len(set(_ClarifyingRuntime.threads)) == 1
+
+
+def test_complete_new_question_does_not_reuse_an_awaiting_input_turn(agent, monkeypatch):
+    class _ClarifyingRuntime(_FakeRuntime):
+        def run(self, question, thread_id=None, **_kwargs):
+            type(self).threads.append(thread_id)
+            type(self).questions.append(question)
+            if len(type(self).questions) == 1:
+                return {"answer": "请补充图片信息。", "state": "awaiting_input"}
+            return {"answer": "共有 2 艘在库船。", "state": "completed"}
+
+    monkeypatch.setattr(controller_module, "SeaVideoHarness", _ClarifyingRuntime)
+    _ClarifyingRuntime.questions = []
+    first = agent.answer("识别图片中的船", image_path="/tmp/old.png", image_id="old.png")
+    second = agent.answer("视频中有多少艘在库船？", first["sessionId"])
+    turns = agent.repository.get_session(first["sessionId"])["turns"]
+
+    assert second["state"] == "completed"
+    assert _ClarifyingRuntime.questions[-1] == "视频中有多少艘在库船？"
+    assert "用户补充信息" not in _ClarifyingRuntime.questions[-1]
+    assert len(turns) == 2
+    assert turns[-1]["question"] == "视频中有多少艘在库船？"
+    assert turns[-1].get("imageId") is None
 
 
 def test_old_transcripts_drop_saved_tool_history_on_migration(tmp_path):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -12,6 +13,17 @@ from memory import MemoryRepository
 from tools import ToolService
 
 logger = logging.getLogger(__name__)
+
+_NEW_QUERY = re.compile(
+    r"多少|几(?:艘|个|条)|是否|有没有|什么|识别|查询|查找|统计|列举|"
+    r"how many|which|what|find|search|count|identify",
+    re.IGNORECASE,
+)
+
+
+def _is_new_query(question: str) -> bool:
+    text = str(question or "").strip()
+    return len(text) > 30 or text.endswith(("?", "？")) or bool(_NEW_QUERY.search(text))
 
 
 # ------------------------------------------------------------------ #
@@ -49,7 +61,11 @@ class AgentController:
                 raise ValueError("请先完成当前问答的确认，再开始新问题")
             original_question = question
             clarification = ""
-            if turns and turns[-1].get("state") == "awaiting_input":
+            if (
+                turns
+                and turns[-1].get("state") == "awaiting_input"
+                and not _is_new_query(question)
+            ):
                 pending_turn = turns[-1]
                 original_question = str(turns[-1].get("question") or question)
                 clarification = str(turns[-1].get("answer") or "")

@@ -1,9 +1,8 @@
 """ETA evaluation entry points."""
 
-from .paired import paired_comparison
 from .reproducibility import compare_run_metrics
 
-__all__ = ["compare_run_metrics", "evaluate_run", "paired_comparison"]
+__all__ = ["compare_run_metrics", "evaluate_run"]
 
 
 def __getattr__(name: str):

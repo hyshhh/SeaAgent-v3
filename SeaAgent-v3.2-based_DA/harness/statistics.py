@@ -52,14 +52,19 @@ def plan_statistics(question: str, time_anchor: str) -> dict[str, Any] | None:
 
     unregistered = bool(_UNREGISTERED.search(text))
     registered = bool(_REGISTERED.search(_UNREGISTERED.sub("", text)))
-    if unregistered or registered:
+    if unregistered and registered:
         return None
 
     try:
         time_range = _time_range(text, time_anchor)
     except (TypeError, ValueError, OverflowError):
         return None
-    kind, tool, target = "total", "dedup_tracks", "船舶总数"
+    if unregistered:
+        kind, tool, target = "unregistered", "match_entities", "不在库船舶数量"
+    elif registered:
+        kind, tool, target = "registered", "match_entities", "在库船舶数量"
+    else:
+        kind, tool, target = "total", "dedup_tracks", "船舶总数"
 
     scope = (
         f"范围：{time_range[0]} 至 {time_range[1]}"

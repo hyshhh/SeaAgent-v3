@@ -2,11 +2,12 @@ import numpy as np
 
 from eta.config import load_config
 from eta.dataset.builder import (
-    derive_proxy_labels,
-    history_subsets,
-    sample_candidates,
+    FeatureDataset,
+    build_track_records,
+    derive_admission_label,
     split_sources,
 )
+from eta.dataset.visual import sample_candidate_boxes
 
 
 def _frame(index: int, timestamp: float, vector: list[float], quality: float = 0.8):
@@ -15,21 +16,9 @@ def _frame(index: int, timestamp: float, vector: list[float], quality: float = 0
         "timestamp": timestamp,
         "quality_score": quality,
         "retention_score": quality,
-        "has_readable_hull_number": "no",
+        "priority": quality,
         "vector": np.asarray(vector, dtype=np.float32),
     }
-
-
-def test_history_subsets_are_chronological_and_capacity_limited():
-    previous = [_frame(1, 2.0, [1, 0]), _frame(2, 1.0, [0, 1]), _frame(3, 3.0, [1, 1])]
-    subsets = list(history_subsets(previous, 2))
-    assert len(subsets) == 6
-    assert all(len(subset) <= 2 for subset in subsets)
-    assert all(
-        [item["timestamp"] for item in subset]
-        == sorted(item["timestamp"] for item in subset)
-        for subset in subsets
-    )
 
 
 def test_source_group_split_has_no_leakage():
@@ -53,24 +42,55 @@ def test_domain_holdout_splits_shared_holdout_domain_once():
     assert len(set(assignment)) == 9
 
 
-def test_five_second_sampling_keeps_one_high_quality_frame_per_bin():
-    frames = [
-        _frame(1, 0.5, [1, 0], 0.5),
-        _frame(2, 1.0, [1, 0], 0.9),
-        _frame(3, 5.5, [0, 1], 0.7),
+def test_candidate_sampling_drops_observations_before_full_kep():
+    boxes = [
+        {"timestamp": 0.5},
+        {"timestamp": 1.0},
+        {"timestamp": 1.5},
+        {"timestamp": 2.1},
+        {"timestamp": 3.4},
     ]
-    selected = sample_candidates(frames, 5.0)
-    assert [frame["frame_id"] for frame in selected] == ["f2", "f3"]
+    selected = sample_candidate_boxes(boxes, history_end=1.5, stride_seconds=1.0)
+    assert [box["timestamp"] for box in selected] == [2.1, 3.4]
 
 
-def test_proxy_labels_follow_quality_novelty_and_pool_update():
+def test_labels_stop_at_first_complete_insertion_and_truncate_future_data():
     config = load_config()
-    candidate = _frame(2, 1.0, [-1.0, 0.0], quality=0.8)
-    history = [_frame(1, 0.0, [1.0, 0.0])]
-    labels = derive_proxy_labels(candidate, history, config)
-    assert labels["ah_label"] == 1
-    assert labels["ch_label"] == 1
-    low_quality = _frame(3, 2.0, [0.0, 1.0], quality=0.0)
-    rejected = derive_proxy_labels(low_quality, history, config)
-    assert rejected["ah_label"] == 0
-    assert rejected["admission_reason"] == "below_quality_floor"
+    history = [
+        _frame(1, 0.0, [1.0, 0.0]),
+        _frame(2, 0.5, [0.0, 1.0]),
+        _frame(3, 1.0, [-1.0, 0.0]),
+    ]
+    observations = [
+        _frame(4, 2.0, [0.0, -1.0], quality=0.95),
+        _frame(5, 3.0, [-0.7, 0.7], quality=0.95),
+        _frame(6, 4.0, [1.0, 0.0], quality=0.95),
+    ]
+    records = build_track_records("12", history, observations, config)
+    assert len(records) == 2
+    assert [record["ch_label"] for record in records] == [0, 1]
+    assert all(len(record["history_vectors"]) == 3 for record in records)
+    low_quality = _frame(7, 5.0, [1.0, 0.0], quality=0.1)
+    labels = derive_admission_label(low_quality, history, config)
+    assert labels["ah_label"] == 0
+    assert labels["admission_reason"] == "below_quality_floor"
+
+
+def test_feature_dataset_has_only_five_training_arrays(tmp_path):
+    path = tmp_path / "train.npz"
+    np.savez_compressed(
+        path,
+        candidate=np.zeros((1, 2048), dtype=np.float16),
+        history=np.zeros((1, 3, 2048), dtype=np.float16),
+        history_mask=np.ones((1, 3), dtype=np.bool_),
+        ah_label=np.zeros(1, dtype=np.int64),
+        ch_label=np.ones(1, dtype=np.int64),
+    )
+    data = FeatureDataset(path)
+    assert set(data.data.files) == {
+        "candidate",
+        "history",
+        "history_mask",
+        "ah_label",
+        "ch_label",
+    }

@@ -4,6 +4,7 @@ project:
 paths:
   source_data_root: ../
   processed_dir: data/processed
+  embedding_cache_dir: artifacts/embedding_cache
   artifact_dir: artifacts
   report_dir: reports
 data:
@@ -11,19 +12,32 @@ data:
   keyframes_csv: data/memory/track_keyframes.csv
   trajectories_dir: data/memory/trajectories
   keyframe_index: data/indexes/keyframe_index.faiss
-  # The stored keyframe table is already a sparse memory; resampling at 5 s
-  # leaves only 43 later observations and makes the proxy AH target degenerate.
-  candidate_stride_seconds: 0.0
+  candidate_stride_seconds: 1.0
   history_pool_size: 3
   min_quality: 0.20
   novelty_threshold: 0.10
-  completeness_similarity_max: 0.96
-  quality_coverage_min: 0.75
+  candidate_quality:
+    sharpness_reference: 1400.0
+    size_min: 0.04
+    size_max: 0.35
+  completion:
+    min_candidate_steps: 2
+    min_high_quality_frames: 2
+    high_quality_threshold: 0.75
+    max_min_pair_similarity: 0.95
   split:
     mode: source_group
     train: 0.70
     validation: 0.15
     test: 0.15
+embedding:
+  base_url: http://127.0.0.1:8891/v1
+  model: Qwen/Qwen3-VL-Embedding-2B
+  api_key_env: ETA_EMBEDDING_API_KEY
+  dimension: 2048
+  timeout_seconds: 60
+  normalize: true
+  request_workers: 4
 model:
   variant: eta
   input_dim: 2048
@@ -36,7 +50,8 @@ model:
   dropout: 0.10
   heads_hidden: 128
 train:
-  epochs: 30
+  epochs: 20
+  early_stopping_patience: 7
   batch_size: 128
   learning_rate: 0.0001
   min_learning_rate: 0.000001
@@ -47,7 +62,10 @@ train:
   grad_clip_norm: 1.0
   num_workers: 0
   device: auto
-  checkpoint_metric: auto
+  checkpoint_metric: mean_head_accuracy
+  class_weights:
+    ah: false
+    ch: false
 evaluation:
   batch_size: 256
   latency_repeats: 100
@@ -55,3 +73,4 @@ evaluation:
   stop_thresholds: [0.50, 0.70, 0.80, 0.90]
   calibration_bins: 10
   bootstrap_iterations: 1000
+  selection_accuracy_floor: 0.80
