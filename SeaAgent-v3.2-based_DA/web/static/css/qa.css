@@ -1371,20 +1371,26 @@
 }
 #tab-agent-qa .qa-state-group-status {
   max-width: min(52%, 360px);
-  padding: 3px 8px;
   overflow: hidden;
   color: var(--qa-state-accent);
-  border: 1px solid var(--qa-state-border);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .82);
   font-size: 10px;
   font-weight: 600;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#tab-agent-qa .qa-state-group[data-live-state="running"] .qa-state-group-status { animation: qaPulse 1.5s infinite; }
-#tab-agent-qa .qa-state-group[data-live-state="failed"] .qa-state-group-status { color: #9d3742; border-color: #e1b3b8; }
+#tab-agent-qa .qa-state-group-status::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #4f8c69;
+  content: "";
+  vertical-align: 1px;
+}
+#tab-agent-qa .qa-state-group[data-live-state="running"] .qa-state-group-status::before { animation: qaPulse 1.5s infinite; }
+#tab-agent-qa .qa-state-group[data-live-state="failed"] .qa-state-group-status { color: #9d3742; }
 #tab-agent-qa .qa-state-group dl { display: grid; gap: 6px; margin: 0; }
 #tab-agent-qa .qa-state-group-empty { padding: 9px 10px; color: var(--qa-muted); border: 1px dashed var(--qa-state-border); border-radius: 6px; font-size: 11px; }
 #tab-agent-qa .qa-state-field {
