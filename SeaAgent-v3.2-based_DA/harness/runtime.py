@@ -29,12 +29,21 @@ from .statistics import (
     QA_TIMEZONE,
     plan_statistics,
 )
-from .tool_guard import AgentCancelled
+from .tool_guard import AgentCancelled, ToolConcurrencyGate
 from .tools import build_tools
 from .trace import _Trace
 
 logger = logging.getLogger(__name__)
 _QA_TIMEZONE = QA_TIMEZONE
+_TOOL_CONCURRENCY_GATES: dict[int, ToolConcurrencyGate] = {}
+_TOOL_CONCURRENCY_GATES_LOCK = threading.Lock()
+
+
+def _shared_tool_concurrency_gate(vlm_limit: int) -> ToolConcurrencyGate:
+    with _TOOL_CONCURRENCY_GATES_LOCK:
+        return _TOOL_CONCURRENCY_GATES.setdefault(
+            vlm_limit, ToolConcurrencyGate(vlm_limit)
+        )
 
 
 def _current_time_anchor() -> str:
@@ -293,6 +302,12 @@ class SeaVideoHarness:
         self._thread_id: str | None = None
         self._cancel: Any = None
         self._stale_checkpoint_roles: set[str] = set()
+        self.vlm_tool_concurrency = max(
+            1, int(harness.get("vlm_tool_concurrency", 5))
+        )
+        self.tool_concurrency_gate = _shared_tool_concurrency_gate(
+            self.vlm_tool_concurrency
+        )
         self._prepare_specs()
 
     # 3.1.2 注入状态工具，校验角色与字段维护权限
@@ -368,6 +383,7 @@ class SeaVideoHarness:
         model_name = str(self.config.get("llm", {}).get("model", ""))
         if model_name:
             register_harness_profile(f"openai:{model_name}", profile)  #注册上面的配置
+        tool_concurrency_gate = getattr(self, "tool_concurrency_gate", None)
         return create_deep_agent(
             model=self.model,
             tools=selected,
@@ -383,6 +399,7 @@ class SeaVideoHarness:
                 shared_state=state,
                 cancelled=lambda: self._cancel is not None and self._cancel.is_set(),
                 model_timeout=self._model_timeout_seconds,
+                tool_concurrency_gate=tool_concurrency_gate,
                 persist=lambda: (
                     self.state_store.save(self._thread_id, state) if self._thread_id else None
                 ),
@@ -603,7 +620,18 @@ class SeaVideoHarness:
                     payload,
                     config={
                         "configurable": {"thread_id": agent_thread},
-                        "max_concurrency": 1,
+                        "max_concurrency": getattr(
+                            self,
+                            "vlm_tool_concurrency",
+                            max(
+                                1,
+                                int(
+                                    self.config.get("harness", {}).get(
+                                        "vlm_tool_concurrency", 5
+                                    )
+                                ),
+                            ),
+                        ),
                     },
                     stream_mode=harness.get("stream_mode", "updates"),
                     subgraphs=False,  # 每个角色只有一层图，不需要展开子图

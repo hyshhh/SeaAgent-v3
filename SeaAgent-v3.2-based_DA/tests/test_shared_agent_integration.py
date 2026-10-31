@@ -18,10 +18,12 @@ from harness.runtime import SeaVideoHarness
 
 class _ScriptedModel(ChatOpenAI):
     batch_tools: bool = False
+    batch_vlm: bool = False
     replan: bool = False
     skip_planner_state_write: bool = False
     calls: int = 0
     batch_sent: bool = False
+    vlm_batch_sent: bool = False
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         self.calls += 1
@@ -48,6 +50,19 @@ class _ScriptedModel(ChatOpenAI):
                 {
                     "name": "recognize_tracks",
                     "args": {"description": f"target-{index}"},
+                    "id": uuid.uuid4().hex,
+                }
+                for index in range(9)
+            ]
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls))]
+            )
+        if self.batch_vlm and role == "executor" and not self.vlm_batch_sent:
+            self.vlm_batch_sent = True
+            calls = [
+                {
+                    "name": "verify_vessel_images",
+                    "args": {"candidate_keyframe_id": f"keyframe-{index}"},
                     "id": uuid.uuid4().hex,
                 }
                 for index in range(9)
@@ -99,6 +114,9 @@ class _Service:
         self.queries = 0
         self.active_queries = 0
         self.max_active_queries = 0
+        self.verify_queries = 0
+        self.active_verify = 0
+        self.max_active_verify = 0
         self._lock = threading.Lock()
 
     def __getattr__(self, name):
@@ -115,8 +133,27 @@ class _Service:
                 finally:
                     with self._lock:
                         self.active_queries -= 1
+            if name == "verify_vessel_images":
+                with self._lock:
+                    self.verify_queries += 1
+                    self.active_verify += 1
+                    self.max_active_verify = max(
+                        self.max_active_verify, self.active_verify
+                    )
+                try:
+                    time.sleep(0.02)
+                finally:
+                    with self._lock:
+                        self.active_verify -= 1
             if name == "show_evidence":
                 return {"ok": True, "trackIds": ["t1"], "shownKeyframeIds": ["kf1"]}
+            if name == "verify_vessel_images":
+                return {
+                    "ok": True,
+                    "decision": "match",
+                    "referenceKeyframeId": "reference",
+                    "keyframeId": kwargs.get("candidate_keyframe_id"),
+                }
             return {"ok": True, "trackIds": ["t1"], "keyframeIds": ["kf1"]}
 
         return invoke
@@ -183,6 +220,19 @@ def test_real_graph_runs_tool_batches_without_a_total_tool_limit(tmp_path):
         == 9
     )
     assert result["shared_state"]["step_status"] == {"step-1": "completed"}
+
+
+def test_real_graph_only_runs_vlm_batches_concurrently(tmp_path):
+    service = _Service()
+    runtime = _runtime(tmp_path, service, executor_model_budget=12, batch_vlm=True)
+
+    result = runtime.run("scan", "t")
+
+    assert result["state"] == "completed"
+    assert service.verify_queries == 9
+    assert 2 <= service.max_active_verify <= 5
+    assert service.max_active_queries == 0
+    assert runtime.vlm_tool_concurrency == 5
 
 
 def test_real_graph_iteration_limit_does_not_start_a_summary_request(tmp_path):

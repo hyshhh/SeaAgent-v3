@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import threading
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -13,6 +16,7 @@ from langchain_core.messages import ToolMessage
 from .shared_state import STATE_TOOLS, SharedTaskState
 
 REPEAT_LIMIT = 4
+VLM_TOOL_NAME = "verify_vessel_images"
 REPEAT_HINT = (
     "该工具与参数已调用过。请使用返回结果或调整参数；不要重复相同调用。"
 )
@@ -49,6 +53,53 @@ _MATCH_FIELDS = (
     "scoreBand", "registryReferenceIds", "matchedKeyframeId", "matchedRegistryReferenceId",
     "classification", "verificationDecision",
 )
+
+
+class ToolConcurrencyGate:
+    """Allow only VLM checks to overlap, with a shared hard limit."""
+
+    def __init__(self, vlm_limit: int = 5) -> None:
+        self.vlm_limit = max(1, int(vlm_limit))
+        self._condition = threading.Condition()
+        self._active_vlm = 0
+        self._active_other = 0
+
+    def _acquire(self, tool_name: str) -> bool:
+        is_vlm = tool_name == VLM_TOOL_NAME
+        with self._condition:
+            if is_vlm:
+                while self._active_other or self._active_vlm >= self.vlm_limit:
+                    self._condition.wait()
+                self._active_vlm += 1
+            else:
+                while self._active_other or self._active_vlm:
+                    self._condition.wait()
+                self._active_other += 1
+        return is_vlm
+
+    def _release(self, is_vlm: bool) -> None:
+        with self._condition:
+            if is_vlm:
+                self._active_vlm -= 1
+            else:
+                self._active_other -= 1
+            self._condition.notify_all()
+
+    @contextmanager
+    def slot(self, tool_name: str):
+        is_vlm = self._acquire(tool_name)
+        try:
+            yield
+        finally:
+            self._release(is_vlm)
+
+    @asynccontextmanager
+    async def async_slot(self, tool_name: str):
+        is_vlm = await asyncio.to_thread(self._acquire, tool_name)
+        try:
+            yield
+        finally:
+            self._release(is_vlm)
 
 
 def _payload(response: Any) -> Any:
@@ -200,6 +251,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         allowed_tools: set[str] | None = None,
         cancelled: Callable[[], bool] | None = None,
         model_timeout: Callable[[], float] | None = None,
+        concurrency_gate: ToolConcurrencyGate | None = None,
     ) -> None:
         self.state = state if state is not None else SharedTaskState("")
         self.scope = scope
@@ -208,6 +260,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         self.allowed_tools = allowed_tools
         self.cancelled = cancelled
         self.model_timeout = model_timeout
+        self.concurrency_gate = concurrency_gate or ToolConcurrencyGate()
 
     def _model_request(self, request: Any) -> Any:
         if self.cancelled and self.cancelled():
@@ -396,37 +449,41 @@ class RepeatToolCallMiddleware(AgentMiddleware):
         self._save()
 
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
-        key, blocked = self._prepare(request)
-        if blocked is not None:
-            return blocked
-        try:
-            response = handler(request)
-        except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
-            self._failed(request, key, error)
-            result = _error_payload(error)
-            return _model_message(
-                request,
-                _message(request, json.dumps(result, ensure_ascii=False), status="error"),
-                result,
-            )
-        self._complete(request, key, response)
-        return _model_message(request, response, _payload(response))
+        tool_name = str(request.tool_call.get("name") or "")
+        with self.concurrency_gate.slot(tool_name):
+            key, blocked = self._prepare(request)
+            if blocked is not None:
+                return blocked
+            try:
+                response = handler(request)
+            except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
+                self._failed(request, key, error)
+                result = _error_payload(error)
+                return _model_message(
+                    request,
+                    _message(request, json.dumps(result, ensure_ascii=False), status="error"),
+                    result,
+                )
+            self._complete(request, key, response)
+            return _model_message(request, response, _payload(response))
 
     async def awrap_tool_call(
         self, request: Any, handler: Callable[[Any], Awaitable[Any]]
     ) -> Any:
-        key, blocked = self._prepare(request)
-        if blocked is not None:
-            return blocked
-        try:
-            response = await handler(request)
-        except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
-            self._failed(request, key, error)
-            result = _error_payload(error)
-            return _model_message(
-                request,
-                _message(request, json.dumps(result, ensure_ascii=False), status="error"),
-                result,
-            )
-        self._complete(request, key, response)
-        return _model_message(request, response, _payload(response))
+        tool_name = str(request.tool_call.get("name") or "")
+        async with self.concurrency_gate.async_slot(tool_name):
+            key, blocked = self._prepare(request)
+            if blocked is not None:
+                return blocked
+            try:
+                response = await handler(request)
+            except Exception as error:  # noqa: BLE001 - Tool failures are returned to the model.
+                self._failed(request, key, error)
+                result = _error_payload(error)
+                return _model_message(
+                    request,
+                    _message(request, json.dumps(result, ensure_ascii=False), status="error"),
+                    result,
+                )
+            self._complete(request, key, response)
+            return _model_message(request, response, _payload(response))

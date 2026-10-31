@@ -18,6 +18,7 @@ def build_middleware(
     persist: Any = None,
     cancelled: Any = None,
     model_timeout: Any = None,
+    tool_concurrency_gate: Any = None,
 ) -> list[Any]:
     from langchain.agents.middleware import (
         ModelRetryMiddleware,
@@ -69,6 +70,7 @@ def build_middleware(
             allowed_tools=selected_tools,
             cancelled=cancelled,
             model_timeout=model_timeout,
+            concurrency_gate=tool_concurrency_gate,
         ),
     ]
     stack.append(
