@@ -38,6 +38,10 @@ def _class_weights(labels: np.ndarray) -> torch.Tensor:
     return torch.tensor(weights, dtype=torch.float32)
 
 
+def _loss_weight(labels: np.ndarray, enabled: bool) -> torch.Tensor | None:
+    return _class_weights(labels) if enabled else None
+
+
 def _scheduler(optimizer: AdamW, total_steps: int, warmup_epochs: int, epochs: int) -> LambdaLR:
     warmup_steps = min(
         total_steps,
@@ -126,6 +130,9 @@ def _run_epoch(
     if model.heads.completeness is not None:
         result["ch_accuracy"] = totals["ch_correct"] / count
         result["joint_accuracy"] = totals["joint_correct"] / count
+        result["mean_head_accuracy"] = (
+            result["ah_accuracy"] + result["ch_accuracy"]
+        ) / 2.0
     return result
 
 
@@ -160,11 +167,22 @@ def train_model(
         int(config["train"]["num_workers"]),
         device,
     )
-    ah_weights = _class_weights(train_data.data["ah_label"]).to(device)
-    ch_weights = _class_weights(train_data.data["ch_label"]).to(device)
+    class_weight_settings = config["train"].get("class_weights", {})
+    ah_weights = _loss_weight(
+        train_data.data["ah_label"],
+        bool(class_weight_settings.get("ah", True)),
+    )
+    ch_weights = _loss_weight(
+        train_data.data["ch_label"],
+        bool(class_weight_settings.get("ch", True)),
+    )
     losses = {
-        "ah": nn.CrossEntropyLoss(weight=ah_weights),
-        "ch": nn.CrossEntropyLoss(weight=ch_weights),
+        "ah": nn.CrossEntropyLoss(
+            weight=None if ah_weights is None else ah_weights.to(device)
+        ),
+        "ch": nn.CrossEntropyLoss(
+            weight=None if ch_weights is None else ch_weights.to(device)
+        ),
     }
     optimizer = AdamW(
         model.parameters(),
@@ -190,8 +208,12 @@ def train_model(
     resolved_config["runtime"] = {
         "run_id": run_id,
         "device": device,
-        "ah_class_weights": ah_weights.detach().cpu().tolist(),
-        "ch_class_weights": ch_weights.detach().cpu().tolist(),
+        "ah_class_weights": (
+            None if ah_weights is None else ah_weights.detach().cpu().tolist()
+        ),
+        "ch_class_weights": (
+            None if ch_weights is None else ch_weights.detach().cpu().tolist()
+        ),
     }
     write_yaml(run_dir / "config.resolved.yaml", resolved_config)
     summary_path = processed_dir / "summary.json"
@@ -211,7 +233,7 @@ def train_model(
     }
     write_json(run_dir / "run.json", manifest)
     selected_metric = (
-        "joint_accuracy"
+        "mean_head_accuracy"
         if model.heads.completeness is not None
         else "ah_accuracy"
     )
@@ -223,6 +245,7 @@ def train_model(
         )
     best_score = -1.0
     best_epoch = -1
+    stale_epochs = 0
     history: list[dict[str, Any]] = []
     for epoch in range(1, epochs + 1):
         train_metrics = _run_epoch(
@@ -266,6 +289,7 @@ def train_model(
         if score > best_score:
             best_score = score
             best_epoch = epoch
+            stale_epochs = 0
             torch.save(
                 {
                     "model": {
@@ -280,6 +304,8 @@ def train_model(
                 },
                 run_dir / "best.pt",
             )
+        else:
+            stale_epochs += 1
         with (run_dir / "history.csv").open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(history[0]))
             writer.writeheader()
@@ -288,6 +314,10 @@ def train_model(
         manifest["best_epoch"] = best_epoch
         manifest["best_validation_score"] = best_score
         write_json(run_dir / "run.json", manifest)
+        patience = int(config["train"].get("early_stopping_patience", 0))
+        if patience > 0 and stale_epochs >= patience:
+            print(f"early_stop epoch={epoch} best_epoch={best_epoch}", flush=True)
+            break
     manifest["status"] = "trained"
     manifest["completed_at_utc"] = utc_timestamp()
     write_json(run_dir / "run.json", manifest)

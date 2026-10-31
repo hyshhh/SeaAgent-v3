@@ -45,6 +45,7 @@ def test_prompts_and_skills_match_the_new_recognition_flow():
     assert "match_registry_tracks" in executor["system_prompt"]
     assert "image_path" in executor["system_prompt"]
     assert "candidate_keyframe_id" in recognition
+    assert "caps recognition gray candidates at 5" in recognition
     assert "verify_images" in prompt
     verify = next(item for item in config["tools"] if item["name"] == "verify_vessel_images")
     assert "reference_registry_reference_id" in verify["description"]
@@ -90,6 +91,7 @@ def test_count_skills_map_user_intent_to_configured_tools():
     assert "verify_vessel_images" in statistics
     assert "duplicateCandidates" in statistics
     assert "exactShipCount" in statistics and "fuzzyShipCount" in statistics
+    assert "at most 12" in statistics
     finalize = (ROOT / "skills/answer/finalize/SKILL.md").read_text(encoding="utf-8")
     assert "按照模糊匹配为 A 艘、精确匹配为 B 艘" in finalize
     assert "match_entities" in agents["planner"]["system_prompt"]

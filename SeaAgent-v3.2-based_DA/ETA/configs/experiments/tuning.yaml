@@ -1,0 +1,59 @@
+defaults:
+  train:
+    epochs: 20
+    early_stopping_patience: 7
+    checkpoint_metric: mean_head_accuracy
+
+groups:
+  - id: T1
+    name: Balanced-Baseline
+    overrides: {}
+  - id: T2
+    name: AH-Unweighted
+    overrides:
+      train:
+        class_weights:
+          ah: false
+          ch: true
+  - id: T3
+    name: Unweighted-Both
+    overrides:
+      train:
+        class_weights:
+          ah: false
+          ch: false
+  - id: T4
+    name: Small-High-Reg
+    overrides:
+      model:
+        hidden_dim: 128
+        ffn_dim: 512
+        heads_hidden: 64
+        dropout: 0.20
+      train:
+        learning_rate: 0.00005
+        weight_decay: 0.05
+        batch_size: 64
+        class_weights:
+          ah: false
+          ch: true
+  - id: T5
+    name: Base-High-Reg
+    overrides:
+      model:
+        dropout: 0.20
+      train:
+        learning_rate: 0.00005
+        weight_decay: 0.03
+        class_weights:
+          ah: false
+          ch: true
+  - id: T6
+    name: Low-LR
+    overrides:
+      train:
+        learning_rate: 0.00002
+        weight_decay: 0.03
+        class_weights:
+          ah: false
+          ch: true

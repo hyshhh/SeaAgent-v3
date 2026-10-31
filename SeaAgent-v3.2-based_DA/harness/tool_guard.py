@@ -30,12 +30,14 @@ _MODEL_RESULT_FIELDS = {
     ),
     "dedup_tracks": (
         "ok", "status", "trackCount", "exactShipCount", "fuzzyShipCount",
-        "duplicateCandidateCount", "unresolvedDuplicateCount", "duplicateCandidates",
+        "duplicateCandidateCount", "duplicateCandidatesSkippedCount",
+        "unresolvedDuplicateCount", "duplicateCandidates",
         "duplicateCandidatesTruncated", "coverageComplete", "nextStep", "recommendation",
         "appliedTimeRange",
     ),
     "match_entities": (
         "ok", "status", "trackCount", "embeddingConfirmedCount", "outsideRegistryCount", "grayCandidateCount",
+        "grayCandidatesSkippedCount",
         "unresolvedTrackCount", "embeddingCoverageComplete", "nextStep", "recommendation",
         "coverageReasons", "appliedTimeRange", "verificationCandidatesTruncated",
         "verificationCandidates",
@@ -76,7 +78,10 @@ def _model_result(name: str, result: Any) -> Any:
     if name in {"recognize_tracks", "match_registry_tracks"}:
         statistics = result.get("statistics")
         statistics = statistics if isinstance(statistics, dict) else {}
-        for key in ("searchedTrackCount", "candidateCount", "unsearchableTrackCount"):
+        for key in (
+            "searchedTrackCount", "candidateCount", "grayCandidateCount",
+            "grayCandidatesSkippedCount", "unsearchableTrackCount",
+        ):
             if key in statistics:
                 compact[key] = statistics[key]
     matches = compact.get("matches")
@@ -328,6 +333,7 @@ class RepeatToolCallMiddleware(AgentMiddleware):
                             key: result[key]
                             for key in (
                                 "status", "embeddingConfirmedCount", "outsideRegistryCount", "grayCandidateCount",
+                                "grayCandidatesSkippedCount",
                                 "unresolvedTrackCount", "embeddingCoverageComplete", "nextStep",
                                 "recommendation", "coverageReasons", "appliedTimeRange",
                             )

@@ -373,6 +373,17 @@ def test_first_keyframe_is_selected_by_time_without_requiring_an_embedding():
     assert ToolService._first_keyframe_id(frames) == "kf-first"
 
 
+def test_recognition_gray_candidate_cap_keeps_only_the_top_five():
+    candidates = [
+        {"trackId": f"t-{index}", "scoreBand": "uncertain", "score": index / 100}
+        for index in range(7, 0, -1)
+    ]
+    selected, skipped = ToolService._select_with_gray_cap(candidates, 5, 10)
+
+    assert [item["trackId"] for item in selected] == ["t-7", "t-6", "t-5", "t-4", "t-3"]
+    assert skipped == 2
+
+
 def test_track_deduplication_uses_instance_safe_overlap_check():
     service = ToolService.__new__(ToolService)
     service.settings = {"dedup_high": 0.9, "dedup_review": 0.85, "dedup_low": 0.8}
@@ -449,6 +460,69 @@ def test_dedup_at_or_above_high_threshold_is_exact_without_vlm():
     assert result["fuzzyShipCount"] == 1
     assert result["duplicateCandidateCount"] == 0
     assert "nextStep" not in result
+
+
+def test_dedup_review_candidates_are_capped_at_twelve_pairs():
+    service = ToolService.__new__(ToolService)
+    service.settings = {"dedup_high": 0.82, "dedup_review": 0.80, "dedup_low": 0.75}
+    service.vectors = type("Vectors", (), {"keyframes": object()})()
+    service._load_indexed_vectors = lambda *_args, **_kwargs: {
+        index: [1.0, 0.0]
+        if index <= 7
+        else [0.81, math.sqrt(1 - 0.81**2)]
+        for index in range(1, 15)
+    }
+    tracks = [
+        {**_track(f"t-{index}"), "startTime": index * 2.0, "endTime": index * 2.0 + 1.0}
+        for index in range(1, 15)
+    ]
+    frames = {
+        f"t-{index}": {"keyframes": [{"keyframeId": f"kf-{index}", "keyframeVectorId": index}]}
+        for index in range(1, 15)
+    }
+
+    result = service._deduplicate_tracks(tracks, frames)
+
+    assert result["duplicateCandidateCount"] == 12
+    assert result["duplicateCandidatesSkippedCount"] == 37
+
+
+def test_registry_gray_candidates_are_capped_at_twelve_tracks():
+    class Repository:
+        def list_registry(self):
+            return [{"registryId": "r-1", "references": [{
+                "registryId": "r-1", "referenceId": "ref-1", "imagePath": "/registry.jpg",
+            }]}]
+
+    service = ToolService.__new__(ToolService)
+    service.repository = Repository()
+    service.settings = {"image_match": 0.72, "image_exclude": 0.65}
+    tracks = [_track(f"t-{index}") for index in range(15)]
+    frames = {
+        str(track["trackId"]): [{"trackId": track["trackId"], "keyframeId": f"kf-{index}"}]
+        for index, track in enumerate(tracks)
+    }
+    service._validate_time_range = lambda _value: (None, "")
+    service._scan_tracks = lambda _scope: (tracks, True)
+    service._load_search_frames = lambda *_args, **_kwargs: (frames, [], {})
+    service._match_images = lambda **_kwargs: {
+        "matches": [{
+            "matchedTrackId": str(track["trackId"]),
+            "matchedRegistryId": "r-1",
+            "score": 0.70 + index / 1000,
+            "matchedKeyframeId": f"kf-{index}",
+            "matchedRegistryReferenceId": "ref-1",
+        } for index, track in enumerate(tracks)],
+        "registryCoverageComplete": True,
+        "missingRegistryVectorCount": 0,
+    }
+
+    result = service.match_entities()
+
+    assert result["grayCandidateCount"] == 12
+    assert result["grayCandidatesSkippedCount"] == 3
+    assert result["outsideRegistryCount"] == 3
+    assert len(result["verificationCandidates"]) == 12
 
 
 def test_registry_count_matches_each_track_without_deduplication():

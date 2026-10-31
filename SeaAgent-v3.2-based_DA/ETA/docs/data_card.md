@@ -1,69 +1,69 @@
-# TEA data card
+# ETA 数据说明
 
-## Source
+## 数据来源
 
-- Application: `SeaAgent-v3.2-based_DA`
-- Track table: `data/memory/tracks.csv`
-- Keyframe table: `data/memory/track_keyframes.csv`
-- Trajectory metadata: `data/memory/trajectories/*.json`
-- Vector index: `data/indexes/keyframe_index.faiss`
-- Embedding model recorded by the index manifest:
-  `Qwen/Qwen3-VL-Embedding-2B`
-- Embedding dimension: 2048, L2-normalized
+- 原始数据：214 条轨迹、571 个缓存关键帧。
+- 候选来源：203 个带时间戳边界框的轨迹 JSON。
+- 其中 29 条轨迹只有 1 帧、13 条只有 2 帧，不满足“先有完整三帧
+  KEP”的条件，不能进入训练集。
+- 关键帧 embedding 从 FAISS 索引读取。
+- 后置候选帧从源视频解码裁剪，再由本地
+  `Qwen/Qwen3-VL-Embedding-2B` 生成归一化 2048 维 embedding。
 
-## Available observations
+## 候选构建
 
-- 214 tracks.
-- 571 cached keyframes.
-- 571 vectors reconstructed successfully.
-- Frames per track: 29 tracks with one, 13 with two, and 172 with three.
-- Because no track has more than three cached frames, capacity values at or
-  above `M=3` cannot be distinguished by additional history slots on this
-  snapshot; `M=4` and `M=6` are infrastructure checks rather than independent
-  empirical evidence about longer pools.
-- 222 keyframes have readable hull-number evidence.
-- 45 known source videos: 191 tracks from public video groups and 12 from the
-  self-collected group. Eleven tracks lack usable trajectory source metadata
-  and are isolated by track ID.
+1. 每条轨迹取按时间排序的 3 个缓存关键帧作为初始 KEP。
+2. 候选帧必须严格晚于最后一个 KEP 关键帧。
+3. 轨迹边界框按 1 秒间隔采样，同一个时间桶选最接近桶中心的观测。
+4. 候选裁剪经过质量评分后生成 embedding。
+5. 候选按时间顺序进入 ETA。
+6. 一旦满足证据完备规则且候选确实写入 KEP，将当前样本标记为
+   `CH=1`，停止该轨迹，后续观测不再进入数据集。
+7. 未满足规则的轨迹保留全部候选，但所有 `CH=0`。
 
-## Split
+## 数据规模
 
-The deterministic source-group build used for the main run contains:
+| 数据切分 | 样本数 | 轨迹数 | 来源视频数 | AH 正例 | CH 正例 |
+|---|---:|---:|---:|---:|---:|
+| 训练集 | 697 | 116 | 31 | 536 | 43 |
+| 验证集 | 86 | 16 | 7 | 60 | 4 |
+| 测试集 | 166 | 31 | 7 | 150 | 9 |
+| 合计 | 949 | 163 | 45 | 746 | 56 |
 
-| Split | Samples | Tracks | Source groups |
-|---|---:|---:|---:|
-| Train | 655 | 156 | 39 |
-| Validation | 91 | 19 | 9 |
-| Test | 169 | 39 | 8 |
+163 条可用轨迹中：
 
-Source groups do not overlap. The 70/15/15 split is randomized by a seeded hash,
-not by the paper's domain-held-out protocol, because using the 12
-self-collected tracks alone would leave too little training data.
+- 56 条达到证据完备条件并停止；
+- 107 条未达到条件；
+- 候选解码和 embedding 失败数为 0。
 
-| Split | AH negative/positive | CH negative/positive |
-|---|---:|---:|
-| Train | 191 / 464 | 207 / 448 |
-| Validation | 35 / 56 | 30 / 61 |
-| Test | 36 / 133 | 35 / 134 |
+被排除的原始轨迹：
 
-## Labels
+- 38 条轨迹在可读取轨迹元数据中不足三帧 KEP；
+- 11 条轨迹缺少轨迹元数据；
+- 2 条轨迹在完整 KEP 之后没有候选。
 
-- AH: 653 positive and 262 negative samples.
-- CH: 643 positive and 272 negative samples.
-- Labels are deterministic proxies described in `labeling_protocol.md`.
+## 最终训练数组
 
-## Known coverage gaps
+每个 split 的 NPZ 文件只包含以下五个数组：
 
-- The paper reports a much larger human-labelled TEA set. This database is a
-  software and protocol validation subset, not the paper's target dataset.
-- The stored vectors are pooled embeddings, while the paper specifies raw
-  2048-dimensional visual tokens.
-- The source table provides one precomputed scalar `quality_score`; the four
-  raw quality components for independently applying the paper's weighted CEP
-  equation are not stored.
-- Applying the paper's 5-second sampling to this short-track archive leaves 257
-  candidate frames and a `262:1` AH target even after the non-empty-history
-  correction. The audit build is stored in `reports/stride5_summary.json`. The
-  main run uses all 571 already-sparse memory frames and records this deviation.
-- Manual adjudication, inter-annotator agreement, and label error rates are not
-  available.
+| 数组 | 形状 | 含义 |
+|---|---|---|
+| `candidate` | `[N, 2048]` | 当前帧 embedding |
+| `history` | `[N, 3, 2048]` | 三帧历史 KEP embedding |
+| `history_mask` | `[N, 3]` | 全部为真 |
+| `ah_label` | `[N]` | 当前候选是否入池 |
+| `ch_label` | `[N]` | 当前是否为证据完备终止事件 |
+
+训练数据中不保存轨迹号、来源、帧号、时间戳、质量分或说明文本。
+
+## 数据切分
+
+切分单位是源视频，不是单个样本。同一个视频产生的全部轨迹只属于一个
+split，三个 split 的来源视频互不重叠。
+
+## 已知限制
+
+- AH 和 CH 都是确定性代理标签，不是人工标注。
+- CH 是数据集构建时依据证据覆盖规则生成的终止标签。
+- 107 条未完成轨迹全部属于明确的负类，不是缺失标签。
+- 当前数据规模不能代表论文中的完整 ETA 人工标注集。

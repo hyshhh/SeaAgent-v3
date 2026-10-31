@@ -40,7 +40,9 @@ class ToolService:
     MAX_RETURNED_MATCHES = 10
     MAX_FRAMES_PER_TRACK = 3
     MAX_EVIDENCE_TRACKS = 60
-    MAX_DEDUP_CANDIDATES = 120
+    MAX_RECOGNITION_GRAY_CANDIDATES = 5
+    MAX_MATCH_GRAY_CANDIDATES = 12
+    MAX_DEDUP_CANDIDATES = 12
 
     # ------------------------------------------------------------------ #
     # 一、服务初始化与执行守卫                                                       #
@@ -239,6 +241,18 @@ class ToolService:
             summary["matchedRegistryReferenceId"] = str(matched_registry_reference_id)
         return summary
 
+    @staticmethod
+    def _select_with_gray_cap(
+        candidates: list[dict[str, Any]],
+        gray_limit: int,
+        total_limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        confirmed = [item for item in candidates if item.get("scoreBand") == "match"]
+        gray = [item for item in candidates if item.get("scoreBand") == "uncertain"]
+        selected = (confirmed + gray[:gray_limit])[:total_limit]
+        selected_gray = sum(item.get("scoreBand") == "uncertain" for item in selected)
+        return selected, max(0, len(gray) - selected_gray)
+
     # 2.6 按外观文本给轨迹打分
     def _track_text_scores(
         self,
@@ -414,7 +428,11 @@ class ToolService:
                 ))
         candidates = [item for item in candidates if item["scoreBand"] != "mismatch"]
         candidates.sort(key=lambda item: (item["scoreBand"] != "match", -(item["score"] or -1)))
-        selected = candidates[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
+        selected, gray_skipped = self._select_with_gray_cap(
+            candidates,
+            self.MAX_RECOGNITION_GRAY_CANDIDATES,
+            max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES))),
+        )
         for item in selected:
             if keyframe_id := first_keyframes.get(item["trackId"]):
                 item["keyframeId"] = keyframe_id
@@ -428,6 +446,8 @@ class ToolService:
             "statistics": {  # 本轮检索统计
                 "searchedTrackCount": len(tracks),  # 时间范围内扫描到的轨迹数
                 "candidateCount": len(selected),  # 入选候选数
+                "grayCandidateCount": sum(item.get("scoreBand") == "uncertain" for item in selected),
+                "grayCandidatesSkippedCount": gray_skipped,
                 "unsearchableTrackCount": len(missing),  # 无法检索的轨迹数
             },
         }
@@ -515,7 +535,11 @@ class ToolService:
                 matched_registry_reference_id=matched_reference_id,
             ))
         matches.sort(key=lambda item: (item["scoreBand"] != "match", -(item.get("score") or -1)))
-        matches = matches[: max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES)))]
+        matches, gray_skipped = self._select_with_gray_cap(
+            matches,
+            self.MAX_RECOGNITION_GRAY_CANDIDATES,
+            max(1, min(self.MAX_RETURNED_MATCHES, int(top_k or self.MAX_RETURNED_MATCHES))),
+        )
         for item in matches:
             if keyframe_id := first_keyframes.get(item["trackId"]):
                 item["keyframeId"] = keyframe_id
@@ -530,6 +554,8 @@ class ToolService:
             "statistics": {  # 本轮统计
                 "searchedTrackCount": len(tracks),  # 扫描轨迹数
                 "candidateCount": len(matches),  # 候选数
+                "grayCandidateCount": sum(item.get("scoreBand") == "uncertain" for item in matches),
+                "grayCandidatesSkippedCount": gray_skipped,
                 "unsearchableTrackCount": len(missing),  # 无法检索的轨迹数
             },
             "coverageComplete": visual_complete,  # 时间与视觉覆盖都完整、无遗漏轨迹
@@ -743,6 +769,7 @@ class ToolService:
                     "exactShipCount",
                     "fuzzyShipCount",
                     "duplicateCandidateCount",
+                    "duplicateCandidatesSkippedCount",
                     "unresolvedDuplicateCount",
                     "coverageComplete",
                     "appliedTimeRange",
@@ -891,23 +918,29 @@ class ToolService:
                 and not registry_without_references_count
             ):
                 coverage_reasons.append("track_registry_comparison_incomplete")
+            verification_candidates.sort(
+                key=lambda item: float(item.get("score") or -1), reverse=True
+            )
             display_matches = matches[: self.MAX_EVIDENCE_TRACKS]
-            display_candidates = verification_candidates[: self.MAX_EVIDENCE_TRACKS]
-            candidates_truncated = len(verification_candidates) > len(display_candidates)
-            if candidates_truncated:
-                coverage_reasons.append("verification_candidates_truncated")
+            display_candidates = verification_candidates[: self.MAX_MATCH_GRAY_CANDIDATES]
+            skipped_candidates = verification_candidates[len(display_candidates):]
+            for item in skipped_candidates:
+                item["scoreBand"] = "mismatch"
+                item["classification"] = "gray_limit_excluded"
+                item["verificationDecision"] = "not_in_registry"
+                excluded_count += 1
+            candidates_truncated = bool(skipped_candidates)
             embedding_coverage_complete = (
                 scan_complete
                 and registry_coverage
                 and not missing
                 and unresolved_count == 0
-                and not candidates_truncated
             )
             result = {
                 "ok": True,
                 "status": (
                     "verification_required"
-                    if verification_candidates
+                    if display_candidates
                     else "complete"
                     if embedding_coverage_complete
                     else "incomplete"
@@ -915,7 +948,8 @@ class ToolService:
                 "trackCount": len(tracks),
                 "embeddingConfirmedCount": embedding_confirmed_count,
                 "outsideRegistryCount": excluded_count,
-                "grayCandidateCount": len(verification_candidates),
+                "grayCandidateCount": len(display_candidates),
+                "grayCandidatesSkippedCount": len(skipped_candidates),
                 "unresolvedTrackCount": unresolved_count,
                 "embeddingCoverageComplete": embedding_coverage_complete,
                 "coverageReasons": coverage_reasons,
@@ -925,7 +959,7 @@ class ToolService:
                 "verificationCandidatesTruncated": candidates_truncated,
                 "appliedTimeRange": self._format_time_range(scope) if scope else None,
             }
-            if verification_candidates:
+            if display_candidates:
                 result["nextStep"] = "verify_vessel_images"
                 result["recommendation"] = (
                     "仅对 verificationCandidates 中的灰区轨迹各调用一次 verify_vessel_images；"
@@ -1519,7 +1553,8 @@ class ToolService:
         ]
         review_pairs.sort(key=lambda item: float(item["score"]), reverse=True)
         display_pairs = review_pairs[: self.MAX_DEDUP_CANDIDATES]
-        review_pair_ids = {str(item["pairId"]) for item in review_pairs}
+        skipped_pair_count = len(review_pairs) - len(display_pairs)
+        review_pair_ids = {str(item["pairId"]) for item in display_pairs}
         verification_started = confirmed_pair_ids is not None or resolved_pair_ids is not None
         confirmed = set(confirmed_pair_ids or ()) & review_pair_ids if verification_started else set()
         resolved = set(resolved_pair_ids or ()) & review_pair_ids if verification_started else set()
@@ -1543,12 +1578,12 @@ class ToolService:
             if verification_started
             else len(review_pair_ids)
         )
-        candidates_truncated = len(review_pairs) > len(display_pairs)
+        candidates_truncated = skipped_pair_count > 0
         status = (
             "verification_required"
-            if review_pairs and not verification_started
+            if display_pairs and not verification_started
             else "complete"
-            if unresolved_pair_count == 0 and not candidates_truncated
+            if unresolved_pair_count == 0
             else "incomplete"
         )
         result = {
@@ -1556,12 +1591,13 @@ class ToolService:
             "status": status,
             "exactShipCount": exact_count,
             "fuzzyShipCount": len(low_groups),
-            "duplicateCandidateCount": len(review_pairs),
+            "duplicateCandidateCount": len(display_pairs),
+            "duplicateCandidatesSkippedCount": skipped_pair_count,
             "unresolvedDuplicateCount": unresolved_pair_count,
             "duplicateCandidates": display_pairs,
             "duplicateCandidatesTruncated": candidates_truncated,
         }
-        if review_pairs and not verification_started:
+        if display_pairs and not verification_started:
             result["nextStep"] = "verify_vessel_images"
             result["recommendation"] = (
                 "仅对精确匹配灰区 duplicateCandidates 中每个轨迹对调用 verify_vessel_images，"

@@ -17,6 +17,9 @@ def test_parser_exposes_isolated_workflows():
     parser = build_parser()
     assert parser.parse_args(["build-data"]).command == "build-data"
     assert parser.parse_args(["run-all", "--run-name", "smoke"]).run_name == "smoke"
+    publish = parser.parse_args(["publish", "--run-dir", "artifacts/run"])
+    assert publish.command == "publish"
+    assert publish.run_dir == "artifacts/run"
 
 
 def test_cli_output_serializes_version_subclasses():

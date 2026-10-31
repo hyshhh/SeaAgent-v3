@@ -6,6 +6,7 @@ tools:
       先验库比对按“轨迹—库实体”只取最高单帧余弦相似度，不做多帧平均。
       省略 time_range 表示全部监控时间；有时间段时只搜该范围。
       返回 status、少量候选及 coverageComplete；候选含 scoreBand、分数、时间和证据 ID，不返回原始轨迹。
+      灰区最多返回前 5 条供 VLM 核验，其余灰区候选按非灰区处理。
       图片路径不可用或图片编码失败时会返回工具错误，不能将工具错误当作未匹配。
       舷号/别名未确认时返回 nextStep=match_registry_tracks 和 recommendation；直查 mismatch 不代表目标不存在，应用相同舷号、时间范围辅助核验。描述或图片检索有可核验的不确定候选时返回 nextStep=verify_vessel_images。
       候选提供 matchedKeyframeId，供 VLM 核验实际命中的关键帧；覆盖不完整时不得把无候选说成未出现。
@@ -21,7 +22,7 @@ tools:
     description: >-
       仅用于用户提供的舷号或目标名称/别名。工具内部查找对应先验库参考图，并与范围内轨迹关键帧做视觉 embedding 比对；
       自动完成分页、视觉匹配和覆盖统计，只返回 status、少量候选和证据 ID。候选含 matchedKeyframeId、matchedRegistryReferenceId；
-      有可核验的不确定候选时返回 nextStep=verify_vessel_images。库中有记录不等于视频出现。
+      灰区最多返回前 5 条供 VLM 核验，其余按非灰区处理；有候选时返回 nextStep=verify_vessel_images。库中有记录不等于视频出现。
     arguments:
       hull_number: {type: string, required: true, description: 要比对的舷号或别名。}
       time_range: {type: time_range, required: false, description: "可选 ISO-8601 起止时间数组 [start, end]；单日包含整天；省略表示全部监控时间。"}
@@ -51,6 +52,7 @@ tools:
       两阶段轨迹去重。首次调用返回 duplicateCandidates、duplicateCandidateCount、fuzzyShipCount、
       低阈值到复核阈值为模糊匹配，复核阈值到高阈值为精确匹配灰区，高阈值以上直接精确匹配。
       只有灰区 duplicateCandidates 需要逐对调用 VLM；status=verification_required 和 nextStep=verify_vessel_images。
+      灰区最多返回前 12 对供 VLM 核验，其余轨迹对不进入精确合并。
       VLM match 的 pairId 作为 confirmedPairIds，VLM match/mismatch 的 pairId 作为 resolvedPairIds，再次调用本工具收尾。
       收尾返回 exactShipCount 与 fuzzyShipCount；exact 合并高阈值直接匹配和 VLM 确认的灰区轨迹对，fuzzy 使用低阈值 embedding 分组。
       省略 time_range 表示全部监控时间；显式范围返回实际使用的 appliedTimeRange，供核对。
@@ -65,7 +67,7 @@ tools:
       不去重；逐轨迹与先验库做 embedding 检索，每个“轨迹—库实体”只取最高单帧余弦相似度，不做多帧平均，且不在工具内部调用 VLM。
       score ≥ image_match 直接计为在库；score ≤ image_exclude 直接计为不在库；仅灰区返回待核验候选。
       返回 trackCount、embeddingConfirmedCount、outsideRegistryCount、grayCandidateCount、unresolvedTrackCount、embeddingCoverageComplete、
-      coverageReasons、appliedTimeRange，以及最多 60 个 verificationCandidates。
+      coverageReasons、appliedTimeRange，以及最多 12 个 verificationCandidates；其余灰区轨迹直接计入不在库。
       有候选时返回 status=verification_required、nextStep=verify_vessel_images 和 recommendation；
       Agent 只需对灰区候选使用 matchedRegistryReferenceId + matchedKeyframeId 调用 verify_vessel_images；多个候选可在同一回合并行调用。
       灰区 VLM match 计为在库，VLM mismatch 计为不在库，uncertain/失败保持未解决。

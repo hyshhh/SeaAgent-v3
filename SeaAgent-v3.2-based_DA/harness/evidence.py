@@ -29,6 +29,7 @@ TOOL_STATISTIC_KEYS = (
     "embeddingConfirmedCount",
     "outsideRegistryCount",
     "grayCandidateCount",
+    "grayCandidatesSkippedCount",
     "unresolvedTrackCount",
     "embeddingCoverageComplete",
     "nextStep",

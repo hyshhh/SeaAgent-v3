@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 
 from ..config import seed_everything
 from ..dataset import FeatureDataset
-from ..metrics import stop_metrics, summarize_predictions
+from ..metrics import binary_metrics, stop_metrics, summarize_predictions
 from ..model import build_model
 from ..utils import resolve_device, utc_timestamp, write_json
 
@@ -28,8 +28,7 @@ def _predict(
     completeness = []
     ah_labels = []
     ch_labels = []
-    track_ids: list[str] = []
-    sample_ids: list[str] = []
+    sample_indices: list[int] = []
     model.eval()
     with torch.inference_mode():
         for batch in loader:
@@ -42,14 +41,13 @@ def _predict(
                 completeness.append(torch.softmax(ch_logits, dim=1)[:, 1].cpu().numpy())
             ah_labels.append(batch["ah_label"].numpy())
             ch_labels.append(batch["ch_label"].numpy())
-            sample_ids.extend(batch["sample_id"])
-            track_ids.extend(batch["track_id"])
+            start = len(sample_indices)
+            sample_indices.extend(range(start, start + len(batch["ah_label"])))
     result = {
         "admission_probability": np.concatenate(admission),
         "ah_label": np.concatenate(ah_labels),
         "ch_label": np.concatenate(ch_labels),
-        "sample_id": np.asarray(sample_ids),
-        "track_id": np.asarray(track_ids),
+        "sample_index": np.asarray(sample_indices, dtype=np.int64),
     }
     result["completeness_probability"] = (
         np.concatenate(completeness) if completeness else None
@@ -94,8 +92,7 @@ def _latency_ms(model: torch.nn.Module, dataset: FeatureDataset, device: str, re
 
 def _write_predictions(path: Path, predictions: dict[str, np.ndarray]) -> None:
     fields = [
-        "sample_id",
-        "track_id",
+        "sample_index",
         "admission_probability",
         "ah_label",
         "completeness_probability",
@@ -105,11 +102,10 @@ def _write_predictions(path: Path, predictions: dict[str, np.ndarray]) -> None:
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
-        for index, sample_id in enumerate(predictions["sample_id"]):
+        for index, sample_index in enumerate(predictions["sample_index"]):
             writer.writerow(
                 {
-                    "sample_id": sample_id,
-                    "track_id": predictions["track_id"][index],
+                    "sample_index": int(sample_index),
                     "admission_probability": float(
                         predictions["admission_probability"][index]
                     ),
@@ -122,70 +118,54 @@ def _write_predictions(path: Path, predictions: dict[str, np.ndarray]) -> None:
             )
 
 
-def _plot_confusions(path: Path, metrics: dict[str, Any]) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    heads = [("AH", metrics["ah"])]
-    if metrics["ch"] is not None:
-        heads.append(("CH", metrics["ch"]))
-    figure, axes = plt.subplots(1, len(heads), figsize=(5.0 * len(heads), 4.2))
-    if len(heads) == 1:
-        axes = [axes]
-    for axis, (name, values) in zip(axes, heads, strict=True):
-        matrix = np.asarray(values["confusion_matrix"], dtype=np.int64)
-        axis.imshow(matrix, cmap="Blues")
-        axis.set_title(f"{name} confusion matrix")
-        axis.set_xlabel("Predicted")
-        axis.set_ylabel("Label")
-        axis.set_xticks([0, 1], ["0", "1"])
-        axis.set_yticks([0, 1], ["0", "1"])
-        for row in range(2):
-            for column in range(2):
-                axis.text(column, row, str(matrix[row, column]), ha="center", va="center")
-    figure.tight_layout()
-    figure.savefig(path, dpi=180)
-    plt.close(figure)
-
-
-def _plot_calibration(path: Path, metrics: dict[str, Any]) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    curves = [("AH", metrics["ah_calibration"])]
-    if metrics["ch"] is not None:
-        curves.append(("CH", metrics["ch_calibration"]))
-    figure, axis = plt.subplots(figsize=(6.4, 4.8))
-    for name, calibration in curves:
-        rows = [row for row in calibration["bins"] if row["count"]]
-        axis.plot(
-            [row["confidence"] for row in rows],
-            [row["accuracy"] for row in rows],
-            marker="o",
-            label=f"{name} (ECE={calibration['expected_calibration_error']:.3f})",
+def _select_thresholds(
+    predictions: dict[str, np.ndarray],
+    accuracy_floor: float,
+) -> dict[str, float]:
+    grid = np.linspace(0.05, 0.95, 91)
+    admission = []
+    for threshold in grid:
+        values = binary_metrics(
+            predictions["admission_probability"],
+            predictions["ah_label"],
+            threshold,
         )
-    axis.plot([0, 1], [0, 1], linestyle="--", color="grey", label="Perfect calibration")
-    axis.set_xlabel("Mean confidence")
-    axis.set_ylabel("Empirical accuracy")
-    axis.set_xlim(0, 1)
-    axis.set_ylim(0, 1)
-    axis.legend()
-    figure.tight_layout()
-    figure.savefig(path, dpi=180)
-    plt.close(figure)
+        admission.append((values["accuracy"], values["f1"], float(threshold)))
+    ah_threshold = max(admission, key=lambda row: (row[0], row[1]))[2]
+    completeness = predictions["completeness_probability"]
+    if completeness is None:
+        return {"ah": ah_threshold, "ch": 0.5}
+    candidates = []
+    for threshold in grid:
+        values = binary_metrics(
+            completeness,
+            predictions["ch_label"],
+            threshold,
+        )
+        candidates.append(
+            (
+                values["accuracy"],
+                values["f1"],
+                values["recall"],
+                float(threshold),
+            )
+        )
+    viable = [row for row in candidates if row[0] >= accuracy_floor]
+    chosen = (
+        max(viable, key=lambda row: (row[1], row[0], row[2]))
+        if viable
+        else max(candidates, key=lambda row: (row[0], row[1]))
+    )
+    return {"ah": ah_threshold, "ch": chosen[3]}
 
 
 def _report_markdown(metrics: dict[str, Any], latency: dict[str, float], run_id: str) -> str:
     lines = [
-        f"# ETA evaluation: {run_id}",
+        f"# ETA 评测结果：{run_id}",
         "",
-        "Proxy-label evaluation; these results do not estimate human-label accuracy.",
+        "结果基于确定性代理标签，不代表人工标注准确率。",
         "",
-        "| Head | Accuracy | Precision | Recall | F1 | ECE |",
+        "| 输出头 | 准确率 | 精确率 | 召回率 | F1 | ECE |",
         "|---|---:|---:|---:|---:|---:|",
     ]
     lines.append(
@@ -204,10 +184,15 @@ def _report_markdown(metrics: dict[str, Any], latency: dict[str, float], run_id:
         lines.extend(
             [
                 "",
-                f"- Joint accuracy: {metrics['joint_accuracy']:.4f}",
+                f"- 联合准确率：{metrics['joint_accuracy']:.4f}",
                 (
-                    f"- Static Stop-rule agreement F1 at threshold "
-                    f"{metrics['stop']['threshold']:.2f}: {metrics['stop']['f1']:.4f}"
+                    f"- 验证集选择的阈值：AH "
+                    f"{metrics['threshold_selection']['ah']:.2f}, CH "
+                    f"{metrics['threshold_selection']['ch']:.2f}"
+                ),
+                (
+                    f"- 阈值 {metrics['stop']['threshold']:.2f} 下的静态 Stop F1："
+                    f"{metrics['stop']['f1']:.4f}"
                 ),
             ]
         )
@@ -215,7 +200,7 @@ def _report_markdown(metrics: dict[str, Any], latency: dict[str, float], run_id:
         [
             "",
               (
-                  f"- Batch-1 latency, mean/p50/p95: "
+                  f"- batch=1 时延，均值/P50/P95："
                   f"{latency['mean_ms']:.3f} / {latency['p50_ms']:.3f} / "
                   f"{latency['p95_ms']:.3f} ms"
               ),
@@ -254,6 +239,27 @@ def evaluate_run(
         pin_memory=device.startswith("cuda"),
     )
     predictions = _predict(model, loader, device)
+    validation_path = Path(config["paths"]["processed_dir"]) / "validation.npz"
+    validation_predictions = None
+    if validation_path.exists():
+        validation_dataset = FeatureDataset(validation_path)
+        if len(validation_dataset):
+            validation_loader = DataLoader(
+                validation_dataset,
+                batch_size=int(config["evaluation"]["batch_size"]),
+                shuffle=False,
+                num_workers=0,
+                pin_memory=device.startswith("cuda"),
+            )
+            validation_predictions = _predict(model, validation_loader, device)
+    thresholds = (
+        _select_thresholds(
+            validation_predictions,
+            float(config["evaluation"].get("selection_accuracy_floor", 0.8)),
+        )
+        if validation_predictions is not None
+        else {"ah": 0.5, "ch": 0.5}
+    )
     metrics = summarize_predictions(
         predictions["admission_probability"],
         predictions["completeness_probability"],
@@ -263,7 +269,10 @@ def evaluate_run(
         int(config["evaluation"]["calibration_bins"]),
         int(config["evaluation"].get("bootstrap_iterations", 1000)),
         int(config["project"]["seed"]),
+        thresholds["ah"],
+        thresholds["ch"],
     )
+    metrics["threshold_selection"] = thresholds
     if predictions["completeness_probability"] is not None:
         metrics["stop_sensitivity"] = [
             stop_metrics(
@@ -272,6 +281,7 @@ def evaluate_run(
                 predictions["ah_label"],
                 predictions["ch_label"],
                 float(threshold),
+                thresholds["ah"],
             )
             for threshold in config["evaluation"].get(
                 "stop_thresholds",
@@ -297,8 +307,6 @@ def evaluate_run(
         "completed_at_utc": utc_timestamp(),
     }
     write_json(output_dir / "metrics.json", result)
-    _plot_confusions(output_dir / "confusion_matrices.png", metrics)
-    _plot_calibration(output_dir / "calibration.png", metrics)
     (output_dir / "report.md").write_text(
         _report_markdown(metrics, latency, checkpoint["run_id"]),
         encoding="utf-8",

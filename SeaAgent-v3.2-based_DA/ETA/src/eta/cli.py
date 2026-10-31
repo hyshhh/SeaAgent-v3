@@ -62,7 +62,7 @@ def _add_config(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    build = commands.add_parser("build-data", help="Build TEA splits from trajectory memory")
+    build = commands.add_parser("build-data", help="Build ETA splits from trajectory memory")
     _add_config(build)
     train = commands.add_parser("train", help="Train one ETA variant")
     _add_config(train)
@@ -76,12 +76,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--run-b", required=True)
     compare.add_argument("--tolerance", type=float, default=0.05)
     compare.add_argument("--output")
+    publish = commands.add_parser("publish", help="Publish a completed run report")
+    _add_config(publish)
+    publish.add_argument("--run-dir", required=True)
     run_all = commands.add_parser("run-all", help="Build, train and evaluate one ETA variant")
     _add_config(run_all)
     run_all.add_argument("--run-name")
     research = commands.add_parser(
         "research",
-        help="Run structural ablations and KEP-capacity experiments",
+        help="Run strict-history structural ablations",
     )
     _add_config(research)
     research.add_argument(
@@ -89,11 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(ETA_ROOT / "configs" / "experiments" / "ablations.yaml"),
     )
     research.add_argument(
-        "--capacities",
-        default=str(ETA_ROOT / "configs" / "experiments" / "capacity.yaml"),
+        "--tuning",
+        default=str(ETA_ROOT / "configs" / "experiments" / "tuning.yaml"),
     )
     research.add_argument("--skip-ablations", action="store_true")
-    research.add_argument("--skip-capacity", action="store_true")
+    research.add_argument("--skip-tuning", action="store_true")
     return parser
 
 
@@ -124,6 +127,14 @@ def main() -> None:
             args.tolerance,
             args.output,
         )
+    elif args.command == "publish":
+        from .evaluation.reporter import publish_run
+
+        result = publish_run(
+            args.run_dir,
+            config["paths"]["report_dir"],
+            artifact_dir=config["paths"]["artifact_dir"],
+        )
     elif args.command == "run-all":
         from .dataset import build_dataset
         from .evaluation import evaluate_run
@@ -138,9 +149,9 @@ def main() -> None:
         result = run_research_series(
             config,
             args.ablations,
-            args.capacities,
+            args.tuning,
             include_ablations=not args.skip_ablations,
-            include_capacity=not args.skip_capacity,
+            include_tuning=not args.skip_tuning,
         )
     else:
         raise AssertionError(f"Unhandled command: {args.command}")

@@ -1532,6 +1532,8 @@ function renderEvidence(evidence) {
     coverageReasons: 'Coverage reasons', appliedTimeRange: 'Applied time range',
     candidateCount: 'Candidates', embeddingConfirmedCount: 'Embedding confirmed in registry',
     grayCandidateCount: 'Gray-zone candidates requiring VLM',
+    grayCandidatesSkippedCount: 'Gray-zone candidates sent outside',
+    duplicateCandidatesSkippedCount: 'Gray-zone duplicate pairs not merged',
     outsideRegistryCount: 'Below embedding exclusion', unresolvedTrackCount: 'Unresolved embedding tracks',
     embeddingCoverageComplete: 'Embedding search complete', nextStep: 'Recommended next step',
     confirmedCount: 'Confirmed', unconfirmedCount: 'Unconfirmed',
