@@ -27,3 +27,8 @@ collection:
 verification:
   registry_use_vlm: true
   dedup_use_vlm: true
+
+evaluation:
+  api_url: http://127.0.0.1:8000
+  timeout_seconds: 900
+  output_dir: results

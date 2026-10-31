@@ -4,3 +4,4 @@ dataset/images/
 dataset/features/
 dataset/manifest.json
 collector/.cache/
+results/
