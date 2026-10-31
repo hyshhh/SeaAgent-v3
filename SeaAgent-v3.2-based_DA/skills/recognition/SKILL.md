@@ -5,6 +5,7 @@ description: "Search tracks, then run the required registry or visual verificati
 
 # Recognition
 
+- A model tool-call batch may combine only `read_file`, `read_shared_state` and `verify_vessel_images`. Emit one domain search or state write per model turn.
 - Search all stored time unless the user gives a range. Use `recognize_tracks.hull_number` for a hull/alias, `description` for appearance, and `image_path` for an attached image.
 - Follow the returned `nextStep` before concluding. For a hull/alias query, if direct status is not `confirmed` and `nextStep` or `recommendation` names `match_registry_tracks`, call it once with the same query and time range. This does not depend on `image_path`; do not conclude absence before the registry-assisted search.
 - If a result names `verify_vessel_images`, submit all returned uncertain candidates that contain `matchedKeyframeId` in the same assistant tool-call batch. Each call verifies one pair, and all calls for the current tool result must be emitted before waiting for any result. The initial tool caps recognition gray candidates at 5. Do not answer from embedding scores alone.
