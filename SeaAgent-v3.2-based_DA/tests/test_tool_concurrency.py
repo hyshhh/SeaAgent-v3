@@ -18,20 +18,20 @@ def _run(gate: ToolConcurrencyGate, tool_name: str) -> tuple[int, int]:
         return active, 0
 
 
-def test_vlm_calls_are_limited_to_five_concurrent_executions():
-    gate = ToolConcurrencyGate(vlm_limit=5)
-    with ThreadPoolExecutor(max_workers=10) as pool:
+def test_vlm_calls_are_limited_to_twelve_concurrent_executions():
+    gate = ToolConcurrencyGate(vlm_limit=12)
+    with ThreadPoolExecutor(max_workers=16) as pool:
         active_counts = list(
-            pool.map(lambda _: _run(gate, "verify_vessel_images")[0], range(10))
+            pool.map(lambda _: _run(gate, "verify_vessel_images")[0], range(16))
         )
 
-    assert max(active_counts) == 5
+    assert max(active_counts) == 12
     assert gate._active_vlm == 0
     assert gate._active_other == 0
 
 
 def test_non_vlm_calls_remain_serial():
-    gate = ToolConcurrencyGate(vlm_limit=5)
+    gate = ToolConcurrencyGate(vlm_limit=12)
     with ThreadPoolExecutor(max_workers=10) as pool:
         active_counts = list(
             pool.map(lambda _: _run(gate, "recognize_tracks")[0], range(10))
@@ -43,7 +43,7 @@ def test_non_vlm_calls_remain_serial():
 
 
 def test_non_vlm_calls_wait_while_vlm_calls_are_running():
-    gate = ToolConcurrencyGate(vlm_limit=5)
+    gate = ToolConcurrencyGate(vlm_limit=12)
     started = threading.Event()
     release = threading.Event()
     observed: list[str] = []
@@ -75,4 +75,4 @@ def test_non_vlm_calls_wait_while_vlm_calls_are_running():
 def test_runtimes_share_the_process_wide_vlm_limit_gate():
     from harness.runtime import _shared_tool_concurrency_gate
 
-    assert _shared_tool_concurrency_gate(5) is _shared_tool_concurrency_gate(5)
+    assert _shared_tool_concurrency_gate(12) is _shared_tool_concurrency_gate(12)

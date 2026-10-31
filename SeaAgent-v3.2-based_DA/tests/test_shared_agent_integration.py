@@ -230,9 +230,9 @@ def test_real_graph_only_runs_vlm_batches_concurrently(tmp_path):
 
     assert result["state"] == "completed"
     assert service.verify_queries == 9
-    assert 2 <= service.max_active_verify <= 5
+    assert 2 <= service.max_active_verify <= 12
     assert service.max_active_queries == 0
-    assert runtime.vlm_tool_concurrency == 5
+    assert runtime.vlm_tool_concurrency == 12
 
 
 def test_real_graph_iteration_limit_does_not_start_a_summary_request(tmp_path):

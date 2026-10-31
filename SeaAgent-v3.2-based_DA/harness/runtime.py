@@ -303,7 +303,7 @@ class SeaVideoHarness:
         self._cancel: Any = None
         self._stale_checkpoint_roles: set[str] = set()
         self.vlm_tool_concurrency = max(
-            1, int(harness.get("vlm_tool_concurrency", 5))
+            1, int(harness.get("vlm_tool_concurrency", 12))
         )
         self.tool_concurrency_gate = _shared_tool_concurrency_gate(
             self.vlm_tool_concurrency
@@ -627,7 +627,7 @@ class SeaVideoHarness:
                                 1,
                                 int(
                                     self.config.get("harness", {}).get(
-                                        "vlm_tool_concurrency", 5
+                                        "vlm_tool_concurrency", 12
                                     )
                                 ),
                             ),

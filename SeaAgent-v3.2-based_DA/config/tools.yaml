@@ -69,7 +69,7 @@ tools:
       返回 trackCount、embeddingConfirmedCount、outsideRegistryCount、grayCandidateCount、unresolvedTrackCount、embeddingCoverageComplete、
       coverageReasons、appliedTimeRange，以及最多 12 个 verificationCandidates；其余灰区轨迹直接计入不在库。
       有候选时返回 status=verification_required、nextStep=verify_vessel_images 和 recommendation；
-      Agent 只需对灰区候选使用 matchedRegistryReferenceId + matchedKeyframeId 调用 verify_vessel_images；多个候选可在同一回合批量提出，运行器允许最多 5 个 VLM 核验并发执行，其他工具保持串行。
+      Agent 只需对灰区候选使用 matchedRegistryReferenceId + matchedKeyframeId 调用 verify_vessel_images；多个候选可在同一回合批量提出，运行器允许最多 12 个 VLM 核验并发执行，其他工具保持串行。
       灰区 VLM match 计为在库，VLM mismatch 计为不在库，uncertain/失败保持未解决。
       灰区核验完成后统一计算：总数 = trackCount；在库船 = embeddingConfirmedCount + VLM match；不在库船 = 总数 - 在库船。
       两类问题最终都说明同一组结果：总数、在库船、不在库船；outsideRegistryCount 只作诊断，不可替代“总数 - 在库船”。

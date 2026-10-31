@@ -9,7 +9,7 @@ harness:
   shared_state_file: data/memory/shared_task_state.sqlite
   max_iterations: 4
   # 普通工具串行；仅 VLM 核验允许并发，避免多个 vLLM 请求压满显存。
-  vlm_tool_concurrency: 5
+  vlm_tool_concurrency: 12
   skills_dir: skills
   # 每个角色的模型请求额度、收尾额度、任务提示和技能提醒均在 config/subagents.yaml 中显式声明。
   reconnect_attempts: 2
