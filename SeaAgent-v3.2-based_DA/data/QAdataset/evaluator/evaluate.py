@@ -34,28 +34,15 @@ def truth_entity_ids(question: dict[str, Any]) -> list[str]:
 
 
 def predicted_entity_ids(prediction: dict[str, Any]) -> list[str]:
-    entities = prediction.get("entities") or []
-    ranked = sorted(
-        (item for item in entities if isinstance(item, dict) and item.get("entity_id")),
-        key=lambda item: float(item.get("confidence", 0.0)),
-        reverse=True,
-    )
-    return [str(item["entity_id"]) for item in ranked]
+    return [
+        str(item["entity_id"])
+        for item in (prediction.get("entities") or [])
+        if isinstance(item, dict) and item.get("entity_id")
+    ]
 
 
-def average_precision(truth: list[str], prediction: list[str]) -> float:
-    truth_set = set(truth)
-    if not truth_set:
-        return 1.0 if not prediction else 0.0
-    seen: set[str] = set()
-    hits = 0
-    precision_sum = 0.0
-    for rank, entity_id in enumerate(prediction, 1):
-        if entity_id in truth_set and entity_id not in seen:
-            hits += 1
-            precision_sum += hits / rank
-        seen.add(entity_id)
-    return precision_sum / len(truth_set)
+def exact_entity_match(truth: list[str], prediction: list[str]) -> bool:
+    return set(truth) == set(prediction)
 
 
 def score_answer(question: dict[str, Any], prediction: dict[str, Any]) -> dict[str, Any]:
@@ -77,17 +64,17 @@ def score_answer(question: dict[str, Any], prediction: dict[str, Any]) -> dict[s
         row.update({"correct": False, "em": 0.0, "ap": 0.0})
         return row
     if category in RECOGNITION:
-        correct = set(truth) == set(predicted)
+        correct = exact_entity_match(truth, predicted)
         row.update({"correct": correct, "em": 1.0 if correct else 0.0})
         return row
     if category in COUNTING:
-        ap = average_precision(truth, predicted)
+        entity_exact = exact_entity_match(truth, predicted)
         truth_count = int(question["ground_truth"].get("count", len(truth)))
         answer = prediction.get("answer")
         row.update({
-            "correct": answer == truth_count,
+            "correct": answer == truth_count and entity_exact,
             "count_accuracy": 1.0 if answer == truth_count else 0.0,
-            "ap": ap,
+            "ap": 1.0 if entity_exact else 0.0,
         })
         return row
     row.update({"correct": False, "error": f"unknown category: {category}"})

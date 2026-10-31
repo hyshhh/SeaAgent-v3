@@ -43,8 +43,8 @@ Fields:
 
 - `status`: `answered`, `unresolved`, or `error`;
 - `answer`: the model answer; count questions should return an integer;
-- `entities`: ranked entity candidates. Higher confidence must be placed first
-  or supplied through the `confidence` field.
+- `entities`: predicted entity IDs. Order and duplicate IDs do not affect the
+  score because evaluation uses exact set comparison; `confidence` is optional.
 
 For an unresolved question, use:
 
@@ -70,9 +70,13 @@ Omit `--output` to print the result to standard output.
 Recognition categories use entity-set Exact Match. Entity order and duplicate
 returns do not affect EM.
 
-Count categories use the paper's entity-set AP/mAP protocol. The first valid hit
-for each truth entity is positive; duplicate, incorrect, or unsupported entity
-returns do not earn another hit. Exact-count accuracy is reported separately.
+Count categories report two simplified values:
+
+- `map`: 1 only when the predicted entity set exactly equals the truth entity
+  set, otherwise 0; the category value is the mean of these exact-set scores;
+- `count_accuracy`: 1 only when the integer `answer` equals the truth count.
+
+Entity ranking, duplicate returns, and confidence no longer affect scoring.
 
 Questions whose ground truth is explicitly unresolved are excluded from the
 determinate EM/mAP denominator and reported through `unresolved_accuracy`.
@@ -84,6 +88,12 @@ The JSON result contains:
 - count `map` and `count_accuracy`;
 - unresolved-question accuracy;
 - per-question scoring rows for error analysis.
+
+## Self-test
+
+```bash
+python data/QAdataset/evaluator/test_evaluate.py
+```
 
 ## Provenance
 
