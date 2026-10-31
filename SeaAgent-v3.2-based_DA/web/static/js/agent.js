@@ -1179,8 +1179,14 @@ function createToolEvent(event) {
   item.className = 'qa-tool-event is-running';
   item.dataset.callId = callId;
   const owner = AGENT_LABELS[event.agent] || '';
+  const summaryText = toolSummaryLine(event.tool, event.arguments || {}, undefined, event);
   item.__toolEvent = { ...event };
-  item.innerHTML = `<div class="qa-tool-event-head"><span class="qa-tool-dot" aria-hidden="true"></span><span class="qa-tool-name">${escapeHtml(tool)}</span>${owner ? `<span class="qa-tool-agent">${escapeHtml(owner)}</span>` : ''}<span class="qa-tool-args">${escapeHtml(toolSummaryLine(event.tool, event.arguments || {}, undefined, event))}</span><span class="qa-tool-status">Running</span></div><details class="qa-tool-details"><summary>Details</summary><pre>${escapeHtml(toolDetailsText(item.__toolEvent))}</pre></details>`;
+  item.innerHTML = `<div class="qa-tool-event-head"><span class="qa-tool-dot" aria-hidden="true"></span><span class="qa-tool-name">${escapeHtml(tool)}</span>${owner ? `<span class="qa-tool-agent">${escapeHtml(owner)}</span>` : ''}<span class="qa-tool-args"></span><span class="qa-tool-status">Running</span></div><details class="qa-tool-details"><summary>Details</summary><pre>${escapeHtml(toolDetailsText(item.__toolEvent))}</pre></details>`;
+  const args = item.querySelector('.qa-tool-args');
+  if (args) {
+    args.textContent = summaryText;
+    args.title = summaryText;
+  }
   stream.appendChild(item);
   harnessToolCards.set(callId, item);
   return item;
@@ -1236,7 +1242,11 @@ function completeToolEvent(event) {
   const status = target.querySelector('.qa-tool-status');
   if (status) status.textContent = failed ? 'Failed' : 'Done';
   const summary = target.querySelector('.qa-tool-args');
-  if (summary) summary.textContent = toolSummaryLine(target.__toolEvent.tool, target.__toolEvent.arguments || {}, target.__toolEvent.result, target.__toolEvent);
+  if (summary) {
+    const summaryText = toolSummaryLine(target.__toolEvent.tool, target.__toolEvent.arguments || {}, target.__toolEvent.result, target.__toolEvent);
+    summary.textContent = summaryText;
+    summary.title = summaryText;
+  }
   const details = target.querySelector('.qa-tool-details pre');
   if (details) details.textContent = toolDetailsText(target.__toolEvent);
   target.dataset.status = failed ? 'failed' : 'complete';
