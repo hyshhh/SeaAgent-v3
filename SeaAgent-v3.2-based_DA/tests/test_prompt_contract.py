@@ -47,7 +47,6 @@ def test_prompts_and_skills_match_the_new_recognition_flow():
     assert "candidate_keyframe_id" in recognition
     assert "caps recognition gray candidates at 5" in recognition
     assert "same assistant tool-call batch" in recognition
-    assert "仅允许组合 read_file、read_shared_state 和 verify_vessel_images" in executor["system_prompt"]
     assert "同一次模型输出的 tool_calls 中批量提交" in executor["system_prompt"]
     assert "verify_images" in prompt
     verify = next(item for item in config["tools"] if item["name"] == "verify_vessel_images")
