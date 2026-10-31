@@ -60,9 +60,11 @@ def plan_statistics(question: str, time_anchor: str) -> dict[str, Any] | None:
     except (TypeError, ValueError, OverflowError):
         return None
     if unregistered:
-        kind, tool, target = "unregistered", "match_entities", "不在库船舶数量"
+        kind, tool = "unregistered", "match_entities"
+        target = "船舶总数、在库船和不在库船"
     elif registered:
-        kind, tool, target = "registered", "match_entities", "在库船舶数量"
+        kind, tool = "registered", "match_entities"
+        target = "船舶总数、在库船和不在库船"
     else:
         kind, tool, target = "total", "dedup_tracks", "船舶总数"
 

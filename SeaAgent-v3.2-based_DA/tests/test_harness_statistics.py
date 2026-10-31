@@ -29,6 +29,10 @@ def test_plain_registry_counts_receive_a_fixed_plan(question, kind):
     assert request["kind"] == kind
     assert request["tool"] == "match_entities"
     assert request["plan"][0]["required_evidence"] == ["match_entities"]
+    assert request["requirements"] == ["统计已索引轨迹中的船舶总数、在库船和不在库船"]
+    assert request["plan"][0]["content"].startswith(
+        "调用 match_entities 统计船舶总数、在库船和不在库船"
+    )
 
 
 def test_relative_date_is_bound_to_fixed_anchor_as_iso_day_range():

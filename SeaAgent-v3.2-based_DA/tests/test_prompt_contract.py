@@ -129,8 +129,14 @@ def test_statistics_prompts_keep_embedding_and_vlm_semantics_consistent():
         assert field in match_entities["description"]
     assert "不在工具内部调用 VLM" in match_entities["description"]
     assert "gray candidates" in statistics
-    assert "VLM `match` adds to `embeddingConfirmedCount`" in statistics
-    assert "VLM `mismatch` adds to `outsideRegistryCount`" in statistics
+    assert "VLM `match` adds to `registered`" in statistics
+    assert "VLM `mismatch` adds to `unregistered`" in statistics
+    assert "registered = embeddingConfirmedCount + gray VLM match" in statistics
+    assert "unregistered = outsideRegistryCount + gray VLM mismatch" in statistics
+    assert "总数：{total}；在库船：{registered}；不在库船：{unregistered}" in statistics
+    reflector = agents["reflector"]["system_prompt"]
+    assert "总数 = 在库船 + 不在库船" in reflector
+    assert "无论用户问在库还是不在库" in reflector
 def test_planner_and_question_presets_cover_the_six_request_types():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")
@@ -172,6 +178,8 @@ def test_summarization_preserves_separate_direct_and_assisted_match_findings():
     assert "分开记录直接识别与先验库辅助匹配" in summary
     assert "辅助匹配 confirmed 不得被直接识别 mismatch 覆盖" in summary
     assert "工具结果的 appliedTimeRange" in summary
+    assert "总数、在库船、不在库船" in summary
+    assert "总数 = 在库船 + 不在库船" in summary
 
 
 def test_planner_resolves_relative_dates_from_its_fixed_time_anchor():
@@ -194,3 +202,12 @@ def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
     tools = {item["name"]: item for item in load_config()["tools"]}
     for name in ("recognize_tracks", "dedup_tracks", "match_entities"):
         assert "省略 time_range 表示全部监控时间" in tools[name]["description"]
+
+
+def test_registered_and_unregistered_questions_share_the_same_result_contract():
+    finalize = (ROOT / "skills/answer/finalize/SKILL.md").read_text(encoding="utf-8")
+    planning = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
+
+    assert "总数：N；在库船：M；不在库船：K" in finalize
+    assert "Both question phrasings must produce the same three values" in finalize
+    assert "registered and unregistered counts both use the same `match_entities` pipeline" in planning
