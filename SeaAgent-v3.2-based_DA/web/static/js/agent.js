@@ -19,8 +19,6 @@ let harnessResult = null;
 let harnessEvidence = null;
 let harnessToolCount = 0;
 let harnessIteration = 0;
-let harnessStageSummary = 'Waiting for a question';
-let harnessLastStateChange = '—';
 const harnessAgentStates = new Map();
 const harnessToolCards = new Map();
 const harnessSkillNames = new Set();
@@ -211,18 +209,22 @@ function formatEventTime() {
 
 function renderAgentStatus() {
   const iteration = document.getElementById('qaIterationCount');
-  const stage = document.getElementById('qaStageSummary');
-  const changed = document.getElementById('qaLastStateChange');
   if (iteration) iteration.textContent = String(harnessIteration);
-  if (stage) stage.textContent = displayText(harnessStageSummary);
-  if (changed) changed.textContent = harnessLastStateChange;
   if (typeof document.querySelector !== 'function') return;
   for (const [agent, value] of harnessAgentStates) {
-    const card = document.querySelector(`.qa-agent-status[data-agent="${agent}"]`);
-    if (!card) continue;
-    card.dataset.state = value.state;
-    card.querySelector('.qa-agent-status-label').textContent = AGENT_STATE_LABELS[value.state] || value.state;
-    card.querySelector('p').textContent = displayText(value.action);
+    const group = document.querySelector(`.qa-state-group[data-group="${agent}"]`);
+    const label = group?.querySelector('.qa-state-group-status');
+    if (!group || !label) continue;
+    group.dataset.liveState = value.state;
+    if (value.state === 'pending' && label.dataset.fieldStatus) {
+      label.textContent = label.dataset.fieldStatus;
+      label.title = '';
+      continue;
+    }
+    const stateLabel = AGENT_STATE_LABELS[value.state] || value.state;
+    const action = displayText(value.action || '');
+    label.textContent = value.state === 'running' && action ? `${stateLabel} · ${action}` : stateLabel;
+    label.title = action;
   }
 }
 
@@ -232,8 +234,6 @@ function setAgentStatus(agent, state, action, iteration) {
   const message = String(action || 'Processing');
   if (Number.isFinite(Number(iteration))) harnessIteration = Math.max(harnessIteration, Number(iteration));
   if (harnessAgentStates.has(role)) harnessAgentStates.set(role, {state: nextState, action: message});
-  harnessStageSummary = `${AGENT_LABELS[role] || role || 'Harness'} · ${displayText(message)}`;
-  harnessLastStateChange = formatEventTime();
   renderAgentStatus();
 }
 
@@ -242,6 +242,42 @@ function formatSharedStateValue(value) {
   if (typeof value === 'string') return value;
   try { return JSON.stringify(value, null, 2); }
   catch (_error) { return String(value); }
+}
+
+function sharedGroupStatus(groupId, state) {
+  const pendingAgent = String(state.pending_agent || '');
+  if (groupId === 'planner') {
+    if (state.clarification) return 'Needs input';
+    if (pendingAgent === 'planner') return 'Planning';
+    if (Array.isArray(state.plan) && state.plan.length && state.next_action) return 'Plan ready';
+    return 'Waiting';
+  }
+  if (groupId === 'executor') {
+    const status = String(state.execution_status || '');
+    if (pendingAgent === 'executor') return 'Executing';
+    return {
+      idle: 'Waiting',
+      running: 'Running',
+      success: 'Completed',
+      failed: 'Failed',
+    }[status] || 'Waiting';
+  }
+  if (groupId === 'reflector') {
+    if (pendingAgent === 'reflector') return 'Reviewing';
+    return {
+      terminate: 'Completed',
+      replan: 'Replan',
+      continue: 'Continue',
+      failed: 'Failed',
+    }[String(state.decision || '')] || 'Waiting';
+  }
+  if (groupId === 'runtime') {
+    return state.task_status ? String(state.task_status) : 'Waiting';
+  }
+  if (groupId === 'evidence' && Array.isArray(state.tool_results)) {
+    return `${state.tool_results.length} records`;
+  }
+  return '';
 }
 
 function renderSharedState(state) {
@@ -254,13 +290,18 @@ function renderSharedState(state) {
       const value = formatSharedStateValue(state[key]);
       return `<div class="qa-state-field" data-key="${escapeHtml(key)}"><dt>${escapeHtml(stateKeyLabel(key))}</dt><dd>${escapeHtml(value)}</dd></div>`;
     }).join('');
-    return rows ? `<section class="qa-state-group" data-group="${group.id}"><h3>${escapeHtml(group.title)}</h3><dl>${rows}</dl></section>` : '';
+    const agentGroup = ['planner', 'executor', 'reflector'].includes(group.id);
+    if (!rows && !agentGroup) return '';
+    const status = sharedGroupStatus(group.id, state);
+    const body = rows || '<div class="qa-state-group-empty">Waiting for this agent to write shared state.</div>';
+    return `<section class="qa-state-group" data-group="${group.id}" data-live-state="pending"><h3><span>${escapeHtml(group.title)}</span><span class="qa-state-group-status" data-field-status="${escapeHtml(status)}">${escapeHtml(status)}</span></h3><dl>${body}</dl></section>`;
   }).filter(Boolean).join('');
   groups.innerHTML = rendered || '<div class="qa-inspector-empty">No shared state yet.</div>';
   if (meta) {
     const stamp = state.version === undefined ? '' : `Version ${state.version}`;
     meta.textContent = stamp || 'Latest snapshot';
   }
+  renderAgentStatus();
 }
 
 /* 会话时间戳由后端给 ISO-8601（带时区）；旧格式会话没有时间戳，返回空串让调用方省掉这一段。 */
@@ -341,8 +382,6 @@ function resetActivityDom() {
   const count = document.getElementById('evidenceResultCount');
   if (count) count.textContent = 'Waiting';
   harnessIteration = 0;
-  harnessStageSummary = 'Waiting for a question';
-  harnessLastStateChange = '—';
   harnessAgentStates.clear();
   for (const agent of Object.keys(AGENT_LABELS)) {
     harnessAgentStates.set(agent, { state: 'pending', action: 'Waiting for task' });
@@ -921,13 +960,11 @@ function turnAnswer(turn) {
 function renderRestoredTurn(turn) {
   renderAgentPlan({ steps: [] });
   harnessIteration = currentSession?.turns?.length || 0;
-  harnessStageSummary = 'History · runtime state not saved';
   for (const agent of Object.keys(AGENT_LABELS)) {
-    harnessAgentStates.set(agent, {state: 'unknown', action: 'History does not include runtime events'});
+    harnessAgentStates.set(agent, {state: 'pending', action: 'History does not include runtime events'});
   }
   if (turn?.state === 'awaiting_confirmation') {
     harnessAgentStates.set('executor', {state: 'waiting', action: 'Awaiting human confirmation'});
-    harnessStageSummary = 'Awaiting human confirmation';
     renderAgentStatus();
     renderAgentConfirmation({ confirmation: turn.confirmation });
     syncComposer({ status: 'awaiting_confirmation' });
@@ -1331,7 +1368,6 @@ function appendHarnessEvent(event) {
     for (const [agent, value] of harnessAgentStates) {
       if (value.state === 'running') setAgentStatus(agent, 'completed', 'Phase complete', iteration);
     }
-    harnessStageSummary = event.result?.state === 'cancelled' ? 'Run stopped' : 'Run complete';
     renderSharedState(event.result?.sharedState || event.result?.shared_state);
     renderAgentStatus();
     setHarnessState(event.result?.state === 'cancelled' ? 'Stopped' : 'Complete', event.result?.state === 'cancelled' ? '' : 'complete');

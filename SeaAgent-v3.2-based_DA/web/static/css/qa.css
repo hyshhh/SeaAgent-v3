@@ -1245,28 +1245,13 @@
 #tab-agent-qa .qa-inspector::-webkit-scrollbar-thumb { background: #c4c4c4; border-color: #fff; }
 #tab-agent-qa .qa-inspector { scrollbar-color: #c4c4c4 #fff; }
 
-/* 实时状态页：把 Agent 当前阶段单独展示，轨迹只保留业务事件。 */
+/* 实时状态页：状态直接落在三个 Agent 的共享状态字段卡片中。 */
 #tab-agent-qa .qa-state-view { padding: 22px clamp(20px, 5vw, 72px); overflow-y: auto; }
 #tab-agent-qa .qa-state-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--qa-line); }
 #tab-agent-qa .qa-state-head p { margin: 5px 0 0; color: var(--qa-muted); font-size: 12px; }
 #tab-agent-qa .qa-state-round { display: grid; gap: 3px; min-width: 74px; padding: 9px 12px; text-align: center; border: 1px solid var(--qa-line); background: var(--qa-subtle); }
 #tab-agent-qa .qa-state-round span { color: var(--qa-muted); font-size: 10px; }
 #tab-agent-qa .qa-state-round strong { color: var(--qa-ink); font-size: 22px; line-height: 1; }
-#tab-agent-qa .qa-state-summary { display: flex; align-items: baseline; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--qa-line); }
-#tab-agent-qa .qa-state-summary span { color: var(--qa-muted); font-size: 11px; }
-#tab-agent-qa .qa-state-summary strong { color: var(--qa-ink); font-size: 14px; }
-#tab-agent-qa .qa-state-summary time { margin-left: auto; color: var(--qa-muted); font-size: 11px; }
-#tab-agent-qa .qa-agent-status-list { display: grid; gap: 0; margin-top: 16px; border-top: 1px solid var(--qa-line); }
-#tab-agent-qa .qa-agent-status { display: grid; grid-template-columns: 9px 100px 76px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 58px; padding: 0 4px; border-bottom: 1px solid var(--qa-line); }
-#tab-agent-qa .qa-agent-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #b5bec7; }
-#tab-agent-qa .qa-agent-status[data-state="running"] .qa-agent-status-dot { background: #b98221; animation: qaPulse 1.5s infinite; }
-#tab-agent-qa .qa-agent-status[data-state="completed"] .qa-agent-status-dot { background: #397a5d; }
-#tab-agent-qa .qa-agent-status[data-state="failed"] .qa-agent-status-dot { background: #b44f58; }
-#tab-agent-qa .qa-agent-status[data-state="waiting"] .qa-agent-status-dot,
-#tab-agent-qa .qa-agent-status[data-state="reconnecting"] .qa-agent-status-dot { background: #2f6f9f; }
-#tab-agent-qa .qa-agent-status strong { color: var(--qa-ink); font-size: 13px; }
-#tab-agent-qa .qa-agent-status-label { color: var(--qa-muted); font-size: 11px; }
-#tab-agent-qa .qa-agent-status p { min-width: 0; margin: 0; overflow: hidden; color: var(--qa-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 #tab-agent-qa .qa-tool-agent { color: var(--qa-muted); font-size: 10px; }
 #tab-agent-qa .qa-step-round { color: var(--qa-muted); font-size: 10px; }
 #tab-agent-qa .qa-step-args { margin-top: 2px; overflow: hidden; color: var(--qa-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1324,9 +1309,7 @@
 
 /* QA state snapshots: grouped by owner so the full shared dictionary stays readable. */
 #tab-agent-qa .qa-shared-state {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--qa-line);
+  margin-top: 16px;
 }
 #tab-agent-qa .qa-shared-state-head {
   display: flex;
@@ -1341,21 +1324,69 @@
 }
 #tab-agent-qa .qa-shared-state-groups {
   display: grid;
-  gap: 10px;
+  gap: 14px;
 }
 #tab-agent-qa .qa-state-group {
+  --qa-state-accent: #64748b;
+  --qa-state-border: #d6dde4;
+  --qa-state-bg: #fafbfc;
+  --qa-state-active: rgba(100, 116, 139, .16);
   min-width: 0;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--qa-line);
+  padding: 14px;
+  border: 1px solid var(--qa-state-border);
+  border-left: 4px solid var(--qa-state-accent);
+  border-radius: 10px;
+  background: var(--qa-state-bg);
+  box-shadow: 0 1px 2px rgba(31, 45, 61, .04);
 }
-#tab-agent-qa .qa-state-group:last-child { border-bottom: 0; }
+#tab-agent-qa .qa-state-group[data-group="planner"] {
+  --qa-state-accent: #3f6f9e;
+  --qa-state-border: #c8d9e8;
+  --qa-state-bg: #f5f8fc;
+  --qa-state-active: rgba(63, 111, 158, .2);
+}
+#tab-agent-qa .qa-state-group[data-group="executor"] {
+  --qa-state-accent: #397a5d;
+  --qa-state-border: #c9ddd2;
+  --qa-state-bg: #f4f9f6;
+  --qa-state-active: rgba(57, 122, 93, .2);
+}
+#tab-agent-qa .qa-state-group[data-group="reflector"] {
+  --qa-state-accent: #b57922;
+  --qa-state-border: #e7d4ad;
+  --qa-state-bg: #fcf8ef;
+  --qa-state-active: rgba(181, 121, 34, .2);
+}
+#tab-agent-qa .qa-state-group[data-live-state="running"] { box-shadow: 0 0 0 3px var(--qa-state-active); }
+#tab-agent-qa .qa-state-group[data-live-state="failed"] { box-shadow: 0 0 0 2px rgba(180, 79, 88, .14); }
 #tab-agent-qa .qa-state-group h3 {
-  margin: 0 0 7px;
-  color: var(--qa-ink);
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  color: var(--qa-state-accent);
+  font-size: 13px;
   font-weight: 700;
 }
+#tab-agent-qa .qa-state-group-status {
+  max-width: min(52%, 360px);
+  padding: 3px 8px;
+  overflow: hidden;
+  color: var(--qa-state-accent);
+  border: 1px solid var(--qa-state-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .82);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tab-agent-qa .qa-state-group[data-live-state="running"] .qa-state-group-status { animation: qaPulse 1.5s infinite; }
+#tab-agent-qa .qa-state-group[data-live-state="failed"] .qa-state-group-status { color: #9d3742; border-color: #e1b3b8; }
 #tab-agent-qa .qa-state-group dl { display: grid; gap: 6px; margin: 0; }
+#tab-agent-qa .qa-state-group-empty { padding: 9px 10px; color: var(--qa-muted); border: 1px dashed var(--qa-state-border); border-radius: 6px; font-size: 11px; }
 #tab-agent-qa .qa-state-field {
   display: grid;
   grid-template-columns: minmax(108px, 0.28fr) minmax(0, 1fr);
@@ -1379,9 +1410,9 @@
   font: 11px/1.45 Consolas, "Cascadia Mono", monospace;
   white-space: pre-wrap;
   word-break: break-word;
-  border: 1px solid var(--qa-line);
-  border-radius: 5px;
-  background: #fafbfc;
+  border: 1px solid var(--qa-state-border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .9);
   scrollbar-width: thin;
 }
 #tab-agent-qa .qa-registry-match-evidence { grid-column: 1 / -1; min-width: 0; }

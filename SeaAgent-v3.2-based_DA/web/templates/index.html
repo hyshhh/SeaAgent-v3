@@ -274,15 +274,9 @@
 
         <section class="qa-view qa-state-view" id="qaStateView" hidden aria-label="Agent runtime status">
           <header class="qa-state-head">
-            <div><span class="qa-section-title">Runtime state</span><p>Current phase and latest action for each agent</p></div>
+            <div><span class="qa-section-title">Runtime state</span><p>Agent progress is shown directly in each role's shared-state fields</p></div>
             <div class="qa-state-round"><span>Iteration</span><strong id="qaIterationCount">0</strong></div>
           </header>
-          <div class="qa-state-summary"><span>Current phase</span><strong id="qaStageSummary">Waiting for a question</strong><time id="qaLastStateChange">—</time></div>
-          <div class="qa-agent-status-list" id="qaAgentStatusList">
-            <article class="qa-agent-status" data-agent="planner" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Planner</strong><span class="qa-agent-status-label">Pending</span><p>Waiting for task</p></article>
-            <article class="qa-agent-status" data-agent="executor" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Executor</strong><span class="qa-agent-status-label">Pending</span><p>Waiting for task</p></article>
-            <article class="qa-agent-status" data-agent="reflector" data-state="pending"><span class="qa-agent-status-dot"></span><strong>Reflector</strong><span class="qa-agent-status-label">Pending</span><p>Waiting for task</p></article>
-          </div>
           <section class="qa-shared-state" aria-label="Shared state">
             <div class="qa-shared-state-head"><span class="qa-section-title">Shared state</span><span id="qaSharedStateMeta">Waiting for a state snapshot.</span></div>
             <div id="qaSharedStateGroups" class="qa-shared-state-groups"><div class="qa-inspector-empty">No shared state yet.</div></div>
