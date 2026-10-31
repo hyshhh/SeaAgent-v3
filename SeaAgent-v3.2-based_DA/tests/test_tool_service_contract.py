@@ -45,6 +45,32 @@ def test_direct_recognition_returns_scored_candidates_not_all_tracks():
     assert result["matches"][0]["keyframeId"] == "kf-7"
 
 
+def test_uncertain_description_candidates_request_one_batched_vlm_round():
+    service = ToolService.__new__(ToolService)
+    service._validate_time_range = lambda _value: (None, "")
+    service._scan_tracks = lambda _scope: ([_track("t-1")], True)
+    service._load_search_frames = lambda _tracks: (
+        {"t-1": [{"keyframeId": "kf-1"}]},
+        [],
+        {"t-1": "kf-1"},
+    )
+    service._track_text_scores = lambda *_args: {
+        "t-1": {
+            "score": 0.69,
+            "scoreBand": "uncertain",
+            "matchedKeyframeIds": ["kf-1"],
+        }
+    }
+    service._track_image_scores = lambda *_args: {}
+    service._band = lambda *_args: "uncertain"
+
+    result = service._recognize_tracks(description="yellow vessel")
+
+    assert result["nextStep"] == "verify_vessel_images"
+    assert "同一回合批量提交" in result["recommendation"]
+    assert result["matches"][0]["matchedKeyframeId"] == "kf-1"
+
+
 def test_hull_number_in_keyframe_counts_as_a_hit():
     frame = {
         "keyframeId": "kf-0857",

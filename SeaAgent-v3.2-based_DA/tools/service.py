@@ -459,6 +459,10 @@ class ToolService:
             for item in selected
         ):
             result["nextStep"] = "verify_vessel_images"
+            result["recommendation"] = (
+                "将 matches 中全部带 matchedKeyframeId 的 uncertain 候选，"
+                "在同一回合批量提交 verify_vessel_images 调用。"
+            )
         return result
 
     # 2.9 轨迹识别工具的入口

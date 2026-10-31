@@ -8,7 +8,7 @@ tools:
       返回 status、少量候选及 coverageComplete；候选含 scoreBand、分数、时间和证据 ID，不返回原始轨迹。
       灰区最多返回前 5 条供 VLM 核验，其余灰区候选按非灰区处理。
       图片路径不可用或图片编码失败时会返回工具错误，不能将工具错误当作未匹配。
-      舷号/别名未确认时返回 nextStep=match_registry_tracks 和 recommendation；直查 mismatch 不代表目标不存在，应用相同舷号、时间范围辅助核验。描述或图片检索有可核验的不确定候选时返回 nextStep=verify_vessel_images。
+      舷号/别名未确认时返回 nextStep=match_registry_tracks 和 recommendation；直查 mismatch 不代表目标不存在，应用相同舷号、时间范围辅助核验。描述或图片检索有可核验的不确定候选时返回 nextStep=verify_vessel_images；收到该提示后，应在同一回合批量提交全部候选的 VLM 调用。
       候选提供 matchedKeyframeId，供 VLM 核验实际命中的关键帧；覆盖不完整时不得把无候选说成未出现。
     arguments:
       hull_number: {type: string, required: false, description: 可选舷号或目标别名；纯外观描述请用 description。}
@@ -34,7 +34,7 @@ tools:
       只核验一个已召回的轨迹候选或一对待去重轨迹，不搜索轨迹。参考证据四选一：用户图片 reference_image、
       用户描述 reference_description、先验库图片 reference_registry_reference_id、轨迹关键帧 reference_keyframe_id；
       候选证据二选一：candidate_image 或候选关键帧 candidate_keyframe_id。
-      识别、先验库统计和去重候选均逐条调用。返回 pairId、trackId、decision（match、mismatch 或 uncertain）及最多三条依据；
+      每次调用只核验一对；同一批候选必须在同一次模型输出中批量提交，不要等前一条返回后再发下一条。返回 pairId、trackId、decision（match、mismatch 或 uncertain）及最多三条依据；
       证据不足或只有颜色相似时返回 uncertain。
       若模型 JSON 格式异常但 decision 唯一明确，会标记 formatRecovered=true 且不返回依据；歧义结果仍报错。
     arguments:
