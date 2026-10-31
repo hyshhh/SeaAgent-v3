@@ -64,7 +64,7 @@ tools:
   - name: match_entities
     label: 实体先验库匹配统计
     description: >-
-      “在库船数量”和“不在库船数量”共用的统计入口。不去重；逐轨迹与先验库做 embedding 检索，每个“轨迹—库实体”只取最高单帧余弦相似度，不做多帧平均，且不在工具内部调用 VLM。
+      仅用于用户明确询问“在库船数量/不在库船数量”的统计入口；不得用于舷号、描述或图片识别题。不去重；逐轨迹与先验库做 embedding 检索，每个“轨迹—库实体”只取最高单帧余弦相似度，不做多帧平均，且不在工具内部调用 VLM。
       score ≥ image_match 直接计为在库；score ≤ image_exclude 直接计为不在库；仅灰区返回待核验候选。
       返回 trackCount、embeddingConfirmedCount、outsideRegistryCount、grayCandidateCount、unresolvedTrackCount、embeddingCoverageComplete、
       coverageReasons、appliedTimeRange，以及最多 12 个 verificationCandidates；其余灰区轨迹直接计入不在库。

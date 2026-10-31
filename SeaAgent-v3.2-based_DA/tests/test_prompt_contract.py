@@ -138,7 +138,8 @@ def test_statistics_prompts_keep_embedding_and_vlm_semantics_consistent():
     reflector = agents["reflector"]["system_prompt"]
     assert "总数 = trackCount" in reflector
     assert "不在库船 = 总数 - 在库船" in reflector
-    assert "无论用户问在库还是不在库" in reflector
+    assert "仅当问题是纯“在库船数量/不在库船数量”统计时" in reflector
+    assert "图片、描述、舷号识别题只说明目标是否出现" in reflector
 def test_planner_and_question_presets_cover_the_six_request_types():
     role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
     planner = next(item for item in role_config["agents"] if item["name"] == "planner")
@@ -210,9 +211,17 @@ def test_time_scope_is_optional_and_defaults_to_all_stored_tracks():
 def test_registered_and_unregistered_questions_share_the_same_result_contract():
     finalize = (ROOT / "skills/answer/finalize/SKILL.md").read_text(encoding="utf-8")
     planning = (ROOT / "skills/planning/acceptance/SKILL.md").read_text(encoding="utf-8")
+    statistics = (ROOT / "skills/statistics/SKILL.md").read_text(encoding="utf-8")
+    role_config = yaml.safe_load((ROOT / "config/subagents.yaml").read_text(encoding="utf-8"))
+    agents = {item["name"]: item for item in role_config["agents"]}
 
     assert "总数：N" in finalize
     assert "在库船：M" in finalize
     assert "不在库船：K" in finalize
     assert "Both question phrasings must produce the same three values" in finalize
-    assert "registered and unregistered counts both use the same `match_entities` pipeline" in planning
+    assert "registered and unregistered quantity questions both use the same `match_entities` pipeline" in planning
+    assert "Never append" in finalize
+    assert "Recognition, description, image, hull-number and total-only questions" in statistics
+    assert "图片查询、描述查询、舷号查询、普通总数问题" in agents["planner"]["system_prompt"]
+    assert "识别任务只回答目标是否出现" in agents["executor"]["system_prompt"]
+    assert "图片、描述、舷号识别题只说明目标是否出现" in agents["reflector"]["system_prompt"]

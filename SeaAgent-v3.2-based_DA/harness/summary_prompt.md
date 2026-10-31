@@ -4,7 +4,7 @@
 - 保留 matchedKeyframeId、matchedRegistryReferenceId 及未完成的识别或统计 nextStep/recommendation；不得用展示用 keyframeId 替代匹配关键帧 ID。
 - 保留去重候选 pairId、referenceKeyframeId、candidateKeyframeId，以及已确认和已解决 pairId；去重收尾必须使用这些 ID。
 - 分开记录直接识别与先验库辅助匹配的 status、候选 trackId 和分数；辅助匹配 confirmed 不得被直接识别 mismatch 覆盖。
-- 保留用户的范围、在库/未在库、去重及计数口径；先验库统计必须保留“总数、在库船、不在库船”三项及 `总数 = trackCount`、`不在库船 = 总数 - 在库船` 的计算关系。
+- 保留用户的范围、在库/未在库、去重及计数口径。仅当用户明确要求“在库船数量/不在库船数量”时，先验库统计才保留“总数、在库船、不在库船”三项及 `总数 = trackCount`、`不在库船 = 总数 - 在库船` 的计算关系；识别题和普通总数题不得生成或保留这三项。
 - 记录已证实结论、证据 ID、未解决缺口和原定下一步。
 - 工具原始结果与重复过程可压缩；不得补造信息。
 
