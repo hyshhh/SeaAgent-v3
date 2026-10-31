@@ -194,97 +194,37 @@ def run_pipeline(
     client: httpx.Client,
     api_url: str,
     dataset_dir: Path,
-    *,
-    attempts: int = 2,
-    existing_rows: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, int]:
     output.parent.mkdir(parents=True, exist_ok=True)
     completed = 0
     failed = 0
-    reused = 0
-    existing_rows = existing_rows or {}
     with output.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=TABLE_FIELDS)
         writer.writeheader()
         handle.flush()
         for index, question in enumerate(questions, 1):
-            question_id = str(question.get("id") or "")
-            previous = existing_rows.get(question_id)
-            if previous and previous.get("answer", "").strip():
-                row = {
-                    "ID": question_id,
-                    "answer": previous["answer"],
-                    "question": str(question.get("question") or ""),
-                }
-                writer.writerow(row)
-                handle.flush()
-                completed += 1
-                reused += 1
-                print(
-                    f"[{index}/{len(questions)}] {question_id}: reused",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                continue
-
-            runs: list[AgentRun] = []
-            for attempt in range(1, attempts + 1):
-                run = run_agent_question(
-                    client,
-                    api_url,
-                    question,
-                    dataset_dir,
-                    _run_session_id(question_id),
-                )
-                runs.append(run)
-                row = build_qa_row(question, run)
-                if row["answer"]:
-                    break
-                if attempt < attempts:
-                    print(
-                        f"[{index}/{len(questions)}] {question_id}: "
-                        f"attempt {attempt} had no answer; retrying",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-            writer.writerow(row)
+            run = run_agent_question(
+                client,
+                api_url,
+                question,
+                dataset_dir,
+                _run_session_id(question.get("id")),
+            )
+            writer.writerow(build_qa_row(question, run))
             handle.flush()
             state = str(run.result.get("state") or ("error" if run.error else "unknown"))
-            if row["answer"]:
+            if state == "completed" and not run.error:
                 completed += 1
             else:
                 failed += 1
             message = (
                 f"[{index}/{len(questions)}] {question.get('id')}: "
-                f"{state} ({run.elapsed_seconds:.1f}s, attempts={len(runs)})"
+                f"{state} ({run.elapsed_seconds:.1f}s)"
             )
             if run.error:
                 message += f" error={run.error}"
             print(message, file=sys.stderr, flush=True)
-    return {
-        "questions": len(questions),
-        "completed": completed,
-        "failed": failed,
-        "reused": reused,
-    }
-
-
-def read_existing_qa(path: Path) -> dict[str, dict[str, str]]:
-    if not path.is_file():
-        return {}
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if tuple(reader.fieldnames or ()) != TABLE_FIELDS:
-            raise ValueError(f"existing QA file has an incompatible header: {path}")
-        return {
-            str(row["ID"]): {
-                "ID": str(row["ID"]),
-                "answer": str(row.get("answer") or ""),
-                "question": str(row.get("question") or ""),
-            }
-            for row in reader
-            if row.get("ID")
-        }
+    return {"questions": len(questions), "completed": completed, "failed": failed}
 
 
 def _resolve_dataset_path(value: str | None) -> Path:
@@ -318,9 +258,7 @@ def main() -> int:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="QAdataset config path")
     parser.add_argument("--api-url", help="SeaAgent base URL")
     parser.add_argument("--timeout-seconds", type=float, help="Per-question API timeout")
-    parser.add_argument("--attempts", type=int, help="Attempts per unanswered question")
     parser.add_argument("--limit", type=int, help="Run only the first N questions")
-    parser.add_argument("--resume", action="store_true", help="Retry only empty answers")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing output file")
     args = parser.parse_args()
 
@@ -334,28 +272,21 @@ def main() -> int:
     if not output_dir.is_absolute():
         output_dir = QADATASET_ROOT / output_dir
     output_path = _resolve_output_path(args.output, output_dir)
-    if output_path.exists() and not args.overwrite and not args.resume:
-        parser.error(
-            f"output already exists; pass --resume to fill gaps or --overwrite to replace it: "
-            f"{output_path}"
-        )
+    if output_path.exists() and not args.overwrite:
+        parser.error(f"output already exists; pass --overwrite to replace it: {output_path}")
     api_url = str(args.api_url or settings.get("api_url") or "http://127.0.0.1:8000")
     timeout_seconds = float(
         args.timeout_seconds or settings.get("timeout_seconds") or 900
     )
-    attempts = int(args.attempts or settings.get("attempts") or 2)
     if timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive")
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")
-    if attempts <= 0:
-        parser.error("--attempts must be positive")
 
     questions = read_jsonl(dataset_path)
     if args.limit:
         questions = questions[:args.limit]
     dataset_dir = dataset_path.parent.resolve()
-    existing_rows = read_existing_qa(output_path) if args.resume else {}
 
     timeout = httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 30.0))
     try:
@@ -370,15 +301,7 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 2
-            summary = run_pipeline(
-                questions,
-                output_path,
-                client,
-                api_url,
-                dataset_dir,
-                attempts=attempts,
-                existing_rows=existing_rows,
-            )
+            summary = run_pipeline(questions, output_path, client, api_url, dataset_dir)
     except KeyboardInterrupt:
         print(f"\nInterrupted; partial QA file kept at {output_path}", file=sys.stderr)
         return 130
@@ -386,8 +309,7 @@ def main() -> int:
     print(f"qa_file={output_path}")
     print(
         f"questions={summary['questions']} completed={summary['completed']} "
-        f"failed={summary['failed']} reused={summary['reused']} "
-        f"data_rows={summary['questions']}"
+        f"failed={summary['failed']} data_rows={summary['questions']}"
     )
     return 0
 

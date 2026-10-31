@@ -38,7 +38,7 @@ SeaQA 包含六类问题：
 4. 生成 CSV 问答文件，表头严格为 `ID,answer,question`，每题一行；
 5. 人工按 `ID` 将 `answer` 与原始数据集中的真值进行比较。
 
-每题默认最多调用两次以避免模型偶发的收尾失败；续跑时已有非空答案会直接复用。评测器不再读取 `predictions.jsonl`，也不再自动计算 EM、mAP 或计数准确率。
+评测器不再读取 `predictions.jsonl`，也不再自动计算 EM、mAP 或计数准确率。
 
 ## 构建与评测边界
 

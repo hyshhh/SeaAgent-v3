@@ -31,5 +31,4 @@ verification:
 evaluation:
   api_url: http://127.0.0.1:8000
   timeout_seconds: 900
-  attempts: 2
   output_dir: results

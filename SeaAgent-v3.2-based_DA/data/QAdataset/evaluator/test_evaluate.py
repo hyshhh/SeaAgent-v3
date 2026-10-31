@@ -14,7 +14,6 @@ from evaluate import (
     build_qa_row,
     image_data_url,
     query_agent,
-    read_existing_qa,
     run_pipeline,
 )
 
@@ -158,90 +157,7 @@ class DynamicEvaluationTests(unittest.TestCase):
         self.assertEqual(fieldnames, ["ID", "answer", "question"])
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["answer"], "出现过")
-        self.assertEqual(
-            summary,
-            {"questions": 1, "completed": 1, "failed": 0, "reused": 0},
-        )
-
-    def test_pipeline_retries_a_failed_question(self) -> None:
-        calls = 0
-
-        def handler(_request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                event = {
-                    "type": "error",
-                    "message": "temporary stall",
-                    "result": {"success": False, "state": "stalled"},
-                }
-            else:
-                event = {
-                    "type": "complete",
-                    "result": {
-                        "success": True,
-                        "state": "completed",
-                        "answerText": "重试成功",
-                    },
-                }
-            return httpx.Response(200, text=json.dumps(event) + "\n")
-
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "results.csv"
-            with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-                summary = run_pipeline(
-                    [question()],
-                    output,
-                    client,
-                    "http://agent.test",
-                    Path(directory),
-                    attempts=2,
-                )
-            with output.open(encoding="utf-8-sig", newline="") as handle:
-                rows = list(csv.DictReader(handle))
-        self.assertEqual(calls, 2)
-        self.assertEqual(rows[0]["answer"], "重试成功")
-        self.assertEqual(summary["failed"], 0)
-
-    def test_resume_reuses_answers_and_retries_only_empty_rows(self) -> None:
-        def handler(_request: httpx.Request) -> httpx.Response:
-            event = {
-                "type": "complete",
-                "result": {
-                    "success": True,
-                    "state": "completed",
-                    "answerText": "补跑答案",
-                },
-            }
-            return httpx.Response(200, text=json.dumps(event) + "\n")
-
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "results.csv"
-            output.write_text(
-                "ID,answer,question\n"
-                "SeaQA-0001,已有答案,旧问题\n"
-                "SeaQA-0002,,旧问题\n",
-                encoding="utf-8-sig",
-            )
-            existing = read_existing_qa(output)
-            first = question()
-            second = {**question(), "id": "SeaQA-0002", "question": "第二个问题"}
-            with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-                summary = run_pipeline(
-                    [first, second],
-                    output,
-                    client,
-                    "http://agent.test",
-                    Path(directory),
-                    attempts=1,
-                    existing_rows=existing,
-                )
-            with output.open(encoding="utf-8-sig", newline="") as handle:
-                rows = list(csv.DictReader(handle))
-        self.assertEqual(rows[0]["answer"], "已有答案")
-        self.assertEqual(rows[1]["answer"], "补跑答案")
-        self.assertEqual(summary["reused"], 1)
-        self.assertEqual(summary["completed"], 2)
+        self.assertEqual(summary, {"questions": 1, "completed": 1, "failed": 0})
 
 
 if __name__ == "__main__":
