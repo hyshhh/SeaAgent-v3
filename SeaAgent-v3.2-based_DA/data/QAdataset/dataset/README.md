@@ -1,12 +1,49 @@
-# Generated Dataset
+# 服务器端真实数据集
 
-This directory is populated only on the server.
+本目录只在服务器端填充。以下生成内容被 `.gitignore` 排除，不应提交到 Git：
 
-Expected output:
+- `questions.jsonl`：每行一条完整问答记录。
+- `images/`：图片查询使用的本地副本。
+- `features/`：实体分组和 VLM 核验缓存。
+- `manifest.json`：数量、类别分布、源数据快照、生成时间和校验和。
 
-- `questions.jsonl`: one complete QA record per line.
-- `images/`: image-query copies.
-- `features/`: VLM and entity-group verification caches.
-- `manifest.json`: counts, distributions, source snapshot, and checksums.
+## 当前数据规模
 
-See `../README.md` for the record and prediction schemas.
+- 问题总数：100
+- 舷号查询：23
+- 描述查询：23
+- 图片查询：23
+- 总数统计：11
+- 在库统计：10
+- 不在库统计：10
+- 输入图片：23 张
+- 可判定问题：89
+- 不可判定问题：11
+
+数据生成时的服务器端来源规模：
+
+- 轨迹：214 条
+- 关键帧：571 张
+- 先验库实体：10 个
+- 先验库参考图：15 张
+- 高阈值精确实体：180 个
+- 低阈值模糊实体：157 个
+
+## 问答记录
+
+每条 `questions.jsonl` 记录包含：
+
+- `id`：稳定的问题标识；
+- `category`：六类 SeaQA 问题之一；
+- `question`：问题文本；
+- `time_range`：问题对应的查询时间范围；
+- `inputs`：舷号、描述、图片路径等任务输入；
+- `ground_truth.entities`：真值实体集合；
+- `ground_truth.unresolved_entities`：无法可靠确定的关系；
+- `ground_truth.answerable`：真值是否可判定；
+- 统计问题额外包含整数 `ground_truth.count`；
+- `provenance`：轨迹、关键帧、图片或先验库等证据来源。
+
+图片查询还会记录复制后的图片路径、服务器原路径和 SHA-256 校验值。先验库相关记录会保留使用的库实体和参考图信息。
+
+数据集的总量、类别分布、源文件哈希和问题文件哈希可在 `manifest.json` 中核对。
