@@ -1,4 +1,4 @@
-"""Binary decision metrics used by ETA evaluation."""
+"""Binary decision metrics used by TEA evaluation."""
 
 from __future__ import annotations
 
@@ -11,16 +11,12 @@ def _safe_div(numerator: float, denominator: float) -> float:
     return float(numerator / denominator) if denominator else 0.0
 
 
-def binary_metrics(
-    probabilities: np.ndarray,
-    labels: np.ndarray,
-    threshold: float = 0.5,
-) -> dict[str, Any]:
+def binary_metrics(probabilities: np.ndarray, labels: np.ndarray) -> dict[str, Any]:
     probabilities = np.asarray(probabilities, dtype=np.float64).reshape(-1)
     labels = np.asarray(labels, dtype=np.int64).reshape(-1)
     if probabilities.shape != labels.shape:
         raise ValueError("probabilities and labels must have identical shapes")
-    predictions = (probabilities >= float(threshold)).astype(np.int64)
+    predictions = (probabilities >= 0.5).astype(np.int64)
     tp = int(np.sum((predictions == 1) & (labels == 1)))
     tn = int(np.sum((predictions == 0) & (labels == 0)))
     fp = int(np.sum((predictions == 1) & (labels == 0)))
@@ -30,7 +26,6 @@ def binary_metrics(
     return {
         "count": int(labels.size),
         "accuracy": _safe_div(tp + tn, labels.size),
-        "threshold": float(threshold),
         "precision": precision,
         "recall": recall,
         "specificity": _safe_div(tn, tn + fp),
@@ -81,10 +76,9 @@ def stop_metrics(
     admission_labels: np.ndarray,
     completeness_labels: np.ndarray,
     threshold: float,
-    admission_threshold: float = 0.5,
 ) -> dict[str, Any]:
     predicted_stop = (
-        (np.asarray(admission_probabilities) >= float(admission_threshold))
+        (np.asarray(admission_probabilities) >= 0.5)
         & (np.asarray(completeness_probabilities) >= float(threshold))
     )
     target_stop = (
@@ -133,17 +127,11 @@ def summarize_predictions(
     calibration_bins: int,
     bootstrap_iterations: int = 1000,
     seed: int = 42,
-    admission_threshold: float = 0.5,
-    completeness_threshold: float = 0.5,
 ) -> dict[str, Any]:
     admission_probabilities = np.asarray(admission_probabilities).reshape(-1)
     admission_labels = np.asarray(admission_labels).reshape(-1)
     result: dict[str, Any] = {
-        "ah": binary_metrics(
-            admission_probabilities,
-            admission_labels,
-            admission_threshold,
-        ),
+        "ah": binary_metrics(admission_probabilities, admission_labels),
         "ah_calibration": calibration_metrics(
             admission_probabilities,
             admission_labels,
@@ -151,8 +139,7 @@ def summarize_predictions(
         ),
     }
     result["ah"]["bootstrap_95_accuracy"] = bootstrap_accuracy_interval(
-        (admission_probabilities >= admission_threshold).astype(np.int64)
-        == admission_labels,
+        (admission_probabilities >= 0.5).astype(np.int64) == admission_labels,
         bootstrap_iterations,
         seed,
     )
@@ -163,15 +150,9 @@ def summarize_predictions(
         return result
     completeness_probabilities = np.asarray(completeness_probabilities).reshape(-1)
     completeness_labels = np.asarray(completeness_labels).reshape(-1)
-    admission_pred = (admission_probabilities >= admission_threshold).astype(np.int64)
-    completeness_pred = (
-        completeness_probabilities >= completeness_threshold
-    ).astype(np.int64)
-    result["ch"] = binary_metrics(
-        completeness_probabilities,
-        completeness_labels,
-        completeness_threshold,
-    )
+    admission_pred = (admission_probabilities >= 0.5).astype(np.int64)
+    completeness_pred = (completeness_probabilities >= 0.5).astype(np.int64)
+    result["ch"] = binary_metrics(completeness_probabilities, completeness_labels)
     result["ch_calibration"] = calibration_metrics(
         completeness_probabilities,
         completeness_labels,
@@ -190,8 +171,7 @@ def summarize_predictions(
         seed,
     )
     result["ch"]["bootstrap_95_accuracy"] = bootstrap_accuracy_interval(
-        (completeness_probabilities >= completeness_threshold).astype(np.int64)
-        == completeness_labels,
+        (completeness_probabilities >= 0.5).astype(np.int64) == completeness_labels,
         bootstrap_iterations,
         seed,
     )
@@ -201,6 +181,5 @@ def summarize_predictions(
         admission_labels,
         completeness_labels,
         stop_threshold,
-        admission_threshold,
     )
     return result

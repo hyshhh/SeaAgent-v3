@@ -1,154 +1,150 @@
-# ETA 训练工程
+# ETA / DPD research module
 
-本目录是 SeaAgent 的隔离式 ETA 训练工程。原始轨迹、关键帧和向量索引
-来自 `SeaAgent-v3.2-based_DA`；所有新增代码与运行产物只写入 `ETA/`。
+This directory is an isolated research package for the ETA component described
+in `SeaAgent_paper_10.10/main.tex`. It reads the SeaAgent trajectory memory and
+Qwen vector index without changing application code outside `ETA/`.
 
-## 严格输入输出约定
+The implementation separates four concerns:
 
-模型只接收视觉 embedding：
+1. `dataset/` builds source-grouped TEA samples and auditable proxy labels.
+2. `training/` trains the paper-aligned model and structural ablations.
+3. `evaluation/` measures accuracy, calibration, Stop behavior, and latency.
+4. `research/` runs the complete ablation and capacity study and writes reports.
 
-```text
-candidate        [2048]       当前帧 embedding
-history          [3, 2048]    当前 KEP 的三帧 embedding
-history_mask     [3]          三个历史槽位均有效
-        ↓
-ETA
-        ↓
-AH 分类结果
-CH 分类结果
+## Research boundary
+
+The current database contains 214 tracks, 571 cached keyframes, and normalized
+2048-dimensional pooled embeddings. It does not contain the paper's human AH/CH
+annotations or raw visual tokens. The project therefore reports:
+
+- proxy-label model behavior, never "human TEA accuracy";
+- a pooled-vector token approximation, clearly separated from the paper design;
+- actual counts and metrics from run artifacts, never placeholder paper values.
+
+See [data_card.md](docs/data_card.md),
+[labeling_protocol.md](docs/labeling_protocol.md), and
+[paper_alignment.md](docs/paper_alignment.md) before interpreting results.
+
+The completed proxy-label experiment is summarized in
+[experimental_results.md](docs/experimental_results.md). The full model reached
+AH `0.6805`, CH `0.7574`, joint accuracy `0.5325`, and batch-1 p50 latency
+`0.435 ms`; these values describe the current data subset and are not the
+paper's reported benchmark.
+
+## Model
+
+```mermaid
+flowchart LR
+    C[Candidate embedding<br/>2048] --> CP[Projection]
+    CP --> Q[Single query<br/>256]
+    H[Chronological KEP<br/>up to M=3] --> HT[8 token groups per frame]
+    HT --> CA[2 stages × 2 shared<br/>Post-LN cross-attention blocks]
+    Q --> CA
+    CA --> Z[History-conditioned feature]
+    Z --> AH[Admission head]
+    Z --> CH[Completeness head]
+    AH --> P[CEP/KEP update]
+    CH --> P
+    P --> S[Stop only if inserted<br/>and p_CH >= threshold]
 ```
 
-模型不接收质量分、时间、轨迹编号、来源路径、舷号或文本描述。模型只有
-AH 和 CH 两个输出；Stop 是外层运行时的处理策略，不是第三个模型输出。
+The KEP update is capacity-limited. A full pool replaces its lowest-priority
+frame only when AH admits a higher-priority candidate. The model emits Stop only
+when that insertion actually occurs and CH exceeds the configured threshold.
 
-## 数据规则
+## Setup
 
-1. 每条轨迹必须已有恰好三帧 KEP，ETA 才会开始。
-2. 候选帧必须晚于 KEP 中最新的关键帧。
-3. 候选轨迹框按一秒间隔采样，并从源视频解码、评分、调用本地 Qwen
-   embedding 服务生成 2048 维向量。
-4. 每个样本的 `history` 始终包含三帧，`history_mask` 全为真。
-5. 模型按时间顺序处理候选。某个候选实际写入 KEP 后，如果更新后的 KEP
-   达到证据完备条件，则该样本标记 `ch_label=1`，并立即停止该轨迹，
-   后续观测不再构建样本。
-6. 从未达到完备条件的轨迹全部保持 `ch_label=0`。
-
-当前清洗结果：
-
-| 数据切分 | 样本数 | 轨迹数 | 来源视频数 |
-|---|---:|---:|---:|
-| 训练集 | 697 | 116 | 31 |
-| 验证集 | 86 | 16 | 7 |
-| 测试集 | 166 | 31 | 7 |
-
-163 条可用轨迹中，56 条达到证据完备条件，107 条未达到条件。
-
-## 数据集格式
-
-每个 split 的 NPZ 文件只包含五个数组：
-
-```text
-candidate
-history
-history_mask
-ah_label
-ch_label
-```
-
-NPZ 中不保存 `sample_id`、`track_id`、`source_id`、`frame_id`、时间戳或
-其他逐样本元数据。
-
-## 目录结构
-
-```text
-ETA/
-  configs/
-    default.yaml
-    smoke.yaml
-    experiments/
-      ablations.yaml
-      tuning.yaml
-  src/eta/
-    dataset/       轨迹候选提取、embedding 与五数组数据集构建
-    training/      双头训练、类别权重、早停和 checkpoint 选择
-    evaluation/    指标、阈值选择、报告与复现比较
-    research/      消融和调参实验编排
-    model.py       ETA 交叉注意力编码器及 AH/CH 双头
-    pool.py        KEP 更新与 Stop 策略
-  tests/
-  docs/
-    data_card.md
-    labeling_protocol.md
-  reports/
-  data/        运行时生成，Git 忽略
-  artifacts/   运行时生成，Git 忽略
-```
-
-## 构建数据
+The training environment requires Python 3.10+, PyTorch, NumPy, PyYAML,
+Matplotlib, and FAISS. The server environment is already configured:
 
 ```bash
 cd SeaAgent-v3.2-based_DA/ETA
 export PYTHONPATH="$PWD/src"
-export ETA_EMBEDDING_API_KEY=abc123
 python -m eta.cli build-data --config configs/default.yaml
 ```
 
-候选 embedding 会缓存在 `artifacts/embedding_cache/`。缓存键包含源视频
-路径、文件大小、修改时间、候选时间戳和边界框。
-
-## 训练与评测
+Optional editable installation:
 
 ```bash
-python -m eta.cli train --config configs/default.yaml --run-name eta
-python -m eta.cli evaluate --config configs/default.yaml \
-  --run-dir artifacts/eta-...
-python -m eta.cli publish --config configs/default.yaml \
-  --run-dir artifacts/eta-...
+pip install -e . --no-deps
 ```
 
-AH 和 CH 的决策阈值只在验证集选择，测试集用于固定评估。模型按验证集
-双头平均准确率选择 checkpoint。
+## Commands
 
-## 消融与调参
+Build TEA splits:
+
+```bash
+python -m eta.cli build-data --config configs/default.yaml
+```
+
+Train and evaluate one model:
+
+```bash
+python -m eta.cli train --config configs/default.yaml --run-name eta-main
+python -m eta.cli evaluate --config configs/default.yaml \
+  --run-dir artifacts/eta-main-...
+```
+
+Run both in one command:
+
+```bash
+python -m eta.cli run-all --config configs/smoke.yaml --run-name smoke
+```
+
+Run structural ablations and capacities:
 
 ```bash
 python -m eta.cli research --config configs/default.yaml
 ```
 
-实验包含：
+Compare two independent evaluations without treating latency as reproducible:
 
-- 6 个结构消融组；
-- 6 个学习率、模型规模、dropout、权重衰减和类别权重调参组；
-- 统一使用同一份五数组数据和同一 source-group 切分；
-- 最终按验证集双头平均准确率选择最优模型，同分时选择更低的 batch-1
-  P50 时延；
-- 表格报告测试集 AH/CH 准确率和单次 P50 推理时延；召回率与 F1 保存在
-  实验 JSON 中。
-
-结果表固定四列：
-
-```text
-实验设置 | 消融组/调参组 | 双头精度 | 推理速度（单次ms）
+```bash
+python -m eta.cli compare --run-a artifacts/run-a --run-b artifacts/run-b \
+  --tolerance 0.05
 ```
 
-消融组定义在表尾注释。
+Use `--set key=value` for a reproducible override:
 
-发布结果包含：
+```bash
+python -m eta.cli run-all --config configs/smoke.yaml \
+  --set train.epochs=1 --run-name one-epoch
+```
 
-- `reports/experiments.md` 和 `reports/experiments.csv`：全部消融与调参结果；
-- `reports/best_run.md`、`reports/best_run.csv` 和 `reports/best_run.json`：
-  最终模型的测试精度、验证精度与推理时延；
-- `reports/dataset_summary.json`：最终数据切分摘要；
-- `reports/latest.json`：完整机器可读实验记录；
-- `reports/reproducibility.json`：相同配置独立复现后的指标比较。
+## Outputs
 
-最终权重统一保存在 `artifacts/best_model/best.pt`。其他实验权重和训练
-缓存不属于发布结果。
+```text
+ETA/
+  configs/       default, smoke, structural and capacity configs
+  src/eta/       installable experiment package
+  tests/         unit and model-contract tests
+  docs/          protocol, cards, alignment and integrity audit
+  reports/       generated summaries and figures
+  data/processed ignored TEA arrays and manifests
+  artifacts/     ignored run directories and checkpoints
+```
 
-## 验证
+Each run contains `config.resolved.yaml`, `run.json`, `history.csv`, `best.pt`,
+and `evaluation/`. The evaluation directory includes `metrics.json`,
+`predictions.csv`, confusion matrices, calibration curves, and a Markdown
+report.
+
+## Verification
+
+Run local tests:
 
 ```bash
 python -m pytest -q
 python -m ruff check .
 python -m compileall -q src tests
 ```
+
+Run GPU tests on the server:
+
+```bash
+PYTHONPATH=src python -m pytest -q
+```
+
+Model and document evidence is stored under `reports/`. Timing is hardware
+dependent; accuracy intervals are finite-source-split uncertainty intervals,
+not evidence that one architecture is universally superior.

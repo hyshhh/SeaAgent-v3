@@ -1,36 +1,13 @@
-defaults:
-  train:
-    epochs: 20
-    early_stopping_patience: 7
-    checkpoint_metric: mean_head_accuracy
-
 variants:
-  - id: A1
-    name: MLP-Cur
+  - name: mlp_cur
     variant: mlp_cur
-  - id: A2
-    name: MLP-Hist
+  - name: mlp_hist
     variant: mlp_hist
-  - id: A3
-    name: SA-DH
+  - name: sa_dh
     variant: sa_dh
-  - id: A4
-    name: CA-only
+  - name: ca_only
     variant: ca_only
-  - id: A5
-    name: CA-SH
+  - name: ca_sh
     variant: ca_sh
-    overrides:
-      train:
-        checkpoint_metric: ah_accuracy
-  - id: A6
-    name: Full-ETA
+  - name: eta
     variant: eta
-
-notes:
-  - "A1 MLP-Cur：仅使用当前候选 embedding。"
-  - "A2 MLP-Hist：当前 embedding 与 3 帧历史均值拼接。"
-  - "A3 SA-DH：当前帧与历史 token 拼接后做自注意力。"
-  - "A4 CA-only：保留交叉注意力，移除残差和 FFN 融合。"
-  - "A5 CA-SH：保留完整交叉注意力，仅保留 AH 单头，因此 CH 不适用。"
-  - "A6 Full-ETA：完整串行交叉注意力与 AH/CH 双头。"
