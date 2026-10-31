@@ -9,8 +9,9 @@ from pathlib import Path
 import httpx
 from evaluate import (
     AgentRun,
+    agent_answer,
     build_agent_payload,
-    build_result_rows,
+    build_qa_row,
     image_data_url,
     query_agent,
     run_pipeline,
@@ -30,44 +31,32 @@ def question() -> dict:
         "ground_truth": {
             "answerable": True,
             "answer": "appears",
-            "entities": [{
-                "entity_id": "entity-000002",
-                "track_ids": ["2"],
-                "evidence_keyframe_ids": ["keyframe-1"],
-            }],
-            "unresolved_entities": [],
-            "method": "fixture",
+            "entities": [{"entity_id": "entity-000002", "track_ids": ["2"]}],
         },
         "provenance": {"source_track_id": "2"},
     }
 
 
 class DynamicEvaluationTests(unittest.TestCase):
-    def test_result_table_has_prediction_then_truth(self) -> None:
+    def test_qa_row_contains_only_requested_columns(self) -> None:
         run = AgentRun(
-            result={
-                "success": True,
-                "state": "completed",
-                "answerText": "出现过",
-                "evidence": {
-                    "trackIds": ["2"],
-                    "keyframeIds": ["keyframe-1"],
-                    "statistics": {"candidateCount": 1},
-                },
-                "sharedState": {"assessment": {"confidence": "high"}},
-            },
+            result={"answer": "出现过", "state": "completed"},
             terminal_event="complete",
             error="",
             elapsed_seconds=1.25,
         )
-        prediction, truth = build_result_rows(question(), run)
-        self.assertEqual(prediction["record_type"], "prediction")
-        self.assertEqual(prediction["answer"], "出现过")
-        self.assertEqual(prediction["track_ids"], '["2"]')
-        self.assertEqual(truth["record_type"], "truth")
-        self.assertEqual(truth["answer"], "appears")
-        self.assertEqual(truth["entity_ids"], '["entity-000002"]')
-        self.assertEqual(truth["track_ids"], '["2"]')
+        self.assertEqual(
+            build_qa_row(question(), run),
+            {
+                "ID": "SeaQA-0001",
+                "answer": "出现过",
+                "question": "舷号 003 的船是否出现过？",
+            },
+        )
+
+    def test_answer_uses_projected_answer_text_when_needed(self) -> None:
+        self.assertEqual(agent_answer({"answerText": "出现过"}), "出现过")
+        self.assertEqual(agent_answer({"answer": "answer wins", "answerText": "fallback"}), "answer wins")
 
     def test_agent_payload_omits_truth_and_category(self) -> None:
         payload = build_agent_payload(question(), Path("."), "qa-eval-test")
@@ -90,7 +79,7 @@ class DynamicEvaluationTests(unittest.TestCase):
     def test_stream_parser_returns_terminal_result(self) -> None:
         expected = {
             "type": "complete",
-            "result": {"success": True, "state": "completed", "answerText": "出现过"},
+            "result": {"success": True, "state": "completed", "answer": "出现过"},
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -107,7 +96,7 @@ class DynamicEvaluationTests(unittest.TestCase):
             )
         self.assertEqual(event, expected)
 
-    def test_pipeline_writes_prediction_then_truth_rows(self) -> None:
+    def test_pipeline_writes_exact_header_and_one_row_per_question(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content)
             self.assertNotIn("ground_truth", payload)
@@ -117,7 +106,6 @@ class DynamicEvaluationTests(unittest.TestCase):
                     "success": True,
                     "state": "completed",
                     "answerText": "出现过",
-                    "evidence": {"trackIds": ["2"]},
                 },
             }
             return httpx.Response(200, text=json.dumps(event) + "\n")
@@ -133,11 +121,13 @@ class DynamicEvaluationTests(unittest.TestCase):
                     Path(directory),
                 )
             with output.open(encoding="utf-8-sig", newline="") as handle:
-                rows = list(csv.DictReader(handle))
-        self.assertEqual(summary, {"questions": 1, "completed": 1, "failed": 0})
-        self.assertEqual([row["record_type"] for row in rows], ["prediction", "truth"])
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+                fieldnames = reader.fieldnames
+        self.assertEqual(fieldnames, ["ID", "answer", "question"])
+        self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["answer"], "出现过")
-        self.assertEqual(rows[1]["answer"], "appears")
+        self.assertEqual(summary, {"questions": 1, "completed": 1, "failed": 0})
 
 
 if __name__ == "__main__":

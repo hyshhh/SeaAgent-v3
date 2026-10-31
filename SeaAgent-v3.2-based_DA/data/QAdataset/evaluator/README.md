@@ -1,6 +1,12 @@
 # SeaQA 动态评测
 
-评测器逐题调用正在运行的 SeaAgent，并把 Agent 输出与数据集真值写入同一张 CSV 结果表，供人工核对。评测器不再读取预测文件，也不自动计算 EM、mAP 或其他分数。
+评测器逐题调用正在运行的 SeaAgent，并将 Agent 的回答整理成简单 QA 文件：
+
+```text
+ID,answer,question
+```
+
+每题一行，不写入类别、状态、证据、轨迹、真值或其他运行信息。
 
 ## 运行条件
 
@@ -16,7 +22,7 @@
 http://127.0.0.1:8000
 ```
 
-服务地址和单题超时可在 `data/QAdataset/config.yaml` 的 `evaluation` 段配置：
+服务地址和单题超时可在 `data/QAdataset/config.yaml` 中配置：
 
 ```yaml
 evaluation:
@@ -37,7 +43,7 @@ python data/QAdataset/evaluator/evaluate.py \
   --overwrite
 ```
 
-首次试跑一道题：
+只运行第一题：
 
 ```bash
 /home/lab-203/anaconda3/bin/conda run --no-capture-output -n seaagent \
@@ -58,7 +64,7 @@ data/QAdataset/results/SeaQA-100-<时间戳>.csv
 
 ## Agent 输入
 
-评测器逐题读取 `questions.jsonl`，每道题使用独立 `sessionId` 调用：
+每题使用独立 `sessionId` 调用：
 
 ```text
 POST /api/agent/query/stream
@@ -67,72 +73,51 @@ POST /api/agent/query/stream
 发给 Agent 的内容只有：
 
 - `question`：问题正文；
-- `sessionId`：评测运行标识；
+- `sessionId`：本次评测运行标识；
 - 图片题额外发送真实图片的 data URL。
 
-不会发送以下评测元数据：
+不会发送 `category`、`ground_truth` 或 `provenance`。
 
-- `category`
-- `ground_truth`
-- `provenance`
+图片题的 `inputs.image_path` 相对于 `dataset/` 解析。评测器读取实际图片并作为附件发送。
 
-图片题的 `inputs.image_path` 相对于 `dataset/` 解析，例如：
+## 输出格式
 
-```text
-images/query-001.jpg
-```
-
-评测器会读取图片文件并作为附件发送，而不是只把路径写进问题文本。
-
-## 结果表
-
-每个问题连续输出两行：
+CSV 表头固定为：
 
 ```text
-prediction
-truth
+ID,answer,question
 ```
 
-因此 100 道题会生成 200 行数据。两行具有相同的 `id`、`category`、`question` 和 `time_range`，可直接上下对照。
+字段含义：
 
-主要字段：
+- `ID`：与 `questions.jsonl` 对应的稳定问题 ID；
+- `answer`：Agent 返回的真实 answer 字段；
+- `question`：本次提交给 Agent 的问题正文。
 
-- `record_type`：`prediction` 或 `truth`；
-- `success`：Agent 是否成功完成；
-- `status`：Agent 运行状态或真值是否可判定；
-- `answer`：Agent 最终回答或真值答案；
-- `count`：统计题的整数真值；
-- `entity_ids`：真值实体 ID；
-- `track_ids`：Agent 证据轨迹或真值轨迹；
-- `evidence_ids`：Agent 关键帧、片段、先验库证据或真值关键帧；
-- `details`：Agent 运行详情或完整真值来源；
-- `manual_result`：留空，由人工填写 `正确`、`错误`、`部分正确` 或 `无法判定`；
-- `manual_notes`：人工备注；
-- `elapsed_seconds`：Agent 单题耗时；
-- `error`：Agent 调用或运行错误。
+当前 Agent API 将最终回答投影为 `answerText`，因此运行器优先读取 `answer`，没有该字段时读取 `answerText`。其他字段不会写入 QA 文件。
 
-`prediction` 行是 Agent 实际返回内容。`truth` 行是数据库生成的参考真值，包括实体、轨迹、关键帧、来源和不可判定关系。
+Agent 执行失败、等待补充信息或停滞时，`answer` 可能为空。具体状态和错误只写入运行日志，不污染 QA 文件。
 
 ## 人工核对
 
-人工按 `id` 对照相邻的 `prediction` 与 `truth` 两行，重点核对：
+人工使用相同 `ID` 在 `dataset/questions.jsonl` 中查找真值：
 
-1. 最终答案是否与 `truth.answer` 一致；
-2. 统计数字是否与 `truth.count` 一致；
-3. Agent 返回的轨迹与真值轨迹是否对应；
-4. 关键帧和先验库证据是否支持结论；
-5. 真值为不可判定时，Agent 是否明确说明无法确认。
+```text
+ground_truth.answer
+ground_truth.count
+ground_truth.entities
+ground_truth.unresolved_entities
+```
 
-核对结果填写在 `prediction` 行的 `manual_result` 和 `manual_notes`。
+然后对比 QA 文件中的 `answer` 与对应真值。运行器不再自动计算 EM、mAP 或其他分数。
 
-## 运行器行为
+## 运行行为
 
-- 每题独立会话，避免答案或上下文跨题泄漏；
 - 按文件顺序串行执行，避免并发请求干扰模型服务；
-- 使用流式接口读取执行事件，直到收到 `complete`、`confirm` 或 `error`；
-- 单题失败不会中断整批评测，失败信息写入对应行；
-- 每完成一题立即刷新 CSV，运行中断时保留已完成结果；
-- 如果 Agent 要求人工确认，当前题记为 `awaiting_confirmation`，不会自动批准或拒绝。
+- 每题独立会话，避免上下文跨题影响答案；
+- 使用流式接口读取执行事件，直到 `complete`、`confirm` 或 `error`；
+- 每完成一题立即刷新 CSV，中断时保留已完成结果；
+- 单题失败不会中断整批评测。
 
 ## 自测
 
@@ -145,7 +130,9 @@ python data/QAdataset/evaluator/test_evaluate.py
 
 自测覆盖：
 
-- 每题生成 `prediction`、`truth` 两行；
-- 真值不会发送给 Agent；
+- CSV 表头严格为 `ID,answer,question`；
+- 每题只写一行；
+- 只保存 Agent answer；
+- 不把真值发送给 Agent；
 - 图片会转换为 data URL；
-- 可以正确读取 Agent 流式接口的终局事件。
+- 可以读取 Agent 流式接口的终局事件。

@@ -34,9 +34,9 @@ SeaQA 包含六类问题：
 
 1. 不得把 `ground_truth`、`category` 或 `provenance` 发送给 Agent；
 2. 文本题只输入问题本身，图片题把 `images/` 中的真实图片作为附件发送；
-3. 每题使用独立会话，保存 Agent 最终答案、状态、轨迹和证据 ID；
-4. 生成 CSV 结果表，每个问题连续输出两行：第一行是 `prediction`，第二行是 `truth`；
-5. 人工对比两行答案、实体和证据，在 `manual_result`、`manual_notes` 中记录结论。
+3. 每题使用独立会话，只保存 Agent 返回的真实 answer 字段；
+4. 生成 CSV 问答文件，表头严格为 `ID,answer,question`，每题一行；
+5. 人工按 `ID` 将 `answer` 与原始数据集中的真值进行比较。
 
 评测器不再读取 `predictions.jsonl`，也不再自动计算 EM、mAP 或计数准确率。
 

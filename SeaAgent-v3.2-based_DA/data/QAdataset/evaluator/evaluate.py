@@ -1,4 +1,4 @@
-"""Run SeaQA questions through the live SeaAgent API and build a review table."""
+"""Run SeaQA questions through the live SeaAgent and write an ID-answer-question table."""
 
 from __future__ import annotations
 
@@ -30,27 +30,7 @@ IMAGE_MEDIA_TYPES = {
     ".webp": "image/webp",
 }
 TERMINAL_EVENTS = {"complete", "confirm", "error"}
-
-TABLE_FIELDS = (
-    "id",
-    "category",
-    "question",
-    "time_range",
-    "inputs",
-    "record_type",
-    "success",
-    "status",
-    "answer",
-    "count",
-    "entity_ids",
-    "track_ids",
-    "evidence_ids",
-    "details",
-    "manual_result",
-    "manual_notes",
-    "elapsed_seconds",
-    "error",
-)
+TABLE_FIELDS = ("ID", "answer", "question")
 
 
 @dataclass(frozen=True)
@@ -87,129 +67,20 @@ def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _json_cell(value: Any) -> str:
-    if value in (None, "", [], {}):
-        return ""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+def agent_answer(result: dict[str, Any]) -> str:
+    """Return only the Agent's answer field, with the API projection fallback."""
+    value = result.get("answer")
+    if value is None:
+        value = result.get("answerText")
+    return "" if value is None else str(value).strip()
 
 
-def _string_list(value: Any) -> list[str]:
-    if value in (None, ""):
-        return []
-    values = value if isinstance(value, (list, tuple, set)) else [value]
-    result: list[str] = []
-    seen: set[str] = set()
-    for item in values:
-        text = str(item or "").strip()
-        if text and text not in seen:
-            seen.add(text)
-            result.append(text)
-    return result
-
-
-def _unique(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(value for value in values if value))
-
-
-def _truth_values(question: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str], list[str]]:
-    ground_truth = _mapping(question.get("ground_truth"))
-    entities = [item for item in ground_truth.get("entities", []) if isinstance(item, dict)]
-    entity_ids = _unique([str(item.get("entity_id") or "") for item in entities])
-    track_ids: list[str] = []
-    evidence_ids: list[str] = []
-    for entity in entities:
-        track_ids.extend(_string_list(entity.get("track_ids")))
-        track_ids.extend(_string_list(entity.get("source_track_id")))
-        evidence_ids.extend(_string_list(entity.get("evidence_keyframe_ids")))
-        evidence_ids.extend(_string_list(entity.get("source_keyframe_id")))
-    return ground_truth, entity_ids, _unique(track_ids), _unique(evidence_ids)
-
-
-def build_truth_row(question: dict[str, Any]) -> dict[str, Any]:
-    ground_truth, entity_ids, track_ids, evidence_ids = _truth_values(question)
+def build_qa_row(question: dict[str, Any], run: AgentRun) -> dict[str, str]:
     return {
-        "id": question.get("id", ""),
-        "category": question.get("category", ""),
-        "question": question.get("question", ""),
-        "time_range": _json_cell(question.get("time_range")),
-        "inputs": _json_cell(question.get("inputs")),
-        "record_type": "truth",
-        "success": "",
-        "status": "answerable" if ground_truth.get("answerable", True) else "unresolved",
-        "answer": ground_truth.get("answer", ""),
-        "count": ground_truth.get("count", ""),
-        "entity_ids": _json_cell(entity_ids),
-        "track_ids": _json_cell(track_ids),
-        "evidence_ids": _json_cell(evidence_ids),
-        "details": _json_cell({
-            "method": ground_truth.get("method"),
-            "entities": ground_truth.get("entities", []),
-            "unresolved_entities": ground_truth.get("unresolved_entities", []),
-            "provenance": question.get("provenance", {}),
-        }),
-        "manual_result": "",
-        "manual_notes": "",
-        "elapsed_seconds": "",
-        "error": "",
+        "ID": str(question.get("id") or ""),
+        "answer": agent_answer(run.result),
+        "question": str(question.get("question") or ""),
     }
-
-
-def build_prediction_row(question: dict[str, Any], run: AgentRun) -> dict[str, Any]:
-    result = run.result
-    evidence = _mapping(result.get("evidence"))
-    enriched = _mapping(result.get("enrichedEvidence"))
-    shared_state = _mapping(result.get("sharedState"))
-    track_ids: list[str] = []
-    evidence_ids: list[str] = []
-    for payload in (evidence, enriched):
-        track_ids.extend(_string_list(payload.get("trackIds")))
-        for key in (
-            "keyframeIds",
-            "shownKeyframeIds",
-            "shipSegmentIds",
-            "shownShipSegmentIds",
-            "registryReferenceIds",
-            "shownRegistryReferenceIds",
-        ):
-            evidence_ids.extend(_string_list(payload.get(key)))
-    statistics = evidence.get("statistics") or enriched.get("statistics", {})
-    track_rows = evidence.get("trackRows") or enriched.get("trackRows") or []
-    error = run.error or str(result.get("error") or "")
-    status = str(result.get("state") or ("error" if error else run.terminal_event or "unknown"))
-    success = result.get("success")
-    return {
-        "id": question.get("id", ""),
-        "category": question.get("category", ""),
-        "question": question.get("question", ""),
-        "time_range": _json_cell(question.get("time_range")),
-        "inputs": _json_cell(question.get("inputs")),
-        "record_type": "prediction",
-        "success": "" if success is None else ("true" if bool(success) else "false"),
-        "status": status,
-        "answer": result.get("answerText") or result.get("conclusion") or result.get("answer") or "",
-        "count": "",
-        "entity_ids": "",
-        "track_ids": _json_cell(_unique(track_ids)),
-        "evidence_ids": _json_cell(_unique(evidence_ids)),
-        "details": _json_cell({
-            "session_id": result.get("sessionId"),
-            "terminal_event": run.terminal_event,
-            "partial": result.get("partial"),
-            "tool_chain": result.get("toolChain", []),
-            "statistics": statistics,
-            "track_rows": track_rows[:30],
-            "assessment": shared_state.get("assessment", {}),
-            "confirmation": result.get("confirmation"),
-        }),
-        "manual_result": "",
-        "manual_notes": "",
-        "elapsed_seconds": f"{run.elapsed_seconds:.3f}",
-        "error": error,
-    }
-
-
-def build_result_rows(question: dict[str, Any], run: AgentRun) -> tuple[dict[str, Any], dict[str, Any]]:
-    return build_prediction_row(question, run), build_truth_row(question)
 
 
 def image_data_url(question: dict[str, Any], dataset_dir: Path) -> str | None:
@@ -322,6 +193,7 @@ def run_pipeline(
     with output.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=TABLE_FIELDS)
         writer.writeheader()
+        handle.flush()
         for index, question in enumerate(questions, 1):
             run = run_agent_question(
                 client,
@@ -330,21 +202,20 @@ def run_pipeline(
                 dataset_dir,
                 _run_session_id(question.get("id")),
             )
-            prediction, truth = build_result_rows(question, run)
-            writer.writerow(prediction)
-            writer.writerow(truth)
+            writer.writerow(build_qa_row(question, run))
             handle.flush()
-            state = str(run.result.get("state") or prediction["status"])
+            state = str(run.result.get("state") or ("error" if run.error else "unknown"))
             if state == "completed" and not run.error:
                 completed += 1
             else:
                 failed += 1
-            print(
+            message = (
                 f"[{index}/{len(questions)}] {question.get('id')}: "
-                f"{state} ({run.elapsed_seconds:.1f}s)",
-                file=sys.stderr,
-                flush=True,
+                f"{state} ({run.elapsed_seconds:.1f}s)"
             )
+            if run.error:
+                message += f" error={run.error}"
+            print(message, file=sys.stderr, flush=True)
     return {"questions": len(questions), "completed": completed, "failed": failed}
 
 
@@ -372,15 +243,15 @@ def _evaluation_settings(config: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run SeaQA questions through the live SeaAgent and write a human-review table"
+        description="Run SeaQA questions through the live SeaAgent and write ID, answer, question"
     )
     parser.add_argument("--dataset", help="questions.jsonl path")
-    parser.add_argument("--output", help="CSV review table path")
+    parser.add_argument("--output", help="CSV QA output path")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="QAdataset config path")
     parser.add_argument("--api-url", help="SeaAgent base URL")
     parser.add_argument("--timeout-seconds", type=float, help="Per-question API timeout")
     parser.add_argument("--limit", type=int, help="Run only the first N questions")
-    parser.add_argument("--overwrite", action="store_true", help="Replace an existing output table")
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing output file")
     args = parser.parse_args()
 
     config = _load_config(Path(args.config))
@@ -424,13 +295,13 @@ def main() -> int:
                 return 2
             summary = run_pipeline(questions, output_path, client, api_url, dataset_dir)
     except KeyboardInterrupt:
-        print(f"\nInterrupted; partial review table kept at {output_path}", file=sys.stderr)
+        print(f"\nInterrupted; partial QA file kept at {output_path}", file=sys.stderr)
         return 130
 
-    print(f"review_table={output_path}")
+    print(f"qa_file={output_path}")
     print(
         f"questions={summary['questions']} completed={summary['completed']} "
-        f"failed={summary['failed']} table_rows={summary['questions'] * 2}"
+        f"failed={summary['failed']} data_rows={summary['questions']}"
     )
     return 0
 
