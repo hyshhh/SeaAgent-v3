@@ -55,8 +55,38 @@ class DynamicEvaluationTests(unittest.TestCase):
         )
 
     def test_answer_uses_projected_answer_text_when_needed(self) -> None:
-        self.assertEqual(agent_answer({"answerText": "出现过"}), "出现过")
-        self.assertEqual(agent_answer({"answer": "answer wins", "answerText": "fallback"}), "answer wins")
+        run = AgentRun(
+            result={"success": True, "state": "completed", "answerText": "出现过"},
+            terminal_event="complete",
+            error="",
+            elapsed_seconds=1.0,
+        )
+        self.assertEqual(agent_answer(run), "出现过")
+        self.assertEqual(
+            agent_answer(
+                AgentRun(
+                    result={
+                        "success": True,
+                        "state": "completed",
+                        "answer": "answer wins",
+                        "answerText": "fallback",
+                    },
+                    terminal_event="complete",
+                    error="",
+                    elapsed_seconds=1.0,
+                )
+            ),
+            "answer wins",
+        )
+
+    def test_failed_run_does_not_turn_error_text_into_answer(self) -> None:
+        run = AgentRun(
+            result={"success": False, "state": "stalled", "answerText": "internal failure"},
+            terminal_event="error",
+            error="internal failure",
+            elapsed_seconds=1.0,
+        )
+        self.assertEqual(agent_answer(run), "")
 
     def test_agent_payload_omits_truth_and_category(self) -> None:
         payload = build_agent_payload(question(), Path("."), "qa-eval-test")

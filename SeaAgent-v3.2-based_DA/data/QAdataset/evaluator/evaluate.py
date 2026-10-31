@@ -67,8 +67,16 @@ def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def agent_answer(result: dict[str, Any]) -> str:
-    """Return only the Agent's answer field, with the API projection fallback."""
+def agent_answer(run: AgentRun) -> str:
+    """Return a final answer only for a successful Agent completion."""
+    result = run.result
+    if (
+        run.error
+        or run.terminal_event != "complete"
+        or str(result.get("state") or "") != "completed"
+        or result.get("success") is False
+    ):
+        return ""
     value = result.get("answer")
     if value is None:
         value = result.get("answerText")
@@ -78,7 +86,7 @@ def agent_answer(result: dict[str, Any]) -> str:
 def build_qa_row(question: dict[str, Any], run: AgentRun) -> dict[str, str]:
     return {
         "ID": str(question.get("id") or ""),
-        "answer": agent_answer(run.result),
+        "answer": agent_answer(run),
         "question": str(question.get("question") or ""),
     }
 
