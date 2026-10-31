@@ -1,0 +1,8 @@
+project:
+  name: eta-stride5-audit
+paths:
+  processed_dir: artifacts/experiments/stride5/processed
+  artifact_dir: artifacts/experiments/stride5/runs
+  report_dir: artifacts/experiments/stride5/reports
+data:
+  candidate_stride_seconds: 5.0

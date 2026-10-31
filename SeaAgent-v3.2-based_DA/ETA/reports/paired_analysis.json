@@ -1,0 +1,119 @@
+{
+  "comparisons": [
+    {
+      "ah_accuracy": {
+        "absolute_difference": -0.3254437869822486,
+        "bootstrap_probability_delta_positive": 0.0,
+        "cluster_bootstrap_95_interval": [
+          -0.4386255548509829,
+          -0.21299957026214017
+        ],
+        "track_clusters": 39
+      },
+      "candidate_label": "ablation:mlp_cur",
+      "candidate_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-mlp_cur-20261030T143151Z",
+      "joint_accuracy": {
+        "absolute_difference": -0.26627218934911245,
+        "bootstrap_probability_delta_positive": 0.0,
+        "cluster_bootstrap_95_interval": [
+          -0.3812163328729282,
+          -0.15188033559022676
+        ],
+        "track_clusters": 39
+      },
+      "paired_samples": 169,
+      "reference_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-eta-20261030T151427Z"
+    },
+    {
+      "ah_accuracy": {
+        "absolute_difference": -0.1775147928994083,
+        "bootstrap_probability_delta_positive": 0.0005,
+        "cluster_bootstrap_95_interval": [
+          -0.28302432108190645,
+          -0.06584877582113886
+        ],
+        "track_clusters": 39
+      },
+      "candidate_label": "ablation:mlp_hist",
+      "candidate_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-mlp_hist-20261030T144021Z",
+      "joint_accuracy": {
+        "absolute_difference": -0.11834319526627224,
+        "bootstrap_probability_delta_positive": 0.016,
+        "cluster_bootstrap_95_interval": [
+          -0.22728535353535356,
+          -0.00595063025210083
+        ],
+        "track_clusters": 39
+      },
+      "paired_samples": 169,
+      "reference_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-eta-20261030T151427Z"
+    },
+    {
+      "ah_accuracy": {
+        "absolute_difference": -0.047337278106508895,
+        "bootstrap_probability_delta_positive": 0.051,
+        "cluster_bootstrap_95_interval": [
+          -0.11465229194946223,
+          0.011697626418988636
+        ],
+        "track_clusters": 39
+      },
+      "candidate_label": "ablation:sa_dh",
+      "candidate_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-sa_dh-20261030T144855Z",
+      "joint_accuracy": {
+        "absolute_difference": 0.005917159763313529,
+        "bootstrap_probability_delta_positive": 0.558,
+        "cluster_bootstrap_95_interval": [
+          -0.06627510040160647,
+          0.0683336568322981
+        ],
+        "track_clusters": 39
+      },
+      "paired_samples": 169,
+      "reference_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-eta-20261030T151427Z"
+    },
+    {
+      "ah_accuracy": {
+        "absolute_difference": -0.1301775147928994,
+        "bootstrap_probability_delta_positive": 0.0,
+        "cluster_bootstrap_95_interval": [
+          -0.21714906832298142,
+          -0.05523935453442945
+        ],
+        "track_clusters": 39
+      },
+      "candidate_label": "ablation:ca_only",
+      "candidate_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-ca_only-20261030T145725Z",
+      "joint_accuracy": {
+        "absolute_difference": -0.10059171597633143,
+        "bootstrap_probability_delta_positive": 0.0095,
+        "cluster_bootstrap_95_interval": [
+          -0.19760479041916162,
+          -0.011426948051948086
+        ],
+        "track_clusters": 39
+      },
+      "paired_samples": 169,
+      "reference_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-eta-20261030T151427Z"
+    },
+    {
+      "ah_accuracy": {
+        "absolute_difference": 0.005917159763313529,
+        "bootstrap_probability_delta_positive": 0.526,
+        "cluster_bootstrap_95_interval": [
+          -0.04812995296694798,
+          0.06082428287182886
+        ],
+        "track_clusters": 39
+      },
+      "candidate_label": "ablation:ca_sh",
+      "candidate_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-ca_sh-20261030T150557Z",
+      "joint_accuracy": null,
+      "paired_samples": 169,
+      "reference_run": "/home/lab-203/SeaAgent-v3/SeaAgent-v3.2-based_DA/ETA/artifacts/ablation-eta-20261030T151427Z"
+    }
+  ],
+  "interval_method": "track-clustered bootstrap",
+  "iterations": 2000,
+  "reference": "ablation:eta"
+}

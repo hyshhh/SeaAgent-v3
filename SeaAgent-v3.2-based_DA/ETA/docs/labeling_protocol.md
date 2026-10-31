@@ -1,64 +1,50 @@
-# ETA 标签协议
+# Proxy-label protocol
 
-## 样本定义
+## Status
 
-只有轨迹已经积累恰好三帧 KEP 时，ETA 才开始处理后续候选。每条训练样本
-只包含：
+These are deterministic weak labels created from the available memory records.
+They are not human annotations and must not be described as such. The paper's
+TEA protocol requires annotators to inspect images and judge both decisions;
+that information is absent from the current database.
 
-```text
-candidate      当前帧 embedding，形状 [2048]
-history        三帧 KEP embedding，形状 [3, 2048]
-history_mask   三个有效历史槽位，形状 [3]
-ah_label       当前候选入池标签
-ch_label       当前证据是否已足够结束轨迹
-```
+## Admission Head (AH)
 
-候选时间必须严格晚于三帧 KEP 中最晚的时间。历史帧按时间升序输入。
+Let `q` be the current quality score, `v_c` the current normalized embedding,
+`v_i` a historical KEP embedding, and `h` a readability flag.
 
-## AH 标签
+1. If `q < 0.20`, AH is `0` with reason `below_quality_floor`.
+2. If the KEP history is empty, AH is `1` with reason `pool_initialization`.
+3. Otherwise compute novelty `1 - max_i cosine(v_c, v_i)`.
+4. AH is `1` when novelty is at least `0.10` or the candidate is the first
+   history member with a readable hull number. Otherwise AH is `0`.
 
-AH 使用候选到达时可见的信息：
+The candidate priority is `0.7*q + 0.3*max_history_quality`. When the updated
+pool exceeds capacity `M`, lower-priority entries are removed.
 
-1. 候选质量低于 0.20 时标记为 0；
-2. 计算候选与当前三帧 KEP 的最大余弦相似度；
-3. `novelty = 1 - 最大余弦相似度`；
-4. 质量合格且 `novelty >= 0.10` 时标记为 1；
-5. 候选优先级为 `0.7 × 当前质量 + 0.3 × KEP 最高质量`；
-6. 当 AH 接纳且优先级高于 KEP 最低帧时，替换最低优先级帧。
+## Completeness Head (CH)
 
-这是确定性代理标签，不是人工入池判断。
+CH is computed after applying the AH decision and capacity trim. It is `1` when
+at least one of these proxy conditions holds:
 
-## CH 标签与轨迹终止
+- the updated pool contains readable hull-number evidence;
+- the minimum pairwise cosine similarity in the pool is at most `0.96`,
+  indicating a different view;
+- the pool contains at least two frames and its maximum quality is at least
+  `0.75`.
 
-CH 在按时间扫描候选时动态判定。只有同时满足以下条件时标记 `CH=1`：
+An empty pool is incomplete. Every record stores the reason used by AH and CH,
+so the label derivation is auditable.
 
-```text
-至少处理 2 个候选步骤
-AND 当前候选实际写入 KEP
-AND 更新后的 KEP 满足以下任一条件：
-    包含可读舷号证据
-    或至少 2 帧质量 >= 0.75 且三帧最小两两余弦相似度 <= 0.95
-```
+## History construction
 
-首次满足条件后：
+For the initial candidate of a track, history is empty. For every later
+candidate, all chronological non-empty subsets up to capacity `M=3` are
+expanded. This avoids the degenerate case in which every later candidate is
+paired with an empty pool and therefore receives a trivial positive AH label.
 
-- 当前样本记为 `CH=1`；
-- 立即终止该轨迹；
-- 之后所有轨迹观测都不再进入数据集。
+## Validation status
 
-未达到条件的轨迹全部记为 `CH=0`，不会人为补造正样本。
-
-## 必须满足的数据约束
-
-- 每个历史数组恰好包含三帧；
-- 每个历史帧时间都早于候选帧；
-- `history_mask` 全部为真；
-- 三个 NPZ 文件只包含五个训练数组；
-- 同一个来源视频不会出现在不同 split；
-- CH 正样本后不存在该轨迹的后续样本。
-
-## 模型边界
-
-模型输出只有 AH 和 CH。
-
-`Stop = KEP 实际更新 AND p_CH >= 阈值` 属于外层在线池策略，不是模型第三输出。
+The protocol is logically valid for software testing but weak for measuring
+human decision quality. It encodes quality, novelty, readability, and visual
+coverage assumptions before model training. Reported model accuracy measures
+agreement with those rules, not with expert judgement.
